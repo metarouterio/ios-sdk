@@ -1,6 +1,6 @@
 import Foundation
 
-public struct InitOptions {
+public struct InitOptions: Sendable {
     public let writeKey: String
     public let ingestionHost: String
 
@@ -10,67 +10,106 @@ public struct InitOptions {
     }
 }
 
-public final class AnalyticsClient: AnalyticsInterface {
+/// Actor-based analytics client for MetaRouter
+/// @unchecked Sendable is safe here because actor isolation protects state
+final actor AnalyticsClient: AnalyticsInterface, @unchecked Sendable {
+    private let writeKey: String
+    private let ingestionHost: String
 
-    @MainActor public static let shared = AnalyticsClient()
-    
-    private var isDebugEnabled: Bool = false
-    
-    private init() {}
-
-    public func track(event: String, properties: [String: Any]?) {
-        log("track called with event: \(event), properties: \(properties ?? [:])")
+    internal init(options: InitOptions) {
+        self.writeKey = options.writeKey
+        self.ingestionHost = options.ingestionHost
     }
 
-    public func identify(userId: String, traits: [String: Any]?) {
-        log("identify called with userId: \(userId), traits: \(traits ?? [:])")
+    public static func initialize(options: InitOptions) throws -> AnalyticsClient {
+        guard !options.writeKey.isEmpty else {
+            throw InitializationError.missingWriteKey
+        }
+
+        guard let url = URL(string: options.ingestionHost),
+              ["http", "https"].contains(url.scheme?.lowercased()) else {
+            throw InitializationError.invalidIngestionHost
+        }
+
+        return AnalyticsClient(options: options)
     }
 
-    public func group(groupId: String, traits: [String: Any]?) {
-        log("group called with groupId: \(groupId), traits: \(traits ?? [:])")
-    }
 
-    public func screen(name: String, properties: [String: Any]?) {
-        log("screen called with name: \(name), properties: \(properties ?? [:])")
-    }
-
-    public func alias(newUserId: String) {
-        log("alias called with newUserId: \(newUserId)")
-    }
-
-    public func flush() {
-        log("flush called")
-    }
-
-    public func cleanup() {
-        log("cleanup called")
-    }
-
-    public func enableDebugLogging() {
-        isDebugEnabled = true
-        print("[MetaRouter] Debug logging enabled")
-    }
-
-    public func getDebugInfo() -> [String: Any] {
-        return [
-            "debugEnabled": isDebugEnabled,
-            "queuedEvents": 0 // TODO: Replace with actual queue count
-        ]
-    }
-
-    private func log(_ message: String) {
-        if isDebugEnabled {
-            print("[MetaRouter] \(message)")
+    public nonisolated func track(event: String, properties: [String: Any]? = nil) {
+        let codableProps = MetaRouterCodableUtils.toCodableValueDict(properties ?? [:])
+        Task { @Sendable [event, codableProps] in
+            await self.track(event: event, properties: codableProps)
         }
     }
 
-    public func initialize(with options: InitOptions) {
-        log("initialized with writeKey: \(options.writeKey), ingestionHost: \(options.ingestionHost)")
-        // TODO: Configure internal state, queue, endpoints, etc.
+    public nonisolated func identify(userId: String, traits: [String: Any]? = nil) {
+        let codableTraits = MetaRouterCodableUtils.toCodableValueDict(traits ?? [:])
+        Task { @Sendable [userId, codableTraits] in
+            await self.identify(userId: userId, traits: codableTraits)
+        }
     }
 
-    public func reset() {
-        log("reset called")
-        // TODO: Clear user state, queue, etc.
+    public nonisolated func group(groupId: String, traits: [String: Any]? = nil) {
+        let codableTraits = MetaRouterCodableUtils.toCodableValueDict(traits ?? [:])
+        Task { @Sendable [groupId, codableTraits] in
+            await self.group(groupId: groupId, traits: codableTraits)
+        }
+    }
+
+    public nonisolated func screen(name: String, properties: [String: Any]? = nil) {
+        let codableProps = MetaRouterCodableUtils.toCodableValueDict(properties ?? [:])
+        Task { @Sendable [name, codableProps] in
+            await self.screen(name: name, properties: codableProps)
+        }
+    }
+
+    public nonisolated func alias(newUserId: String) {
+        Task { @Sendable [newUserId] in
+            await self.alias(newUserId: newUserId)
+        }
+    }
+
+    // MARK: - Internal actor-isolated methods (AnalyticsInterface conformance)
+
+    public func track(event: String, properties: [String: CodableValue]?) async {
+        print("🔧 [track] event: \(event), properties: \(properties ?? [:])")
+    }
+
+    public func identify(userId: String, traits: [String: CodableValue]?) async {
+        print("🔧 [identify] userId: \(userId), traits: \(traits ?? [:])")
+    }
+
+    public func group(groupId: String, traits: [String: CodableValue]?) async {
+        print("🔧 [group] groupId: \(groupId), traits: \(traits ?? [:])")
+    }
+
+    public func screen(name: String, properties: [String: CodableValue]?) async {
+        print("🔧 [screen] name: \(name), properties: \(properties ?? [:])")
+    }
+
+    public func alias(newUserId: String) async {
+        print("🔧 [alias] newUserId: \(newUserId)")
+    }
+
+    public func flush() async {
+        print("🔧 [flush] called")
+    }
+
+    public func cleanup() async {
+        print("🔧 [cleanup] called")
+    }
+
+    public func enableDebugLogging() async {
+        print("🔧 [enableDebugLogging] called")
+    }
+
+    public func getDebugInfo() async -> [String: CodableValue] {
+        print("🔧 [getDebugInfo] returning dummy values")
+        return [
+            "writeKey": .string("***" + writeKey.suffix(4)),
+            "ingestionHost": .string(ingestionHost),
+            "queueLength": .int(0),
+            "debugEnabled": .bool(true)
+        ]
     }
 }

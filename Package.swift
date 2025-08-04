@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "MetaRouter",
     platforms: [
-        .iOS(.v12) // or your minimum supported iOS version
+        .iOS(.v15) // or your minimum supported iOS version
     ],
     products: [
         .library(
