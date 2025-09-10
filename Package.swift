@@ -6,7 +6,8 @@ import PackageDescription
 let package = Package(
     name: "MetaRouter",
     platforms: [
-        .iOS(.v15) // or your minimum supported iOS version
+        .iOS(.v15), // or your minimum supported iOS version
+        .macOS(.v12)
     ],
     products: [
         .library(
@@ -24,7 +25,10 @@ let package = Package(
         .testTarget(
             name: "MetaRouterTests",
             dependencies: ["MetaRouter"],
-            path: "Tests/MetaRouterTests"
+            path: "Tests/MetaRouterTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v5)
+            ]
         ),
     ]
 )
