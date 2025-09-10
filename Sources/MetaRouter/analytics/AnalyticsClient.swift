@@ -10,41 +10,41 @@ public final class AnalyticsClient: AnalyticsInterface, @unchecked Sendable {
     }
 
     public func track(_ event: String, properties: [String: CodableValue]? = nil) {
-        Logger.log("track event='\(event)', props=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost)
+        Logger.log("track event='\(event)', props=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
     public func identify(_ userId: String, traits: [String: CodableValue]? = nil) {
-        Logger.log("identify userId='\(userId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost)
+        Logger.log("identify userId='\(userId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
     public func group(_ groupId: String, traits: [String: CodableValue]? = nil) {
-        Logger.log("group groupId='\(groupId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost)
+        Logger.log("group groupId='\(groupId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
     public func alias(_ newUserId: String) {
-        Logger.log("alias newUserId='\(newUserId)'", writeKey: options.writeKey, host: options.ingestionHost)
+        Logger.log("alias newUserId='\(newUserId)'", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
     public func screen(_ name: String, properties: [String: CodableValue]? = nil) {
-        Logger.log("screen name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost)
+        Logger.log("screen name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
     public func page(_ name: String, properties: [String: CodableValue]? = nil) {
-        Logger.log("page name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost)
+        Logger.log("page name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
     public func enableDebugLogging() {
         Logger.setDebugLogging(true)
-        Logger.log("debug logging enabled", writeKey: options.writeKey, host: options.ingestionHost)
+        Logger.log("debug logging enabled", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
     public func getDebugInfo() -> [String: CodableValue] {
         [
             "writeKey": .string(options.writeKey),
-            "ingestionHost": .string(options.ingestionHost)
+            "ingestionHost": .string(options.ingestionHost.absoluteString)
         ]
     }
 
-    public func flush() { Logger.log("flush (no-op)", writeKey: options.writeKey, host: options.ingestionHost) }
-    public func reset() { Logger.log("reset (no-op)", writeKey: options.writeKey, host: options.ingestionHost) }
+    public func flush() { Logger.log("flush (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString) }
+    public func reset() { Logger.log("reset (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString) }
 }
