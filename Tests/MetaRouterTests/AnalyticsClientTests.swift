@@ -186,7 +186,7 @@ final class AnalyticsClientTests: XCTestCase {
         }
         
         if case .string(let ingestionHost) = debugInfo["ingestionHost"] {
-            XCTAssertEqual(ingestionHost, options.ingestionHost)
+            XCTAssertEqual(ingestionHost, options.ingestionHost.absoluteString)
         } else {
             XCTFail("Expected ingestionHost to be a string")
         }
@@ -204,7 +204,7 @@ final class AnalyticsClientTests: XCTestCase {
         }
         
         if case .string(let ingestionHost) = debugInfo["ingestionHost"] {
-            XCTAssertEqual(ingestionHost, options.ingestionHost)
+            XCTAssertEqual(ingestionHost, options.ingestionHost.absoluteString)
         } else {
             XCTFail("Expected ingestionHost to be a string")
         }

@@ -25,7 +25,7 @@ This SDK is designed to support extensibility, low overhead, and thread-safe eve
 Add the following dependency to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/metarouter/ios-sdk.git", from: "0.0.1")
+.package(url: "https://github.com/metarouter/ios-sdk.git", from: "0.0.3")
 ```
 
 Or add it via Xcode: File → Add Package Dependencies → Enter repository URL
