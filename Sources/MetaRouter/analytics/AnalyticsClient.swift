@@ -1,12 +1,20 @@
 import Foundation
 
-public final class AnalyticsClient: AnalyticsInterface, @unchecked Sendable {
+internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertible, CustomDebugStringConvertible, @unchecked Sendable {
     private let options: InitOptions
 
     private init(options: InitOptions) { self.options = options }
 
-    public static func initialize(options: InitOptions) -> AnalyticsClient {
+    internal static func initialize(options: InitOptions) -> AnalyticsClient {
         AnalyticsClient(options: options)
+    }
+
+    public var description: String {
+        return "MetaRouter.Analytics"
+    }
+
+    public var debugDescription: String {
+        return "MetaRouter.Analytics(internal)"
     }
 
     public func track(_ event: String, properties: [String: CodableValue]?) {
