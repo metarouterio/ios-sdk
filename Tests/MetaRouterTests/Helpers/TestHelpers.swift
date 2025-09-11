@@ -9,7 +9,7 @@ enum TestDataFactory {
     ) -> InitOptions {
         InitOptions(writeKey: writeKey, ingestionHost: ingestionHost)
     }
-    
+
     static func makeProperties() -> [String: CodableValue] {
         [
             "userId": "user123",
@@ -23,7 +23,7 @@ enum TestDataFactory {
             ]
         ]
     }
-    
+
     static func makeTraits() -> [String: CodableValue] {
         [
             "name": "John Doe",
@@ -39,70 +39,90 @@ enum TestDataFactory {
 final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
     private let lock = NSLock()
     private var _calls: [AnalyticsCall] = []
-    
+
     var calls: [AnalyticsCall] {
         lock.lock()
         defer { lock.unlock() }
         return _calls
     }
-    
+
     var callCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return _calls.count
     }
-    
+
     func resetMock() {
         lock.lock()
         defer { lock.unlock() }
         _calls.removeAll()
     }
-    
+
     private func recordCall(_ call: AnalyticsCall) {
         lock.lock()
         defer { lock.unlock() }
         _calls.append(call)
     }
-    
+
     // AnalyticsInterface Implementation
-    
+
     func track(_ event: String, properties: [String: CodableValue]?) {
         recordCall(.track(event: event, properties: properties))
     }
-    
+
+    func track(_ event: String) {
+        track(event, properties: nil)
+    }
+
     func identify(_ userId: String, traits: [String: CodableValue]?) {
         recordCall(.identify(userId: userId, traits: traits))
     }
-    
+
+    func identify(_ userId: String) {
+        identify(userId, traits: nil)
+    }
+
     func group(_ groupId: String, traits: [String: CodableValue]?) {
         recordCall(.group(groupId: groupId, traits: traits))
     }
-    
+
+    func group(_ groupId: String) {
+        group(groupId, traits: nil)
+    }
+
     func screen(_ name: String, properties: [String: CodableValue]?) {
         recordCall(.screen(name: name, properties: properties))
     }
-    
+
+    func screen(_ name: String) {
+        screen(name, properties: nil)
+    }
+
     func page(_ name: String, properties: [String: CodableValue]?) {
         recordCall(.page(name: name, properties: properties))
     }
-    
+
+    func page(_ name: String) {
+        page(name, properties: nil)
+    }
+
     func alias(_ newUserId: String) {
         recordCall(.alias(newUserId: newUserId))
     }
-    
+
     func enableDebugLogging() {
         recordCall(.enableDebugLogging)
     }
-    
+
     func getDebugInfo() -> [String: CodableValue] {
         recordCall(.getDebugInfo)
         return ["mock": "debug-info"]
     }
-    
+
     func flush() {
         recordCall(.flush)
     }
-    
+
     func reset() {
         recordCall(.reset)
     }
@@ -148,12 +168,12 @@ enum TestUtilities {
         condition: @escaping () -> Bool
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
-        
+
         while Date() < deadline {
             if condition() { return true }
             try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
         }
-        
+
         return condition()
     }
 }
