@@ -1,9 +1,20 @@
 import Foundation
 
-internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertible, CustomDebugStringConvertible, @unchecked Sendable {
+internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertible,
+    CustomDebugStringConvertible, @unchecked Sendable
+{
     private let options: InitOptions
+    private let contextProvider: ContextProvider
+    private let enrichmentService: EventEnrichmentService
 
-    private init(options: InitOptions) { self.options = options }
+    private init(options: InitOptions, contextProvider: ContextProvider? = nil) {
+        self.options = options
+        self.contextProvider = contextProvider ?? IOSContextProvider()
+        self.enrichmentService = EventEnrichmentService(
+            contextProvider: self.contextProvider,
+            writeKey: options.writeKey
+        )
+    }
 
     internal static func initialize(options: InitOptions) -> AnalyticsClient {
         AnalyticsClient(options: options)
@@ -18,7 +29,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func track(_ event: String, properties: [String: CodableValue]?) {
-        Logger.log("track event='\(event)', props=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task {
+            let enrichedEvent = await enrichmentService.createTrackEvent(
+                event: event,
+                properties: properties
+            )
+
+            Logger.log(
+                "track event='\(event)', props=\(properties ?? [:]), messageId=\(enrichedEvent.messageId)",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+
+            // TODO: Send enrichedEvent to ingestion endpoint
+        }
     }
 
     public func track(_ event: String) {
@@ -26,7 +49,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func identify(_ userId: String, traits: [String: CodableValue]?) {
-        Logger.log("identify userId='\(userId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task {
+            let enrichedEvent = await enrichmentService.createIdentifyEvent(
+                userId: userId,
+                traits: traits
+            )
+
+            Logger.log(
+                "identify userId='\(userId)', traits=\(traits ?? [:]), messageId=\(enrichedEvent.messageId)",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+
+            // TODO: Send enrichedEvent to ingestion endpoint
+        }
     }
 
     public func identify(_ userId: String) {
@@ -34,7 +69,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func group(_ groupId: String, traits: [String: CodableValue]?) {
-        Logger.log("group groupId='\(groupId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task {
+            let enrichedEvent = await enrichmentService.createGroupEvent(
+                groupId: groupId,
+                traits: traits
+            )
+
+            Logger.log(
+                "group groupId='\(groupId)', traits=\(traits ?? [:]), messageId=\(enrichedEvent.messageId)",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+
+            // TODO: Send enrichedEvent to ingestion endpoint
+        }
     }
 
     public func group(_ groupId: String) {
@@ -42,11 +89,34 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func alias(_ newUserId: String) {
-        Logger.log("alias newUserId='\(newUserId)'", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task {
+            let enrichedEvent = await enrichmentService.createAliasEvent(
+                newUserId: newUserId
+            )
+
+            Logger.log(
+                "alias newUserId='\(newUserId)', messageId=\(enrichedEvent.messageId)",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+
+            // TODO: Send enrichedEvent to ingestion endpoint
+        }
     }
 
     public func screen(_ name: String, properties: [String: CodableValue]?) {
-        Logger.log("screen name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task {
+            let enrichedEvent = await enrichmentService.createScreenEvent(
+                name: name,
+                properties: properties
+            )
+
+            Logger.log(
+                "screen name='\(name)', properties=\(properties ?? [:]), messageId=\(enrichedEvent.messageId)",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+
+            // TODO: Send enrichedEvent to ingestion endpoint
+        }
     }
 
     public func screen(_ name: String) {
@@ -54,7 +124,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func page(_ name: String, properties: [String: CodableValue]?) {
-        Logger.log("page name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task {
+            let enrichedEvent = await enrichmentService.createPageEvent(
+                name: name,
+                properties: properties
+            )
+
+            Logger.log(
+                "page name='\(name)', properties=\(properties ?? [:]), messageId=\(enrichedEvent.messageId)",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+
+            // TODO: Send enrichedEvent to ingestion endpoint
+        }
     }
 
     public func page(_ name: String) {
@@ -63,16 +145,24 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func enableDebugLogging() {
         Logger.setDebugLogging(true)
-        Logger.log("debug logging enabled", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Logger.log(
+            "debug logging enabled", writeKey: options.writeKey,
+            host: options.ingestionHost.absoluteString)
     }
 
     public func getDebugInfo() -> [String: CodableValue] {
         [
             "writeKey": .string(options.writeKey),
-            "ingestionHost": .string(options.ingestionHost.absoluteString)
+            "ingestionHost": .string(options.ingestionHost.absoluteString),
         ]
     }
 
-    public func flush() { Logger.log("flush (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString) }
-    public func reset() { Logger.log("reset (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString) }
+    public func flush() {
+        Logger.log(
+            "flush (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+    }
+    public func reset() {
+        Logger.log(
+            "reset (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+    }
 }
