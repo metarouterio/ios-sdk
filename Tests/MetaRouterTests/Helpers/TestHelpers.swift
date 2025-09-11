@@ -1,6 +1,6 @@
 import Foundation
-@testable import MetaRouter
 
+@testable import MetaRouter
 
 enum TestDataFactory {
     static func makeInitOptions(
@@ -19,8 +19,8 @@ enum TestDataFactory {
             "tags": ["analytics", "test"],
             "metadata": [
                 "source": "ios",
-                "version": "1.0"
-            ]
+                "version": "1.0",
+            ],
         ]
     }
 
@@ -29,7 +29,7 @@ enum TestDataFactory {
             "name": "John Doe",
             "email": "john@example.com",
             "age": 30,
-            "premium": true
+            "premium": true,
         ]
     }
 }
@@ -139,6 +139,7 @@ enum AnalyticsCall: Equatable {
     case alias(newUserId: String)
     case enableDebugLogging
     case getDebugInfo
+
     case flush
     case reset
 }
@@ -171,7 +172,7 @@ enum TestUtilities {
 
         while Date() < deadline {
             if condition() { return true }
-            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+            try? await Task.sleep(nanoseconds: 10_000_000)  // 10ms
         }
 
         return condition()
