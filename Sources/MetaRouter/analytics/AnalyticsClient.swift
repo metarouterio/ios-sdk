@@ -9,28 +9,48 @@ public final class AnalyticsClient: AnalyticsInterface, @unchecked Sendable {
         AnalyticsClient(options: options)
     }
 
-    public func track(_ event: String, properties: [String: CodableValue]? = nil) {
+    public func track(_ event: String, properties: [String: CodableValue]?) {
         Logger.log("track event='\(event)', props=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
-    public func identify(_ userId: String, traits: [String: CodableValue]? = nil) {
+    public func track(_ event: String) {
+        track(event, properties: nil)
+    }
+
+    public func identify(_ userId: String, traits: [String: CodableValue]?) {
         Logger.log("identify userId='\(userId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
-    public func group(_ groupId: String, traits: [String: CodableValue]? = nil) {
+    public func identify(_ userId: String) {
+        identify(userId, traits: nil)
+    }
+
+    public func group(_ groupId: String, traits: [String: CodableValue]?) {
         Logger.log("group groupId='\(groupId)', traits=\(traits ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+    }
+
+    public func group(_ groupId: String) {
+        group(groupId, traits: nil)
     }
 
     public func alias(_ newUserId: String) {
         Logger.log("alias newUserId='\(newUserId)'", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
-    public func screen(_ name: String, properties: [String: CodableValue]? = nil) {
+    public func screen(_ name: String, properties: [String: CodableValue]?) {
         Logger.log("screen name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
     }
 
-    public func page(_ name: String, properties: [String: CodableValue]? = nil) {
+    public func screen(_ name: String) {
+        screen(name, properties: nil)
+    }
+
+    public func page(_ name: String, properties: [String: CodableValue]?) {
         Logger.log("page name='\(name)', properties=\(properties ?? [:])", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+    }
+
+    public func page(_ name: String) {
+        page(name, properties: nil)
     }
 
     public func enableDebugLogging() {
