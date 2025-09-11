@@ -1,11 +1,25 @@
 import Foundation
 
-public final class AnalyticsProxy: AnalyticsInterface {
+internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible, CustomDebugStringConvertible {
     private let state = ProxyState()
     private let debugInfoLock = NSLock()
     private nonisolated(unsafe) var _boundClient: AnalyticsInterface?
 
-    public func bind(_ real: AnalyticsInterface) {
+
+
+    public var description: String {
+        return "MetaRouter.Analytics"
+    }
+
+    public var debugDescription: String {
+        debugInfoLock.lock()
+        let isBound = _boundClient != nil
+        debugInfoLock.unlock()
+        let method = isBound ? "ready" : "initializing"
+        return "MetaRouter.Analytics(\(method))"
+    }
+
+    internal func bind(_ real: AnalyticsInterface) {
         // Store reference to bound client for synchronous debug info access
         debugInfoLock.lock()
         _boundClient = real
@@ -14,7 +28,7 @@ public final class AnalyticsProxy: AnalyticsInterface {
         Task { await state.bind(real) }
     }
 
-    public func unbind() {
+    internal func unbind() {
         // Clear bound client reference
         debugInfoLock.lock()
         _boundClient = nil
