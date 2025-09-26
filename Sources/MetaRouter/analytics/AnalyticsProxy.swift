@@ -1,11 +1,11 @@
 import Foundation
 
-internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible, CustomDebugStringConvertible {
+internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible,
+    CustomDebugStringConvertible
+{
     private let state = ProxyState()
     private let debugInfoLock = NSLock()
     private nonisolated(unsafe) var _boundClient: AnalyticsInterface?
-
-
 
     public var description: String {
         return "MetaRouter.Analytics"
@@ -125,6 +125,7 @@ private enum Call {
     case page(String, [String: CodableValue]?)
     case alias(String)
     case enableDebugLogging
+
     case flush
     case reset
 }
@@ -147,7 +148,7 @@ private actor ProxyState {
     }
 
     func enqueue(_ call: Call) {
-        if let _ = real {
+        if real != nil {
             forward(call)
         } else {
             if queue.count >= cap { _ = queue.removeFirst() }
@@ -165,6 +166,7 @@ private actor ProxyState {
         case .page(let name, let props): r.page(name, properties: props)
         case .alias(let newUserId): r.alias(newUserId)
         case .enableDebugLogging: r.enableDebugLogging()
+
         case .flush: r.flush()
         case .reset: r.reset()
         }
