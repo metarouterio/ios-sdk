@@ -12,7 +12,6 @@ import Network
     import CoreTelephony
 #endif
 
-// MARK: - Sendable Snapshots
 struct DeviceSnapshot: Sendable {
     let model: String
     let name: String
@@ -29,16 +28,14 @@ struct ScreenSnapshot: Sendable {
 
 /// iOS-specific implementation of context collection
 public final class IOSContextProvider: ContextProvider, @unchecked Sendable {
-    // MARK: - Properties
+
     private let contextActor = ContextActor()
     private let library: LibraryContext
 
-    // MARK: - Initialization
     public init(libraryName: String = "metarouter-ios-sdk", libraryVersion: String = "1.0.0") {
         self.library = LibraryContext(name: libraryName, version: libraryVersion)
     }
 
-    // MARK: - ContextProvider
     public func getContext() async -> EventContext {
         return await contextActor.getOrCreateContext { [self] in
             await collectContext()
@@ -51,7 +48,6 @@ public final class IOSContextProvider: ContextProvider, @unchecked Sendable {
         }
     }
 
-    // MARK: - Private Context Collection
     private func collectContext() async -> EventContext {
         let app = await collectAppContext()
         let device = await collectDeviceContext()
@@ -204,7 +200,6 @@ public final class IOSContextProvider: ContextProvider, @unchecked Sendable {
         return TimeZone.current.identifier
     }
 
-    // MARK: - Main Actor Snapshots
     #if canImport(UIKit)
         @MainActor
         private func readDeviceSnapshot() -> DeviceSnapshot {
@@ -232,7 +227,6 @@ public final class IOSContextProvider: ContextProvider, @unchecked Sendable {
     #endif
 }
 
-// MARK: - Device Model Mapping
 extension IOSContextProvider {
     /// Maps iOS device model codes to human-readable names
     private func mapDeviceModel(_ modelCode: String) -> String {
@@ -246,10 +240,19 @@ extension IOSContextProvider {
             "iPhone15,5": "iPhone 14 Plus",
             "iPhone15,2": "iPhone 14 Pro",
             "iPhone15,3": "iPhone 14 Pro Max",
-            "iPhone16,1": "iPhone 15",
-            "iPhone16,2": "iPhone 15 Plus",
-            "iPhone16,3": "iPhone 15 Pro",
-            "iPhone16,4": "iPhone 15 Pro Max",
+            "iPhone16,1": "iPhone 15 Pro",
+            "iPhone16,2": "iPhone 15 Pro Max",
+            "iPhone16,3": "iPhone 15",
+            "iPhone16,4": "iPhone 15 Plus",
+            "iPhone17,1": "iPhone 16 Pro",
+            "iPhone17,2": "iPhone 16 Pro Max",
+            "iPhone17,3": "iPhone 16",
+            "iPhone17,4": "iPhone 16 Plus",
+            "iPhone17,5": "iPhone 16e",
+            "iPhone18,1": "iPhone 17 Pro",
+            "iPhone18,2": "iPhone 17 Pro Max",
+            "iPhone18,3": "iPhone 17",
+            "iPhone18,4": "iPhone Air",
 
             // iPad models
             "iPad13,18": "iPad (10th generation)",
@@ -268,7 +271,6 @@ extension IOSContextProvider {
     }
 }
 
-// MARK: - Context Actor for Thread-Safe Caching
 private actor ContextActor {
     private var cachedContext: EventContext?
 
