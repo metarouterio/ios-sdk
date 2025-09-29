@@ -1,11 +1,36 @@
 import Foundation
 
+
 internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertible,
     CustomDebugStringConvertible, @unchecked Sendable
 {
     private let options: InitOptions
     private let contextProvider: ContextProvider
     private let enrichmentService: EventEnrichmentService
+    private let dispatcher: Dispatcher
+    private lazy var lifecycle: AppLifecycleObserver = {
+        let observer = AppLifecycleObserver(
+            onForeground: { [weak self] in
+                guard let self else { return }
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.dispatcher.startFlushLoop(intervalSeconds: 10)
+                    await self.dispatcher.flush()
+                }
+            },
+            onBackground: { [weak self] in
+                guard let self else { return }
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.dispatcher.flush()
+                    await self.dispatcher.stopFlushLoop()
+                    await self.dispatcher.cancelScheduledRetry()
+                }
+            }
+        )
+        return observer
+    }()
+    private var disabled = false
 
     private init(options: InitOptions, contextProvider: ContextProvider? = nil) {
         self.options = options
@@ -14,6 +39,32 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             contextProvider: self.contextProvider,
             writeKey: options.writeKey
         )
+
+        // Set up dispatcher with fatal-config handler
+        self.dispatcher = Dispatcher(
+            options: options,
+            http: NetworkClient(),
+            breaker: CircuitBreaker(),
+            queueCapacity: 2000,
+            config: Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
+        )
+
+        // Set handler after init to avoid self-before-init capture
+        Task { [weak self] in
+            guard let self else { return }
+            await self.dispatcher.setFatalConfigHandler({ [weak self] status in
+                Logger.error("Fatal config error \(status). Disabling client.")
+                self?.disabled = true
+            })
+        }
+
+        _ = lifecycle
+
+        // Start periodic flushing immediately
+        Task { [weak self] in
+            guard let self else { return }
+            await self.dispatcher.startFlushLoop(intervalSeconds: 10)
+        }
     }
 
     internal static func initialize(options: InitOptions) -> AnalyticsClient {
@@ -30,6 +81,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func track(_ event: String, properties: [String: CodableValue]?) {
         Task {
+            guard !disabled else { return }
             let enrichedEvent = await enrichmentService.createTrackEvent(
                 event: event,
                 properties: properties
@@ -40,7 +92,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
-            // TODO: Send enrichedEvent to ingestion endpoint
+            await dispatcher.offer(enrichedEvent)
         }
     }
 
@@ -50,6 +102,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func identify(_ userId: String, traits: [String: CodableValue]?) {
         Task {
+            guard !disabled else { return }
             let enrichedEvent = await enrichmentService.createIdentifyEvent(
                 userId: userId,
                 traits: traits
@@ -60,7 +113,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
-            // TODO: Send enrichedEvent to ingestion endpoint
+            await dispatcher.offer(enrichedEvent)
         }
     }
 
@@ -70,6 +123,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func group(_ groupId: String, traits: [String: CodableValue]?) {
         Task {
+            guard !disabled else { return }
             let enrichedEvent = await enrichmentService.createGroupEvent(
                 groupId: groupId,
                 traits: traits
@@ -80,7 +134,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
-            // TODO: Send enrichedEvent to ingestion endpoint
+            await dispatcher.offer(enrichedEvent)
         }
     }
 
@@ -90,6 +144,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func alias(_ newUserId: String) {
         Task {
+            guard !disabled else { return }
             let enrichedEvent = await enrichmentService.createAliasEvent(
                 newUserId: newUserId
             )
@@ -99,12 +154,13 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
-            // TODO: Send enrichedEvent to ingestion endpoint
+            await dispatcher.offer(enrichedEvent)
         }
     }
 
     public func screen(_ name: String, properties: [String: CodableValue]?) {
         Task {
+            guard !disabled else { return }
             let enrichedEvent = await enrichmentService.createScreenEvent(
                 name: name,
                 properties: properties
@@ -115,7 +171,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
-            // TODO: Send enrichedEvent to ingestion endpoint
+            await dispatcher.offer(enrichedEvent)
         }
     }
 
@@ -125,6 +181,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func page(_ name: String, properties: [String: CodableValue]?) {
         Task {
+            guard !disabled else { return }
             let enrichedEvent = await enrichmentService.createPageEvent(
                 name: name,
                 properties: properties
@@ -135,7 +192,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
-            // TODO: Send enrichedEvent to ingestion endpoint
+            await dispatcher.offer(enrichedEvent)
         }
     }
 
@@ -158,11 +215,18 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func flush() {
-        Logger.log(
-            "flush (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task { [weak self] in
+            guard let self else { return }
+            await self.dispatcher.flush()
+        }
     }
     public func reset() {
-        Logger.log(
-            "reset (no-op)", writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        Task { [weak self] in
+            guard let self else { return }
+            await self.dispatcher.stopFlushLoop()
+            await self.dispatcher.cancelScheduledRetry()
+            await self.dispatcher.clearAll()
+            self.disabled = false
+        }
     }
 }

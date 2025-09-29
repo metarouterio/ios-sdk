@@ -19,6 +19,7 @@ public enum MetaRouter {
    @discardableResult
     public static func createAnalyticsClient(with options: InitOptions) -> AnalyticsInterface {
         // Return the proxy immediately; bind happens async (proxy queues pre-bind calls)
+        proxy.setBootstrapDebugInfo(writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
         Task {
             let real = AnalyticsClient.initialize(options: options)
             if await store.setIfNil(real) {
