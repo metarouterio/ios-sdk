@@ -4,11 +4,11 @@ import XCTest
 
 final class ContextProviderTests: XCTestCase {
 
-    var contextProvider: IOSContextProvider!
+    var contextProvider: DeviceContextProvider!
 
     override func setUp() {
         super.setUp()
-        contextProvider = IOSContextProvider(libraryName: "test-sdk", libraryVersion: "1.0.0-test")
+        contextProvider = DeviceContextProvider(libraryName: "test-sdk", libraryVersion: "1.0.0-test")
     }
 
     override func tearDown() {
@@ -16,7 +16,6 @@ final class ContextProviderTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Context Structure Tests
 
     func testEventContextStructure() {
         let app = AppContext(
@@ -72,15 +71,14 @@ final class ContextProviderTests: XCTestCase {
         XCTAssertNil(context.network)
     }
 
-    // MARK: - Context Provider Tests
 
     func testContextProviderInitialization() {
-        let provider = IOSContextProvider(libraryName: "custom-sdk", libraryVersion: "2.0.0")
+        let provider = DeviceContextProvider(libraryName: "custom-sdk", libraryVersion: "2.0.0")
         XCTAssertNotNil(provider)
     }
 
     func testContextProviderDefaultInitialization() {
-        let provider = IOSContextProvider()
+        let provider = DeviceContextProvider()
         XCTAssertNotNil(provider)
     }
 
@@ -187,7 +185,6 @@ final class ContextProviderTests: XCTestCase {
         }
     }
 
-    // MARK: - Concurrent Access Tests
 
     func testConcurrentContextAccess() async {
         await withTaskGroup(of: EventContext.self) { group in
@@ -240,8 +237,6 @@ final class ContextProviderTests: XCTestCase {
         let finalContext = await contextProvider.getContext()
         XCTAssertNotNil(finalContext)
     }
-
-    // MARK: - Codable Tests
 
     func testEventContextCodable() throws {
         let app = AppContext(

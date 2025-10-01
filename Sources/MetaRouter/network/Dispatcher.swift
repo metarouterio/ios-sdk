@@ -52,7 +52,6 @@ public actor Dispatcher {
         self.onFatalConfigError = handler
     }
 
-    // MARK: - Public API
 
     public func offer(_ event: EnrichedEventPayload) async {
         await queue.enqueue(event)
@@ -94,7 +93,6 @@ public actor Dispatcher {
         await queue.clear()
     }
 
-    // MARK: - Core processing
 
     private func processUntilEmpty() async {
         while await queue.count > 0 {
