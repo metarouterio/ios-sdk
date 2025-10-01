@@ -22,8 +22,6 @@ final class EventEnrichmentTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Message ID Generation Tests
-
     func testMessageIdGeneration() {
         let messageId1 = MessageIdGenerator.generate()
         let messageId2 = MessageIdGenerator.generate()
@@ -75,7 +73,6 @@ final class EventEnrichmentTests: XCTestCase {
         XCTAssertNil(MessageIdGenerator.extractTimestamp(from: "invalid-message-id"))
     }
 
-    // MARK: - Event Enrichment Tests
 
     func testBasicEventEnrichment() async {
         let event = EventWithIdentity(
@@ -155,7 +152,6 @@ final class EventEnrichmentTests: XCTestCase {
         XCTAssertEqual(enriched.properties?["url"], .string("/home"))
     }
 
-    // MARK: - Convenience Event Creation Tests
 
     func testCreateTrackEvent() async {
         let enriched = await enrichmentService.createTrackEvent(
@@ -232,7 +228,6 @@ final class EventEnrichmentTests: XCTestCase {
         XCTAssertEqual(enriched.properties?["previousId"], .string("old-user-id"))
     }
 
-    // MARK: - JSON Serialization Tests
 
     func testJsonSerialization() async throws {
         let event = EventWithIdentity(
@@ -284,7 +279,6 @@ final class EventEnrichmentTests: XCTestCase {
         XCTAssertEqual(decoded.context.app.name, enriched.context.app.name)
     }
 
-    // MARK: - Edge Cases
 
     func testEnrichmentWithNilProperties() async {
         let event = EventWithIdentity(
@@ -340,8 +334,6 @@ final class EventEnrichmentTests: XCTestCase {
         }
     }
 }
-
-// MARK: - Mock Context Provider for Testing
 
 final class MockContextProvider: ContextProvider, @unchecked Sendable {
 

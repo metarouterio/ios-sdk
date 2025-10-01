@@ -2,6 +2,24 @@ import Foundation
 
 public enum CircuitState: Sendable { case closed, open, halfOpen }
 
+/// Circuit breaker that prevents cascading failures by tracking request success/failure.
+///
+/// **States:**
+/// - `.closed`: All requests allowed, tracking consecutive failures.
+/// - `.open`: Requests blocked for a cooldown period after hitting failure threshold.
+/// - `.halfOpen`: After cooldown, limited concurrent "probe" requests allowed to test recovery.
+///
+/// **Behavior:**
+/// - Call `beforeRequest()` to check if a request is allowed; returns delay in ms (0 = proceed immediately).
+/// - Call `onSuccess()` after a successful request to reset failure count and close the circuit.
+/// - Call `onFailure()` after a retryable failure (5xx, 408, 429) to increment failure count.
+/// - Call `onNonRetryable()` after non-retryable errors (4xx except 408/429) to reset failure count without state change.
+///
+/// **Backoff:**
+/// - Exponential: cooldown doubles each time the circuit opens, up to `maxCooldownMs`.
+/// - Jitter: randomizes delay by ±`jitterRatio` to avoid thundering herd.
+///
+/// **Thread safety:** Uses NSLock for synchronization.
 public final class CircuitBreaker: @unchecked Sendable {
     private let failureThreshold: Int
     private let baseCooldownMs: Int

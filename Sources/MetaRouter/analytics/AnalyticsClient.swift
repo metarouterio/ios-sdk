@@ -8,39 +8,17 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private let contextProvider: ContextProvider
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
-    private lazy var lifecycle: AppLifecycleObserver = {
-        let observer = AppLifecycleObserver(
-            onForeground: { [weak self] in
-                guard let self else { return }
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.dispatcher.startFlushLoop(intervalSeconds: 10)
-                    await self.dispatcher.flush()
-                }
-            },
-            onBackground: { [weak self] in
-                guard let self else { return }
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.dispatcher.flush()
-                    await self.dispatcher.stopFlushLoop()
-                    await self.dispatcher.cancelScheduledRetry()
-                }
-            }
-        )
-        return observer
-    }()
+    private var lifecycle: AppLifecycleObserver!
     private var disabled = false
 
     private init(options: InitOptions, contextProvider: ContextProvider? = nil) {
         self.options = options
-        self.contextProvider = contextProvider ?? IOSContextProvider()
+        self.contextProvider = contextProvider ?? DeviceContextProvider()
         self.enrichmentService = EventEnrichmentService(
             contextProvider: self.contextProvider,
             writeKey: options.writeKey
         )
 
-        // Set up dispatcher with fatal-config handler
         self.dispatcher = Dispatcher(
             options: options,
             http: NetworkClient(),
@@ -49,7 +27,6 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             config: Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
 
-        // Set handler after init to avoid self-before-init capture
         Task { [weak self] in
             guard let self else { return }
             await self.dispatcher.setFatalConfigHandler({ [weak self] status in
@@ -58,9 +35,23 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             })
         }
 
-        _ = lifecycle
+        self.lifecycle = AppLifecycleObserver(
+            onForeground: { [weak self] in
+                guard let self else { return }
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.dispatcher.startFlushLoop(intervalSeconds: 10)
+                    await self.dispatcher.flush()
+                }
+            },
+            onBackgroundAsync: { [weak self] in
+                guard let self else { return }
+                await self.dispatcher.flush()
+                await self.dispatcher.stopFlushLoop()
+                await self.dispatcher.cancelScheduledRetry()
+            }
+        )
 
-        // Start periodic flushing immediately
         Task { [weak self] in
             guard let self else { return }
             await self.dispatcher.startFlushLoop(intervalSeconds: 10)

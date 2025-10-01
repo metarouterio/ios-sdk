@@ -78,7 +78,6 @@ public final class EventEnrichmentService: Sendable {
         return await enrichEvent(eventWithIdentity)
     }
 
-    // MARK: - Convenience Event Creation Methods
 
     /// Create and enrich a track event
     public func createTrackEvent(
@@ -181,8 +180,6 @@ public final class EventEnrichmentService: Sendable {
 
         return await enrichEvent(baseEvent, anonymousId: anonymousId)
     }
-
-    // MARK: - Private Helpers
 
     /// Generate an anonymous ID for users without explicit user IDs
     private func generateAnonymousId() -> String {
