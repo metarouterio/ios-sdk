@@ -1,11 +1,12 @@
 import Foundation
 
 internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible,
-    CustomDebugStringConvertible
+    CustomDebugStringConvertible, @unchecked Sendable
 {
     private let state = ProxyState()
     private let debugInfoLock = NSLock()
     private nonisolated(unsafe) var _boundClient: AnalyticsInterface?
+    private var bootstrapDebugInfo: [String: CodableValue] = [:]
 
     public var description: String {
         return "MetaRouter.Analytics"
@@ -109,12 +110,24 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
             return client.getDebugInfo()
         }
 
-        // No bound client, return empty
-        return [:]
+        // No bound client, return bootstrap info
+        return bootstrapDebugInfo
     }
 
     public func flush() { Task { await state.enqueue(.flush) } }
     public func reset() { Task { await state.enqueue(.reset) } }
+}
+
+extension AnalyticsProxy {
+    // Internal helper to seed debug info prior to binding
+    internal func setBootstrapDebugInfo(writeKey: String, host: String) {
+        debugInfoLock.lock()
+        bootstrapDebugInfo = [
+            "writeKey": .string(writeKey),
+            "ingestionHost": .string(host),
+        ]
+        debugInfoLock.unlock()
+    }
 }
 
 private enum Call {
