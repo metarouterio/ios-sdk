@@ -6,6 +6,7 @@ public struct BaseEvent: Codable, Sendable {
     public let event: String?
     public let userId: String?
     public let anonymousId: String?
+    public let groupId: String?
     public let properties: [String: CodableValue]?
     public let traits: [String: CodableValue]?
     public let integrations: [String: CodableValue]?
@@ -16,6 +17,7 @@ public struct BaseEvent: Codable, Sendable {
         event: String? = nil,
         userId: String? = nil,
         anonymousId: String? = nil,
+        groupId: String? = nil,
         properties: [String: CodableValue]? = nil,
         traits: [String: CodableValue]? = nil,
         integrations: [String: CodableValue]? = nil,
@@ -25,6 +27,7 @@ public struct BaseEvent: Codable, Sendable {
         self.event = event
         self.userId = userId
         self.anonymousId = anonymousId
+        self.groupId = groupId
         self.properties = properties
         self.traits = traits
         self.integrations = integrations
@@ -38,6 +41,7 @@ public struct EventWithIdentity: Codable, Sendable {
     public let event: String?
     public let userId: String?
     public let anonymousId: String
+    public let groupId: String?
     public let properties: [String: CodableValue]?
     public let traits: [String: CodableValue]?
     public let integrations: [String: CodableValue]?
@@ -48,6 +52,7 @@ public struct EventWithIdentity: Codable, Sendable {
         event: String? = nil,
         userId: String? = nil,
         anonymousId: String,
+        groupId: String? = nil,
         properties: [String: CodableValue]? = nil,
         traits: [String: CodableValue]? = nil,
         integrations: [String: CodableValue]? = nil,
@@ -57,6 +62,7 @@ public struct EventWithIdentity: Codable, Sendable {
         self.event = event
         self.userId = userId
         self.anonymousId = anonymousId
+        self.groupId = groupId
         self.properties = properties
         self.traits = traits
         self.integrations = integrations
@@ -70,6 +76,7 @@ public struct EnrichedEventPayload: Codable, Sendable {
     public let event: String?
     public let userId: String?
     public let anonymousId: String
+    public let groupId: String?
     public let properties: [String: CodableValue]?
     public let traits: [String: CodableValue]?
     public let integrations: [String: CodableValue]?
@@ -83,6 +90,7 @@ public struct EnrichedEventPayload: Codable, Sendable {
         event: String? = nil,
         userId: String? = nil,
         anonymousId: String,
+        groupId: String? = nil,
         properties: [String: CodableValue]? = nil,
         traits: [String: CodableValue]? = nil,
         integrations: [String: CodableValue]? = nil,
@@ -95,6 +103,7 @@ public struct EnrichedEventPayload: Codable, Sendable {
         self.event = event
         self.userId = userId
         self.anonymousId = anonymousId
+        self.groupId = groupId
         self.properties = properties
         self.traits = traits
         self.integrations = integrations
