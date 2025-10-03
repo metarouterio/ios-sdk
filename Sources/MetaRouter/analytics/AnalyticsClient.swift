@@ -6,6 +6,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 {
     private let options: InitOptions
     private let contextProvider: ContextProvider
+    private let identityManager: IdentityManager
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
     private var lifecycle: AppLifecycleObserver!
@@ -18,8 +19,13 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         
         self.options = options
         self.contextProvider = contextProvider ?? DeviceContextProvider()
+        self.identityManager = IdentityManager(
+            writeKey: options.writeKey,
+            host: options.ingestionHost.absoluteString
+        )
         self.enrichmentService = EventEnrichmentService(
             contextProvider: self.contextProvider,
+            identityManager: self.identityManager,
             writeKey: options.writeKey
         )
 
@@ -62,6 +68,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
         Task { [weak self] in
             guard let self else { return }
+            await self.identityManager.initialize()
+            Logger.log("IdentityManager initialized successfully", 
+                       writeKey: self.options.writeKey, 
+                       host: self.options.ingestionHost.absoluteString)
             await self.dispatcher.startFlushLoop(intervalSeconds: 10)
             Logger.log("Analytics client initialization completed successfully", 
                        writeKey: self.options.writeKey, 
@@ -125,6 +135,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task {
             guard !disabled else { return }
             
+            // Update identity manager with the new userId
+            await identityManager.identify(userId)
+            
             let enrichedEvent = await enrichmentService.createIdentifyEvent(
                 userId: userId,
                 traits: convertedTraits
@@ -149,6 +162,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         
         Task {
             guard !disabled else { return }
+            
+            // Update identity manager with the new groupId
+            await identityManager.group(groupId)
             
             let enrichedEvent = await enrichmentService.createGroupEvent(
                 groupId: groupId,
@@ -257,6 +273,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     public func reset() {
         Task { [weak self] in
             guard let self else { return }
+            await self.identityManager.reset()
             await self.dispatcher.stopFlushLoop()
             await self.dispatcher.cancelScheduledRetry()
             await self.dispatcher.clearAll()
