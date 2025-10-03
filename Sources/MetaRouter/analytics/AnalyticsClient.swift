@@ -85,12 +85,15 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         return "MetaRouter.Analytics(internal)"
     }
 
-    public func track(_ event: String, properties: [String: CodableValue]?) {
+    public func track(_ event: String, properties: [String: Any]?) {
+        // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
+        let convertedProps = properties.flatMap { CodableValue.convert($0) }
+        
         Task {
             guard !disabled else { return }
             
             // Log the tracking event with properties
-            if let props = properties, !props.isEmpty {
+            if let props = convertedProps, !props.isEmpty {
                 Logger.log(
                     "Tracking event: \(event) with properties: \(props)",
                     writeKey: options.writeKey,
@@ -104,7 +107,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             
             let enrichedEvent = await enrichmentService.createTrackEvent(
                 event: event,
-                properties: properties
+                properties: convertedProps
             )
 
             await dispatcher.offer(enrichedEvent)
@@ -115,16 +118,20 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         track(event, properties: nil)
     }
 
-    public func identify(_ userId: String, traits: [String: CodableValue]?) {
+    public func identify(_ userId: String, traits: [String: Any]?) {
+        // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
+        let convertedTraits = traits.flatMap { CodableValue.convert($0) }
+        
         Task {
             guard !disabled else { return }
+            
             let enrichedEvent = await enrichmentService.createIdentifyEvent(
                 userId: userId,
-                traits: traits
+                traits: convertedTraits
             )
 
             Logger.log(
-                "identify userId='\(userId)', traits=\(traits ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "identify userId='\(userId)', traits=\(convertedTraits ?? [:]), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
@@ -136,16 +143,20 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         identify(userId, traits: nil)
     }
 
-    public func group(_ groupId: String, traits: [String: CodableValue]?) {
+    public func group(_ groupId: String, traits: [String: Any]?) {
+        // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
+        let convertedTraits = traits.flatMap { CodableValue.convert($0) }
+        
         Task {
             guard !disabled else { return }
+            
             let enrichedEvent = await enrichmentService.createGroupEvent(
                 groupId: groupId,
-                traits: traits
+                traits: convertedTraits
             )
 
             Logger.log(
-                "group groupId='\(groupId)', traits=\(traits ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "group groupId='\(groupId)', traits=\(convertedTraits ?? [:]), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
@@ -173,16 +184,20 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         }
     }
 
-    public func screen(_ name: String, properties: [String: CodableValue]?) {
+    public func screen(_ name: String, properties: [String: Any]?) {
+        // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
+        let convertedProps = properties.flatMap { CodableValue.convert($0) }
+        
         Task {
             guard !disabled else { return }
+            
             let enrichedEvent = await enrichmentService.createScreenEvent(
                 name: name,
-                properties: properties
+                properties: convertedProps
             )
 
             Logger.log(
-                "screen name='\(name)', properties=\(properties ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "screen name='\(name)', properties=\(convertedProps ?? [:]), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
@@ -194,16 +209,20 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         screen(name, properties: nil)
     }
 
-    public func page(_ name: String, properties: [String: CodableValue]?) {
+    public func page(_ name: String, properties: [String: Any]?) {
+        // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
+        let convertedProps = properties.flatMap { CodableValue.convert($0) }
+        
         Task {
             guard !disabled else { return }
+            
             let enrichedEvent = await enrichmentService.createPageEvent(
                 name: name,
-                properties: properties
+                properties: convertedProps
             )
 
             Logger.log(
-                "page name='\(name)', properties=\(properties ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "page name='\(name)', properties=\(convertedProps ?? [:]), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
