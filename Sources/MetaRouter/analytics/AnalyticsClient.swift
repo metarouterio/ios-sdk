@@ -12,6 +12,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var disabled = false
 
     private init(options: InitOptions, contextProvider: ContextProvider? = nil) {
+        Logger.log("Starting analytics client initialization...", 
+                   writeKey: options.writeKey, 
+                   host: options.ingestionHost.absoluteString)
+        
         self.options = options
         self.contextProvider = contextProvider ?? DeviceContextProvider()
         self.enrichmentService = EventEnrichmentService(
@@ -51,11 +55,22 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 await self.dispatcher.cancelScheduledRetry()
             }
         )
+        
+        Logger.log("App state listener setup completed", 
+                   writeKey: options.writeKey, 
+                   host: options.ingestionHost.absoluteString)
 
         Task { [weak self] in
             guard let self else { return }
             await self.dispatcher.startFlushLoop(intervalSeconds: 10)
+            Logger.log("Analytics client initialization completed successfully", 
+                       writeKey: self.options.writeKey, 
+                       host: self.options.ingestionHost.absoluteString)
         }
+        
+        Logger.log("Analytics client constructor completed, initialization in progress...", 
+                   writeKey: options.writeKey, 
+                   host: options.ingestionHost.absoluteString)
     }
 
     internal static func initialize(options: InitOptions) -> AnalyticsClient {
@@ -73,15 +88,24 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     public func track(_ event: String, properties: [String: CodableValue]?) {
         Task {
             guard !disabled else { return }
+            
+            // Log the tracking event with properties
+            if let props = properties, !props.isEmpty {
+                Logger.log(
+                    "Tracking event: \(event) with properties: \(props)",
+                    writeKey: options.writeKey,
+                    host: options.ingestionHost.absoluteString)
+            } else {
+                Logger.log(
+                    "Tracking event: \(event)",
+                    writeKey: options.writeKey,
+                    host: options.ingestionHost.absoluteString)
+            }
+            
             let enrichedEvent = await enrichmentService.createTrackEvent(
                 event: event,
                 properties: properties
             )
-
-            Logger.log(
-                "track event='\(event)', props=\(properties ?? [:]), messageId=\(enrichedEvent.messageId)",
-                writeKey: options.writeKey,
-                host: options.ingestionHost.absoluteString)
 
             await dispatcher.offer(enrichedEvent)
         }
