@@ -6,12 +6,16 @@ final class EventEnrichmentTests: XCTestCase {
 
     var enrichmentService: EventEnrichmentService!
     var mockContextProvider: MockContextProvider!
+    var mockIdentityManager: IdentityManager!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         mockContextProvider = MockContextProvider()
+        mockIdentityManager = IdentityManager(writeKey: "test-write-key", host: "https://test.com")
+        await mockIdentityManager.initialize()
         enrichmentService = EventEnrichmentService(
             contextProvider: mockContextProvider,
+            identityManager: mockIdentityManager,
             writeKey: "test-write-key"
         )
     }
@@ -19,6 +23,7 @@ final class EventEnrichmentTests: XCTestCase {
     override func tearDown() {
         enrichmentService = nil
         mockContextProvider = nil
+        mockIdentityManager = nil
         super.tearDown()
     }
 
@@ -137,33 +142,34 @@ final class EventEnrichmentTests: XCTestCase {
         XCTAssertTrue(MessageIdGenerator.isValid(enriched.messageId))
     }
 
-    func testBaseEventEnrichmentWithCustomAnonymousId() async {
+    func testBaseEventEnrichment_usesIdentityManager() async {
         let baseEvent = BaseEvent(
             type: "page",
             properties: ["url": .string("/home")]
         )
 
-        let customAnonymousId = "custom-anon-id"
-        let enriched = await enrichmentService.enrichEvent(
-            baseEvent, anonymousId: customAnonymousId)
+        let enriched = await enrichmentService.enrichEvent(baseEvent)
 
-        XCTAssertEqual(enriched.anonymousId, customAnonymousId)
+        // Should use anonymousId from identity manager
+        XCTAssertFalse(enriched.anonymousId.isEmpty)
         XCTAssertEqual(enriched.type, "page")
-        XCTAssertEqual(enriched.properties?["url"], .string("/home"))
+        XCTAssertEqual(enriched.properties?["url"], CodableValue.string("/home"))
     }
 
 
     func testCreateTrackEvent() async {
+        // Set a userId in the identity manager first
+        await mockIdentityManager.identify("user123")
+        
         let enriched = await enrichmentService.createTrackEvent(
             event: "Button Clicked",
-            properties: ["button_id": .string("subscribe")],
-            userId: "user123"
+            properties: ["button_id": .string("subscribe")]
         )
 
         XCTAssertEqual(enriched.type, "track")
         XCTAssertEqual(enriched.event, "Button Clicked")
         XCTAssertEqual(enriched.userId, "user123")
-        XCTAssertEqual(enriched.properties?["button_id"], .string("subscribe"))
+        XCTAssertEqual(enriched.properties?["button_id"], CodableValue.string("subscribe"))
         XCTAssertFalse(enriched.anonymousId.isEmpty)
     }
 
@@ -180,41 +186,44 @@ final class EventEnrichmentTests: XCTestCase {
     }
 
     func testCreateGroupEvent() async {
+        await mockIdentityManager.identify("user123")
+        
         let enriched = await enrichmentService.createGroupEvent(
             groupId: "group789",
-            traits: ["company": .string("Acme Corp")],
-            userId: "user123"
+            traits: ["company": .string("Acme Corp")]
         )
 
         XCTAssertEqual(enriched.type, "group")
         XCTAssertEqual(enriched.userId, "user123")
-        XCTAssertEqual(enriched.properties?["groupId"], .string("group789"))
-        XCTAssertEqual(enriched.traits?["company"], .string("Acme Corp"))
+        XCTAssertEqual(enriched.properties?["groupId"], CodableValue.string("group789"))
+        XCTAssertEqual(enriched.traits?["company"], CodableValue.string("Acme Corp"))
     }
 
     func testCreateScreenEvent() async {
+        await mockIdentityManager.identify("user123")
+        
         let enriched = await enrichmentService.createScreenEvent(
             name: "Home Screen",
-            properties: ["section": .string("main")],
-            userId: "user123"
+            properties: ["section": .string("main")]
         )
 
         XCTAssertEqual(enriched.type, "screen")
-        XCTAssertEqual(enriched.properties?["name"], .string("Home Screen"))
-        XCTAssertEqual(enriched.properties?["section"], .string("main"))
+        XCTAssertEqual(enriched.properties?["name"], CodableValue.string("Home Screen"))
+        XCTAssertEqual(enriched.properties?["section"], CodableValue.string("main"))
         XCTAssertEqual(enriched.userId, "user123")
     }
 
     func testCreatePageEvent() async {
+        await mockIdentityManager.identify("user123")
+        
         let enriched = await enrichmentService.createPageEvent(
             name: "/dashboard",
-            properties: ["referrer": .string("/home")],
-            userId: "user123"
+            properties: ["referrer": .string("/home")]
         )
 
         XCTAssertEqual(enriched.type, "page")
-        XCTAssertEqual(enriched.properties?["name"], .string("/dashboard"))
-        XCTAssertEqual(enriched.properties?["referrer"], .string("/home"))
+        XCTAssertEqual(enriched.properties?["name"], CodableValue.string("/dashboard"))
+        XCTAssertEqual(enriched.properties?["referrer"], CodableValue.string("/home"))
     }
 
     func testCreateAliasEvent() async {

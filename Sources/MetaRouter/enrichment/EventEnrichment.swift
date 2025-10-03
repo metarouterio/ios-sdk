@@ -4,10 +4,12 @@ import Foundation
 public final class EventEnrichmentService: Sendable {
 
     private let contextProvider: ContextProvider
+    private let identityManager: IdentityManager
     private let writeKey: String
 
-    public init(contextProvider: ContextProvider, writeKey: String) {
+    public init(contextProvider: ContextProvider, identityManager: IdentityManager, writeKey: String) {
         self.contextProvider = contextProvider
+        self.identityManager = identityManager
         self.writeKey = writeKey
     }
 
@@ -24,6 +26,7 @@ public final class EventEnrichmentService: Sendable {
             event: event.event,
             userId: event.userId,
             anonymousId: event.anonymousId,
+            groupId: event.groupId,
             properties: event.properties,
             traits: event.traits,
             integrations: event.integrations,
@@ -46,6 +49,7 @@ public final class EventEnrichmentService: Sendable {
             event: event.event,
             userId: event.userId,
             anonymousId: event.anonymousId,
+            groupId: event.groupId,
             properties: event.properties,
             traits: event.traits,
             integrations: event.integrations,
@@ -58,17 +62,17 @@ public final class EventEnrichmentService: Sendable {
 
     /// Enrich a base event by first adding identity information, then enriching
     public func enrichEvent(
-        _ baseEvent: BaseEvent,
-        anonymousId: String? = nil
+        _ baseEvent: BaseEvent
     ) async -> EnrichedEventPayload {
-        let finalAnonymousId = anonymousId ?? generateAnonymousId()
+        let identity = await identityManager.getIdentityInfo()
         let timestamp = baseEvent.timestamp ?? ISO8601DateFormatter().string(from: Date())
 
         let eventWithIdentity = EventWithIdentity(
             type: baseEvent.type,
             event: baseEvent.event,
-            userId: baseEvent.userId,
-            anonymousId: finalAnonymousId,
+            userId: baseEvent.userId ?? identity.userId,
+            anonymousId: baseEvent.anonymousId ?? identity.anonymousId,
+            groupId: baseEvent.groupId ?? identity.groupId,
             properties: baseEvent.properties,
             traits: baseEvent.traits,
             integrations: baseEvent.integrations,
@@ -82,25 +86,21 @@ public final class EventEnrichmentService: Sendable {
     /// Create and enrich a track event
     public func createTrackEvent(
         event: String,
-        properties: [String: CodableValue]? = nil,
-        userId: String? = nil,
-        anonymousId: String? = nil
+        properties: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
         let baseEvent = BaseEvent(
             type: EventType.track.rawValue,
             event: event,
-            userId: userId,
             properties: properties
         )
 
-        return await enrichEvent(baseEvent, anonymousId: anonymousId)
+        return await enrichEvent(baseEvent)
     }
 
     /// Create and enrich an identify event
     public func createIdentifyEvent(
         userId: String,
-        traits: [String: CodableValue]? = nil,
-        anonymousId: String? = nil
+        traits: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
         let baseEvent = BaseEvent(
             type: EventType.identify.rawValue,
@@ -108,69 +108,59 @@ public final class EventEnrichmentService: Sendable {
             traits: traits
         )
 
-        return await enrichEvent(baseEvent, anonymousId: anonymousId)
+        return await enrichEvent(baseEvent)
     }
 
     /// Create and enrich a group event
     public func createGroupEvent(
         groupId: String,
-        traits: [String: CodableValue]? = nil,
-        userId: String? = nil,
-        anonymousId: String? = nil
+        traits: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
         let baseEvent = BaseEvent(
             type: EventType.group.rawValue,
-            userId: userId,
             properties: groupId.isEmpty ? nil : ["groupId": .string(groupId)],
             traits: traits
         )
 
-        return await enrichEvent(baseEvent, anonymousId: anonymousId)
+        return await enrichEvent(baseEvent)
     }
 
     /// Create and enrich a screen event
     public func createScreenEvent(
         name: String,
-        properties: [String: CodableValue]? = nil,
-        userId: String? = nil,
-        anonymousId: String? = nil
+        properties: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
         var screenProperties = properties ?? [:]
         screenProperties["name"] = .string(name)
 
         let baseEvent = BaseEvent(
             type: EventType.screen.rawValue,
-            userId: userId,
             properties: screenProperties
         )
 
-        return await enrichEvent(baseEvent, anonymousId: anonymousId)
+        return await enrichEvent(baseEvent)
     }
 
     /// Create and enrich a page event
     public func createPageEvent(
         name: String,
-        properties: [String: CodableValue]? = nil,
-        userId: String? = nil,
-        anonymousId: String? = nil
+        properties: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
         var pageProperties = properties ?? [:]
         pageProperties["name"] = .string(name)
 
         let baseEvent = BaseEvent(
             type: EventType.page.rawValue,
-            userId: userId,
             properties: pageProperties
         )
 
-        return await enrichEvent(baseEvent, anonymousId: anonymousId)
+        return await enrichEvent(baseEvent)
     }
 
     /// Create and enrich an alias event
     public func createAliasEvent(
         newUserId: String,
-        previousUserId: String? = nil,
-        anonymousId: String? = nil
+        previousUserId: String? = nil
     ) async -> EnrichedEventPayload {
         let baseEvent = BaseEvent(
             type: EventType.alias.rawValue,
@@ -178,12 +168,7 @@ public final class EventEnrichmentService: Sendable {
             properties: previousUserId.map { ["previousId": .string($0)] }
         )
 
-        return await enrichEvent(baseEvent, anonymousId: anonymousId)
-    }
-
-    /// Generate an anonymous ID for users without explicit user IDs
-    private func generateAnonymousId() -> String {
-        return UUID().uuidString
+        return await enrichEvent(baseEvent)
     }
 }
 
