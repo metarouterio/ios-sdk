@@ -66,40 +66,50 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
 
     // AnalyticsInterface Implementation
 
-    func track(_ event: String, properties: [String: CodableValue]?) {
-        recordCall(.track(event: event, properties: properties))
+    func track(_ event: String, properties: [String: Any]?) {
+        // Convert to CodableValue for test comparisons
+        let converted = properties.flatMap { CodableValue.convert($0) }
+        recordCall(.track(event: event, properties: converted))
     }
 
     func track(_ event: String) {
         track(event, properties: nil)
     }
 
-    func identify(_ userId: String, traits: [String: CodableValue]?) {
-        recordCall(.identify(userId: userId, traits: traits))
+    func identify(_ userId: String, traits: [String: Any]?) {
+        // Convert to CodableValue for test comparisons
+        let converted = traits.flatMap { CodableValue.convert($0) }
+        recordCall(.identify(userId: userId, traits: converted))
     }
 
     func identify(_ userId: String) {
         identify(userId, traits: nil)
     }
 
-    func group(_ groupId: String, traits: [String: CodableValue]?) {
-        recordCall(.group(groupId: groupId, traits: traits))
+    func group(_ groupId: String, traits: [String: Any]?) {
+        // Convert to CodableValue for test comparisons
+        let converted = traits.flatMap { CodableValue.convert($0) }
+        recordCall(.group(groupId: groupId, traits: converted))
     }
 
     func group(_ groupId: String) {
         group(groupId, traits: nil)
     }
 
-    func screen(_ name: String, properties: [String: CodableValue]?) {
-        recordCall(.screen(name: name, properties: properties))
+    func screen(_ name: String, properties: [String: Any]?) {
+        // Convert to CodableValue for test comparisons
+        let converted = properties.flatMap { CodableValue.convert($0) }
+        recordCall(.screen(name: name, properties: converted))
     }
 
     func screen(_ name: String) {
         screen(name, properties: nil)
     }
 
-    func page(_ name: String, properties: [String: CodableValue]?) {
-        recordCall(.page(name: name, properties: properties))
+    func page(_ name: String, properties: [String: Any]?) {
+        // Convert to CodableValue for test comparisons
+        let converted = properties.flatMap { CodableValue.convert($0) }
+        recordCall(.page(name: name, properties: converted))
     }
 
     func page(_ name: String) {

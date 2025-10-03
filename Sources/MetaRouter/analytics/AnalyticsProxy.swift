@@ -52,40 +52,45 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         await state.unbind()
     }
 
-    public func track(_ event: String, properties: [String: CodableValue]?) {
-        Task { await state.enqueue(.track(event, properties)) }
+    public func track(_ event: String, properties: [String: Any]?) {
+        let converted = properties.flatMap { CodableValue.convert($0) }
+        Task { await state.enqueue(.track(event, converted)) }
     }
 
     public func track(_ event: String) {
         Task { await state.enqueue(.track(event, nil)) }
     }
 
-    public func identify(_ userId: String, traits: [String: CodableValue]?) {
-        Task { await state.enqueue(.identify(userId, traits)) }
+    public func identify(_ userId: String, traits: [String: Any]?) {
+        let converted = traits.flatMap { CodableValue.convert($0) }
+        Task { await state.enqueue(.identify(userId, converted)) }
     }
 
     public func identify(_ userId: String) {
         Task { await state.enqueue(.identify(userId, nil)) }
     }
 
-    public func group(_ groupId: String, traits: [String: CodableValue]?) {
-        Task { await state.enqueue(.group(groupId, traits)) }
+    public func group(_ groupId: String, traits: [String: Any]?) {
+        let converted = traits.flatMap { CodableValue.convert($0) }
+        Task { await state.enqueue(.group(groupId, converted)) }
     }
 
     public func group(_ groupId: String) {
         Task { await state.enqueue(.group(groupId, nil)) }
     }
 
-    public func screen(_ name: String, properties: [String: CodableValue]?) {
-        Task { await state.enqueue(.screen(name, properties)) }
+    public func screen(_ name: String, properties: [String: Any]?) {
+        let converted = properties.flatMap { CodableValue.convert($0) }
+        Task { await state.enqueue(.screen(name, converted)) }
     }
 
     public func screen(_ name: String) {
         Task { await state.enqueue(.screen(name, nil)) }
     }
 
-    public func page(_ name: String, properties: [String: CodableValue]?) {
-        Task { await state.enqueue(.page(name, properties)) }
+    public func page(_ name: String, properties: [String: Any]?) {
+        let converted = properties.flatMap { CodableValue.convert($0) }
+        Task { await state.enqueue(.page(name, converted)) }
     }
 
     public func page(_ name: String) {

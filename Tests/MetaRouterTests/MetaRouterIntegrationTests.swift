@@ -356,8 +356,8 @@ final class MetaRouterIntegrationTests: XCTestCase {
         let screens = ["Home", "Products", "Product_Detail", "Cart", "Checkout"]
         for (index, screen) in screens.enumerated() {
             client.screen("\(screen)_Screen", properties: [
-                "screen_order": .int(index + 1),
-                "previous_screen": .string(index > 0 ? screens[index - 1] : "none")
+                "screen_order": index + 1,
+                "previous_screen": index > 0 ? screens[index - 1] : "none"
             ])
             
             // Add some delay to simulate real usage
@@ -398,7 +398,6 @@ final class MetaRouterIntegrationTests: XCTestCase {
             "integer": 42,
             "double": 3.14159,
             "boolean": true,
-            "null": .null,
             "array": [1, "two", 3.0, true],
             "object": ["nested": "value"],
             "empty_string": "",
