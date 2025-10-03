@@ -54,8 +54,20 @@ public actor Dispatcher {
 
 
     public func offer(_ event: EnrichedEventPayload) async {
+        Logger.log(
+            "Enqueuing event {\"messageId\": \"\(event.messageId)\", \"type\": \"\(event.type)\"}",
+            writeKey: options.writeKey,
+            host: options.ingestionHost.absoluteString)
+        
         await queue.enqueue(event)
-        if await queue.count >= config.autoFlushThreshold {
+        
+        let queueLength = await queue.count
+        Logger.log(
+            "Event enqueued, queue length: \(queueLength)",
+            writeKey: options.writeKey,
+            host: options.ingestionHost.absoluteString)
+        
+        if queueLength >= config.autoFlushThreshold {
             await flush()
         }
     }
@@ -63,13 +75,25 @@ public actor Dispatcher {
     public func flush() async {
         guard !isFlushing else { return }
         isFlushing = true
-        defer { isFlushing = false }
+        defer { 
+            isFlushing = false
+            Logger.log(
+                "Flush completed successfully",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+        }
         await processUntilEmpty()
     }
 
     public func startFlushLoop(intervalSeconds: Int = 10) {
         stopFlushLoop()
         let interval = max(1, intervalSeconds)
+        
+        Logger.log(
+            "Flush loop started with interval: \(interval) seconds",
+            writeKey: options.writeKey,
+            host: options.ingestionHost.absoluteString)
+        
         flushTimerTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
@@ -111,10 +135,28 @@ public actor Dispatcher {
             }
 
             let url = options.ingestionHost.appendingPathComponent(config.endpointPath)
+            
+            Logger.log(
+                "Making API call to: \(url.absoluteString)",
+                writeKey: options.writeKey,
+                host: options.ingestionHost.absoluteString)
+            
             do {
                 let resp = try await http.postJSON(url: url, body: body, timeoutMs: config.timeoutMs)
+                
+                if (200..<300).contains(resp.statusCode) {
+                    Logger.log(
+                        "API call successful",
+                        writeKey: options.writeKey,
+                        host: options.ingestionHost.absoluteString)
+                }
+                
                 await handleResponse(resp, originalBatch: batch)
             } catch {
+                Logger.log(
+                    "API call failed: \(error.localizedDescription)",
+                    writeKey: options.writeKey,
+                    host: options.ingestionHost.absoluteString)
                 breaker.onFailure()
                 await queue.requeueToFront(batch)
                 await scheduleRetry(afterMs: breaker.beforeRequest())
