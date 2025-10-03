@@ -105,18 +105,23 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         Task { await state.enqueue(.enableDebugLogging) }
     }
 
-    public func getDebugInfo() -> [String: CodableValue] {
-        debugInfoLock.lock()
-        defer { debugInfoLock.unlock() }
+    public func getDebugInfo() async -> [String: CodableValue] {
+        // Get client and bootstrap info atomically
+        let (client, bootstrapInfo): (AnalyticsInterface?, [String: CodableValue]) = {
+            debugInfoLock.lock()
+            defer { debugInfoLock.unlock() }
+            return (_boundClient, bootstrapDebugInfo)
+        }()
 
         // If we have a bound client, get debug info from it
-        // This will be recorded by the mock, but that's expected for explicit getDebugInfo calls
-        if let client = _boundClient {
-            return client.getDebugInfo()
+        if let client = client {
+            return await client.getDebugInfo()
         }
 
-        // No bound client, return bootstrap info
-        return bootstrapDebugInfo
+        // No bound client, return bootstrap info with proxy flag
+        var info = bootstrapInfo
+        info["proxy"] = .bool(true)
+        return info
     }
 
     public func flush() { Task { await state.enqueue(.flush) } }
@@ -127,8 +132,12 @@ extension AnalyticsProxy {
     // Internal helper to seed debug info prior to binding
     internal func setBootstrapDebugInfo(writeKey: String, host: String) {
         debugInfoLock.lock()
+        // Mask writeKey to show only last 4 characters
+        let maskedKey = writeKey.count > 4 
+            ? "***" + writeKey.suffix(4) 
+            : "***"
         bootstrapDebugInfo = [
-            "writeKey": .string(writeKey),
+            "writeKey": .string(maskedKey),
             "ingestionHost": .string(host),
         ]
         debugInfoLock.unlock()

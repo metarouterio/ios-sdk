@@ -1,22 +1,10 @@
 # MetaRouter iOS SDK
 
-A lightweight analytics SDK for iOS that forwards tracking events to your MetaRouter pipeline.  
-This SDK is designed to support extensibility, low overhead, and thread-safe event handling.
+[![Swift Package Manager](https://img.shields.io/badge/SPM-compatible-brightgreen.svg)](https://swift.org/package-manager/)
+[![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS-lightgrey.svg)](https://github.com/metarouter/ios-sdk)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-## Features
-
-- 📦 Lightweight Swift package with minimal dependencies
-- 🧵 Thread-safe via actor isolation and proxy pattern
-- 🔌 Complete analytics API: `track`, `identify`, `group`, `screen`, `page`, `alias`
-- 🚧 Built-in debug logging with configurable output
-- 🎯 Type-safe event properties with `CodableValue` enum
-- ⚡ Event queuing and replay for early-initialization scenarios
-- 🔄 Singleton pattern with global state management
-- 🛠 Designed for future support of:
-  - HTTP request handling and retry logic
-  - Offline event persistence
-  - Identity resolution and attribution
-  - Advanced batching and flush strategies
+A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster.
 
 ## Installation
 
@@ -25,210 +13,295 @@ This SDK is designed to support extensibility, low overhead, and thread-safe eve
 Add the following dependency to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/metarouter/ios-sdk.git", from: "0.0.3")
+.package(url: "https://github.com/metarouter/ios-sdk.git", from: "0.1.0")
 ```
 
-Or add it via Xcode: File → Add Package Dependencies → Enter repository URL
+Or add it via Xcode: **File → Add Package Dependencies → Enter repository URL**
 
-## Quick Start
+## Usage
 
 ### Basic Setup
 
 ```swift
 import MetaRouter
 
-// Initialize the SDK (typically in AppDelegate or App.swift)
+// Initialize the analytics client (typically in AppDelegate or App.swift)
 let options = InitOptions(
     writeKey: "your-write-key",
-    ingestionHost: "https://your-metarouter-host.com"
+    ingestionHost: "https://your-ingestion-endpoint.com",
+    debug: true, // Optional: enable debug mode
+    flushIntervalSeconds: 30, // Optional: flush events every 30 seconds
+    maxQueueEvents: 2000 // Optional: max events in memory queue
 )
 
-let client = MetaRouter.Analytics.initialize(with: options)
+let analytics = MetaRouter.Analytics.initialize(with: options)
 ```
 
-### Basic Usage
+### Direct Usage
 
 ```swift
+import MetaRouter
+
+// Initialize (optionally await it but can use at anytime with events transmitted when client is available)
+let analytics = MetaRouter.Analytics.initialize(with: options)
+
 // Track events
-client.track("Purchase Completed", properties: [
-    "product_id": "abc123",
-    "price": 29.99,
-    "currency": "USD"
+analytics.track("User Action", properties: [
+    "action": "button_click",
+    "screen": "home"
 ])
 
 // Identify users
-client.identify("user-123", traits: [
-    "email": "user@example.com",
+analytics.identify("user123", traits: [
     "name": "John Doe",
-    "plan": "premium"
+    "email": "john@example.com"
+])
+
+// Track screen views
+analytics.screen("Home Screen", properties: [
+    "category": "navigation"
 ])
 
 // Group users
-client.group("company-456", traits: [
+analytics.group("company123", traits: [
     "name": "Acme Corp",
-    "industry": "Technology"
+    "industry": "technology"
 ])
 
-// Screen tracking
-client.screen("Product Details", properties: [
-    "category": "Electronics",
-    "product_id": "abc123"
-])
+// Flush events immediately
+analytics.flush()
 
-// Page tracking (for web-like experiences)
-client.page("Landing Page", properties: [
-    "referrer": "google.com",
-    "campaign": "summer-sale"
-])
-
-// Alias users (link identities)
-client.alias("new-user-id")
+// Reset analytics (useful for testing or logout)
+analytics.reset()
 ```
 
-### Advanced Usage
-
-#### Debug Logging
+### SwiftUI Usage
 
 ```swift
-// Enable global debug logging
-MetaRouter.Analytics.setDebugLogging(true)
+import SwiftUI
+import MetaRouter
 
-// Or enable on specific client
-client.enableDebugLogging()
+@main
+struct MyApp: App {
+    @StateObject private var analyticsManager = AnalyticsManager()
 
-// Get debug information
-let info = client.getDebugInfo()
-print("Write Key: \(info["writeKey"])")
-print("Host: \(info["ingestionHost"])")
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(analyticsManager)
+                .onAppear {
+                    analyticsManager.initialize()
+                }
+        }
+    }
+}
+
+class AnalyticsManager: ObservableObject {
+    private var analytics: AnalyticsInterface?
+
+    func initialize() {
+        let options = InitOptions(
+            writeKey: "your-write-key",
+            ingestionHost: "https://your-ingestion-endpoint.com"
+        )
+        analytics = MetaRouter.Analytics.initialize(with: options)
+    }
+
+    func track(_ event: String, properties: [String: Any]? = nil) {
+        analytics?.track(event, properties: properties)
+    }
+}
+
+// Use analytics in any view
+struct ContentView: View {
+    @EnvironmentObject var analyticsManager: AnalyticsManager
+
+    var body: some View {
+        Button("Submit") {
+            analyticsManager.track("Button Pressed", properties: [
+                "buttonName": "submit",
+                "timestamp": Date().timeIntervalSince1970
+            ])
+        }
+    }
+}
 ```
-
-#### Early Initialization Pattern
-
-The SDK supports making analytics calls before initialization (useful for app launch scenarios):
-
-```swift
-// Calls made before initialization are queued
-let client = MetaRouter.Analytics.client()
-client.track("App Launched")  // This gets queued
-
-// Later, when you have configuration
-let options = InitOptions(writeKey: "key", ingestionHost: "host")
-MetaRouter.Analytics.initialize(with: options)  // Queued calls replay automatically
-```
-
-#### Reset and Cleanup
-
-```swift
-// Reset individual client
-client.reset()
-
-// Reset global SDK state
-MetaRouter.Analytics.reset()
-```
-
-#### Synchronous barrier APIs (testing only)
-
-These helpers block until global state changes are fully applied and the proxy is bound/unbound. They are intended for tests and sequencing-only scenarios; production code should prefer the non-blocking `initialize` and `reset`.
-
-```swift
-// Testing-only: initialize and wait until proxy is bound to the real client
-let client = await MetaRouter.Analytics.initializeAndWait(with: options)
-
-// ... perform assertions that require immediate binding
-
-// Testing-only: clear state and wait until unbound
-await MetaRouter.Analytics.resetAndWait()
-
-// Safe to re-initialize immediately after a barrier reset
-let rebound = await MetaRouter.Analytics.initializeAndWait(with: options)
-```
-
-Guarantees:
-
-- initializeAndWait: returns only after the proxy is bound and any queued calls have been replayed.
-- resetAndWait: returns only after the proxy is unbound and global state is cleared.
-
-Recommendation: Use these barrier APIs in tests; use `initialize` and `reset` in app code for better startup latency.
 
 ## API Reference
 
-### Analytics Methods
+### MetaRouter.Analytics.initialize(options)
 
-| Method       | Description                 | Parameters                                           |
-| ------------ | --------------------------- | ---------------------------------------------------- |
-| `track()`    | Record user actions         | `event: String, properties: [String: CodableValue]?` |
-| `identify()` | Associate user with traits  | `userId: String, traits: [String: CodableValue]?`    |
-| `group()`    | Associate user with a group | `groupId: String, traits: [String: CodableValue]?`   |
-| `screen()`   | Track screen views (mobile) | `name: String, properties: [String: CodableValue]?`  |
-| `page()`     | Track page views (web-like) | `name: String, properties: [String: CodableValue]?`  |
-| `alias()`    | Link user identities        | `newUserId: String`                                  |
+Initializes the analytics client and returns a **live proxy** to the client instance.
 
-### Utility Methods
+⚠️ `initialize()` returns immediately, but you **do not** need to wait before using analytics methods.
 
-| Method                 | Description              | Returns                  |
-| ---------------------- | ------------------------ | ------------------------ |
-| `flush()`              | Force send queued events | `Void`                   |
-| `reset()`              | Clear user data          | `Void`                   |
-| `enableDebugLogging()` | Enable debug output      | `Void`                   |
-| `getDebugInfo()`       | Get configuration info   | `[String: CodableValue]` |
+Calls to `track`, `identify`, etc. are **buffered in-memory** by the proxy and replayed **in order** once the client is fully initialized.
 
-### CodableValue
+**Options:**
 
-Properties and traits use the `CodableValue` enum for type safety:
+- `writeKey` (String, required): Your write key
+- `ingestionHost` (String or URL, required): Your MetaRouter ingestor host
+- `debug` (Bool, optional): Enable debug mode (default: `false`)
+- `flushIntervalSeconds` (Int, optional): Interval in seconds to flush events (default: `10`)
+- `maxQueueEvents` (Int, optional): Number of max events stored in memory (default: `2000`)
+
+**Proxy behavior (quick notes):**
+
+- Buffer is **in-memory only** (not persisted). Calls made before ready are lost if the process exits.
+- Ordering is preserved relative to other buffered calls; normal FIFO + batching applies after ready.
+- On fatal config errors (`401/403/404`), the client enters **disabled** state and drops subsequent calls.
+- `sentAt` is stamped when the batch is prepared for transmission (just before network send). If you need the original occurrence time, pass your own `timestamp` on each event.
+
+### Analytics Interface
+
+The analytics client provides the following methods:
+
+- `track(_ event: String, properties: [String: Any]?)`: Track custom events
+- `identify(_ userId: String, traits: [String: Any]?)`: Identify users
+- `group(_ groupId: String, traits: [String: Any]?)`: Group users
+- `screen(_ name: String, properties: [String: Any]?)`: Track screen views
+- `page(_ name: String, properties: [String: Any]?)`: Track page views
+- `alias(_ newUserId: String)`: Alias user IDs
+- `flush()`: Flush events immediately
+- `reset()`: Reset analytics state and clear all stored data
+- `enableDebugLogging()`: Enable debug logging
+- `getDebugInfo() async`: Get current debug information
+
+### Testing APIs
+
+For tests that require synchronous initialization:
 
 ```swift
-let properties: [String: CodableValue] = [
-    "string_value": "hello",
-    "number_value": 42,
-    "decimal_value": 3.14,
-    "boolean_value": true,
-    "null_value": .null,
-    "array_value": ["item1", "item2"],
-    "object_value": [
-        "nested_key": "nested_value"
-    ]
-]
+// Wait for initialization to complete
+let analytics = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+// Wait for reset to complete
+await MetaRouter.Analytics.resetAndWait()
 ```
 
-## Platform Support
+⚠️ **Use these only in tests** — they block until initialization/reset completes.
 
-- **iOS**: 15.0+
-- **macOS**: 12.0+
-- **Swift**: 5.5+
-- **Xcode**: 13.0+
+## Features
 
-## Thread Safety
+- 🎯 **Custom Endpoints**: Send events to your own ingestion endpoints
+- 📱 **iOS & macOS**: Native Swift SDK for Apple platforms
+- 🔧 **Type-Safe**: Full Swift type safety with automatic `Any` conversion
+- 🚀 **Lightweight**: Minimal overhead and zero external dependencies
+- 🧵 **Thread-Safe**: Built on Swift actors and concurrency
+- 🔄 **Reset Capability**: Easily reset analytics state for testing or logout scenarios
+- 🐛 **Debug Support**: Built-in debugging tools for troubleshooting
+- 💾 **Persistent Identity**: Anonymous ID and user identity stored in UserDefaults
+- 🔌 **Circuit Breaker**: Intelligent retry logic with exponential backoff
+- ⚡ **Batching**: Automatic event batching for network efficiency
 
-The SDK is fully thread-safe:
+## ✅ Compatibility
 
-- All public methods can be called from any thread
-- Internal state is protected by Swift actors
-- Event queuing handles concurrent access safely
+| Component | Supported Versions |
+| --------- | ------------------ |
+| iOS       | >= 15.0            |
+| macOS     | >= 12.0            |
+| Swift     | >= 5.5             |
+| Xcode     | >= 13.0            |
 
-## Development
+## Debugging
 
-### Building
+If you're not seeing API calls being made, here are some steps to troubleshoot:
 
-```bash
-swift build
+### 1. Enable Debug Logging
+
+```swift
+// Initialize with debug enabled
+let options = InitOptions(
+    writeKey: "your-write-key",
+    ingestionHost: "https://your-ingestion-endpoint.com",
+    debug: true // This enables detailed logging
+)
+let analytics = MetaRouter.Analytics.initialize(with: options)
+
+// Or enable debug logging after initialization
+analytics.enableDebugLogging()
 ```
 
-### Testing
+### 2. Check Debug Information
 
-```bash
-swift test
+```swift
+// Get current state information
+let debugInfo = await analytics.getDebugInfo()
+print("Analytics debug info:", debugInfo)
+
+// Debug info includes:
+// - lifecycle: Current SDK state (idle/initializing/ready/resetting/disabled)
+// - queueLength: Number of events waiting to be sent
+// - writeKey: Masked write key (last 4 chars)
+// - ingestionHost: Your ingestion endpoint
+// - flushIntervalSeconds: Flush interval configuration
+// - maxQueueEvents: Queue capacity
+// - circuitState: Circuit breaker state (closed/halfOpen/open)
+// - circuitRemainingMs: Cooldown time remaining
+// - flushInFlight: Whether a flush is currently in progress
+// - anonymousId: Device anonymous ID (if available)
+// - userId: Current user ID (if identified)
+// - groupId: Current group ID (if grouped)
 ```
 
-### Documentation
+### 3. Force Flush Events
 
-See `CLAUDE.md` for detailed development guidelines and architecture decisions.
+```swift
+// Manually flush events to see if they're being sent
+analytics.flush()
+```
+
+### 4. Common Issues
+
+- **Network Permissions**: Ensure your app has network permissions in Info.plist
+- **UserDefaults**: The SDK uses UserDefaults for anonymous ID persistence
+- **Endpoint URL**: Verify your ingestion endpoint is correct and accessible
+- **Write Key**: Ensure your write key is valid and not masked
+
+## Delivery & Backoff (How events flow under failures)
+
+**Queue capacity:** The SDK keeps up to 2,000 events in memory. When the cap is reached, the oldest events are dropped first (drop-oldest). You can change this via `maxQueueEvents` in `InitOptions`.
+
+This SDK uses a circuit breaker around network I/O. It keeps ordering stable, avoids tight retry loops, and backs off cleanly when your cluster is unhealthy or throttling.
+
+**Queueing during backoff:** While the breaker is OPEN, new events are accepted and appended to the in-memory queue; nothing is sent until the cooldown elapses.
+
+**Ordering (FIFO):** If a batch fails with a retryable error, that batch is requeued at the front (original order preserved). New events go to the tail. After cooldown, we try again; on success we continue draining in order.
+
+**Half-open probe:** After cooldown, one probe is allowed.
+
+- Success → breaker CLOSED (keep flushing).
+- Failure → breaker OPEN again with longer cooldown.
+
+**sentAt semantics:** `sentAt` is stamped when the batch is prepared for network transmission (at drain time), not when the event enters the queue.
+
+| Status / Failure                    | Action                                                               | Breaker | Queue effect                   |
+| ----------------------------------- | -------------------------------------------------------------------- | ------- | ------------------------------ |
+| `2xx`                               | Success                                                              | close   | Batch removed                  |
+| `5xx`                               | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
+| `408` (timeout)                     | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
+| `429` (throttle)                    | Retry: requeue **front**, wait = `max(Retry-After, breaker, 1000ms)` | open↑   | Requeued (front)               |
+| `413` (payload too large)           | Halve `maxBatchSize`; requeue and retry; if already `1`, **drop**    | close   | Requeued or dropped (`size=1`) |
+| `400`, `422`, other non-fatal `4xx` | **Drop** bad batch, continue                                         | close   | Dropped                        |
+| `401`, `403`, `404`                 | **Disable** client (stop timers), clear queue                        | close   | Cleared                        |
+| Network error / Timeout             | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
+| Reset during flush                  | Do **not** requeue in-flight chunk; **drop** it                      | —       | Dropped                        |
+
+**Defaults:** `failureThreshold=3`, `cooldownMs=10s`, `maxCooldownMs=120s`, `jitter=±20%`, `halfOpenMaxConcurrent=1`.
+
+**Identifiers:**
+
+- `anonymousId` is a stable, persisted UUID for the device/user before identify; it does **not** include timestamps.
+- `messageId` is generated as `<epochMillis>-<uuid>` (e.g., `1734691572843-6f0c7e85-...`) to aid debugging.
+
+## App Lifecycle Handling
+
+The SDK automatically handles app lifecycle events:
+
+- **App Foreground**: Starts periodic flush loop and immediately flushes any queued events
+- **App Background**: Flushes events, stops flush loop, and cancels any scheduled retries
+- **Identity Persistence**: Anonymous ID, user ID, and group ID are persisted to UserDefaults across app launches
 
 ## License
 
-[Your License Here]
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/metarouter/ios-sdk/issues)
-- **Documentation**: [MetaRouter Docs](https://docs.metarouter.io)
-- **Community**: [Discord/Slack Link]
+MIT
