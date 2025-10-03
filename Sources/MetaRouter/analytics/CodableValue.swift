@@ -31,45 +31,59 @@ extension CodableValue: ExpressibleByStringLiteral,
   }
 }
 
-
-/// Protocol for types that can be converted to CodableValue
-public protocol CodableValueConvertible {
-  var codableValue: CodableValue { get }
-}
-
-extension String: CodableValueConvertible {
-  public var codableValue: CodableValue { .string(self) }
-}
-
-extension Int: CodableValueConvertible {
-  public var codableValue: CodableValue { .int(self) }
-}
-
-extension Double: CodableValueConvertible {
-  public var codableValue: CodableValue { .double(self) }
-}
-
-extension Float: CodableValueConvertible {
-  public var codableValue: CodableValue { .double(Double(self)) }
-}
-
-extension Bool: CodableValueConvertible {
-  public var codableValue: CodableValue { .bool(self) }
-}
-
-extension Array: CodableValueConvertible where Element: CodableValueConvertible {
-  public var codableValue: CodableValue { .array(map { $0.codableValue }) }
-}
-
-extension Dictionary: CodableValueConvertible where Key == String, Value: CodableValueConvertible {
-  public var codableValue: CodableValue { .object(mapValues { $0.codableValue }) }
-}
-
-extension Optional: CodableValueConvertible where Wrapped: CodableValueConvertible {
-  public var codableValue: CodableValue {
-    switch self {
-    case .some(let value): return value.codableValue
-    case .none: return .null
+extension CodableValue {
+  /// Convert `Any` to `CodableValue` for common types
+  /// Returns nil if the type is not supported
+  public static func from(_ value: Any) -> CodableValue? {
+    // Check for Optional<Any> first using Mirror
+    let mirror = Mirror(reflecting: value)
+    if mirror.displayStyle == .optional {
+      if mirror.children.count == 0 {
+        return .null
+      } else if let (_, wrappedValue) = mirror.children.first {
+        return CodableValue.from(wrappedValue)
+      }
     }
+    
+    switch value {
+    // If it's already a CodableValue, return it as-is
+    case let codableValue as CodableValue:
+      return codableValue
+    case let string as String:
+      return .string(string)
+    case let int as Int:
+      return .int(int)
+    case let double as Double:
+      return .double(double)
+    case let float as Float:
+      return .double(Double(float))
+    case let bool as Bool:
+      return .bool(bool)
+    case let array as [Any]:
+      let converted = array.compactMap { CodableValue.from($0) }
+      // Only return array if all elements converted successfully
+      guard converted.count == array.count else { return nil }
+      return .array(converted)
+    case let dict as [String: Any]:
+      var converted: [String: CodableValue] = [:]
+      for (key, val) in dict {
+        guard let codableVal = CodableValue.from(val) else { return nil }
+        converted[key] = codableVal
+      }
+      return .object(converted)
+    default:
+      return nil
+    }
+  }
+  
+  /// Convert `[String: Any]` to `[String: CodableValue]`
+  /// Returns nil if any value cannot be converted
+  public static func convert(_ dict: [String: Any]) -> [String: CodableValue]? {
+    var result: [String: CodableValue] = [:]
+    for (key, value) in dict {
+      guard let converted = CodableValue.from(value) else { return nil }
+      result[key] = converted
+    }
+    return result
   }
 }
