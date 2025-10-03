@@ -114,6 +114,22 @@ public final class CircuitBreaker: @unchecked Sendable {
         let delta = jitter == 0 ? 0 : Int.random(in: -jitter...jitter)
         return max(0, base + delta)
     }
+    
+    // MARK: - State Inspection (for getDebugInfo)
+    
+    /// Get the current circuit breaker state
+    public func getState() -> CircuitState {
+        lock.lock(); defer { lock.unlock() }
+        return state
+    }
+    
+    /// Get remaining cooldown time in milliseconds (0 if not in open state)
+    public func getRemainingCooldownMs() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard state == .open else { return 0 }
+        let remaining = Int(openUntil.timeIntervalSince(Date()) * 1000)
+        return max(0, remaining)
+    }
 }
 
 

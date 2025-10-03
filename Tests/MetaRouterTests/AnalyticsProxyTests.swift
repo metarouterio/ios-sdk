@@ -265,9 +265,12 @@ final class AnalyticsProxyTests: XCTestCase {
     
     // GetDebugInfo Tests
     
-    func testGetDebugInfoWhenNotBound() {
-        let debugInfo = proxy.getDebugInfo()
-        XCTAssertTrue(debugInfo.isEmpty, "Should return empty dict when no real client is bound")
+    func testGetDebugInfoWhenNotBound() async {
+        let debugInfo = await proxy.getDebugInfo()
+        XCTAssertNotNil(debugInfo["proxy"])
+        if case .bool(let isProxy) = debugInfo["proxy"] {
+            XCTAssertTrue(isProxy, "Should indicate it's a proxy")
+        }
     }
     
     func testGetDebugInfoWhenBound() async {
@@ -276,7 +279,7 @@ final class AnalyticsProxyTests: XCTestCase {
         // Allow binding to complete
         _ = await TestUtilities.waitFor(timeout: 0.1) { true }
         
-        let debugInfo = proxy.getDebugInfo()
+        let debugInfo = await proxy.getDebugInfo()
         XCTAssertFalse(debugInfo.isEmpty, "Should return debug info from bound client")
     }
     
