@@ -9,10 +9,10 @@ public enum MetaRouter {
 
     // Synchronous-binding initializer for deterministic testing/flows that require immediate binding
     public static func initializeAndWait(with options: InitOptions) async -> AnalyticsInterface {
+        proxy.setBootstrapDebugInfo(writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
         let real = AnalyticsClient.initialize(options: options)
-        if await store.setIfNil(real) {
-            await proxy._bindAndReplay(real)
-        }
+        await store.set(real)
+        await proxy._bindAndReplay(real)
         return proxy
     }
 
