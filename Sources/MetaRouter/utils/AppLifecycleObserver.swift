@@ -51,7 +51,7 @@ public final class AppLifecycleObserver: @unchecked Sendable {
 
     #if canImport(UIKit) || canImport(AppKit)
     @objc private func appDidBecomeActive() { onForeground() }
-    @objc private func appDidEnterBackground() {
+    @MainActor @objc private func appDidEnterBackground() {
         #if canImport(UIKit)
         var taskId: UIBackgroundTaskIdentifier = .invalid
         taskId = UIApplication.shared.beginBackgroundTask(withName: "MetaRouterFlush") {
