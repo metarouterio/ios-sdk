@@ -30,3 +30,46 @@ extension CodableValue: ExpressibleByStringLiteral,
     self = .object(.init(uniqueKeysWithValues: elements))
   }
 }
+
+
+/// Protocol for types that can be converted to CodableValue
+public protocol CodableValueConvertible {
+  var codableValue: CodableValue { get }
+}
+
+extension String: CodableValueConvertible {
+  public var codableValue: CodableValue { .string(self) }
+}
+
+extension Int: CodableValueConvertible {
+  public var codableValue: CodableValue { .int(self) }
+}
+
+extension Double: CodableValueConvertible {
+  public var codableValue: CodableValue { .double(self) }
+}
+
+extension Float: CodableValueConvertible {
+  public var codableValue: CodableValue { .double(Double(self)) }
+}
+
+extension Bool: CodableValueConvertible {
+  public var codableValue: CodableValue { .bool(self) }
+}
+
+extension Array: CodableValueConvertible where Element: CodableValueConvertible {
+  public var codableValue: CodableValue { .array(map { $0.codableValue }) }
+}
+
+extension Dictionary: CodableValueConvertible where Key == String, Value: CodableValueConvertible {
+  public var codableValue: CodableValue { .object(mapValues { $0.codableValue }) }
+}
+
+extension Optional: CodableValueConvertible where Wrapped: CodableValueConvertible {
+  public var codableValue: CodableValue {
+    switch self {
+    case .some(let value): return value.codableValue
+    case .none: return .null
+    }
+  }
+}
