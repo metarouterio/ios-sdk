@@ -176,11 +176,11 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertTrue(true, "EnableDebugLogging method completed without crashing")
     }
     
-    func testGetDebugInfo() {
-        let debugInfo = client.getDebugInfo()
+    func testGetDebugInfo() async {
+        let debugInfo = await client.getDebugInfo()
         
         if case .string(let writeKey) = debugInfo["writeKey"] {
-            XCTAssertEqual(writeKey, options.writeKey)
+            XCTAssertTrue(writeKey.contains("***"), "writeKey should be masked")
         } else {
             XCTFail("Expected writeKey to be a string")
         }
@@ -190,15 +190,19 @@ final class AnalyticsClientTests: XCTestCase {
         } else {
             XCTFail("Expected ingestionHost to be a string")
         }
-        XCTAssertEqual(debugInfo.count, 2)
+        
+        XCTAssertNotNil(debugInfo["lifecycle"])
+        XCTAssertNotNil(debugInfo["queueLength"])
+        XCTAssertNotNil(debugInfo["flushIntervalSeconds"])
+        XCTAssertNotNil(debugInfo["maxQueueEvents"])
     }
     
-    func testGetDebugInfoAfterEnablingLogging() {
+    func testGetDebugInfoAfterEnablingLogging() async {
         client.enableDebugLogging()
-        let debugInfo = client.getDebugInfo()
+        let debugInfo = await client.getDebugInfo()
         
         if case .string(let writeKey) = debugInfo["writeKey"] {
-            XCTAssertEqual(writeKey, options.writeKey)
+            XCTAssertTrue(writeKey.contains("***"), "writeKey should be masked")
         } else {
             XCTFail("Expected writeKey to be a string")
         }

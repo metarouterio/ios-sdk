@@ -18,7 +18,7 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
 
     func alias(_ newUserId: String)
     func enableDebugLogging()
-    func getDebugInfo() -> [String: CodableValue]
+    func getDebugInfo() async -> [String: CodableValue]
     func flush()
     func reset()
 }

@@ -124,7 +124,7 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.enableDebugLogging)
     }
 
-    func getDebugInfo() -> [String: CodableValue] {
+    func getDebugInfo() async -> [String: CodableValue] {
         recordCall(.getDebugInfo)
         return ["mock": "debug-info"]
     }

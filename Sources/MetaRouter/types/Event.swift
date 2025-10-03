@@ -84,6 +84,7 @@ public struct EnrichedEventPayload: Codable, Sendable {
     public let writeKey: String
     public let messageId: String
     public let context: EventContext
+    public var sentAt: String?
 
     public init(
         type: String,
@@ -97,7 +98,8 @@ public struct EnrichedEventPayload: Codable, Sendable {
         timestamp: String,
         writeKey: String,
         messageId: String,
-        context: EventContext
+        context: EventContext,
+        sentAt: String? = nil
     ) {
         self.type = type
         self.event = event
@@ -111,6 +113,7 @@ public struct EnrichedEventPayload: Codable, Sendable {
         self.writeKey = writeKey
         self.messageId = messageId
         self.context = context
+        self.sentAt = sentAt
     }
 }
 

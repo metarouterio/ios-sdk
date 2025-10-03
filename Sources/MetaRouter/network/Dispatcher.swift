@@ -116,6 +116,24 @@ public actor Dispatcher {
     public func clearAll() async {
         await queue.clear()
     }
+    
+    // MARK: - State Inspection (for getDebugInfo)
+    
+    public func getQueueLength() async -> Int {
+        return await queue.count
+    }
+    
+    public func getCircuitState() async -> CircuitState {
+        return breaker.getState()
+    }
+    
+    public func getCircuitRemainingMs() async -> Int {
+        return breaker.getRemainingCooldownMs()
+    }
+    
+    public func isFlushInProgress() async -> Bool {
+        return isFlushing
+    }
 
 
     private func processUntilEmpty() async {
@@ -126,8 +144,15 @@ public actor Dispatcher {
                 return
             }
 
-            let batch = await queue.drain(max: maxBatchSize)
+            var batch = await queue.drain(max: maxBatchSize)
             guard !batch.isEmpty else { return }
+            
+            // Add sentAt timestamp to all events in batch
+            let sentAt = ISO8601DateFormatter().string(from: Date())
+            for i in 0..<batch.count {
+                batch[i].sentAt = sentAt
+            }
+            
             let payload = ["batch": batch]
             guard let body = try? JSONEncoder().encode(payload) else {
                 await handleNonRetryableDrop(count: batch.count)
