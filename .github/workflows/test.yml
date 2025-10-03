@@ -7,14 +7,9 @@ on:
     branches: [ main, master, develop ]
 
 jobs:
-  test:
-    name: Test on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    
-    strategy:
-      matrix:
-        os: [macos-13, macos-14, macos-latest]
-      fail-fast: false
+  test-macos:
+    name: Test on macOS
+    runs-on: macos-latest
     
     steps:
     - name: Checkout code
@@ -40,6 +35,6 @@ jobs:
     - name: Test Summary
       if: always()
       run: |
-        echo "## Test Results - ${{ matrix.os }}" >> $GITHUB_STEP_SUMMARY
-        echo "✅ Tests completed for commit ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-
+        echo "## ✅ macOS Tests" >> $GITHUB_STEP_SUMMARY
+        echo "Tests completed for commit ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+  
