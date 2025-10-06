@@ -5,7 +5,7 @@
 //  Created by Christopher Houdlette on 9/5/25.
 //
 
-public enum CodableValue: Codable, Sendable, CustomStringConvertible {
+public enum CodableValue: Sendable, CustomStringConvertible {
   case string(String)
   case int(Int)
   case double(Double)
@@ -16,6 +16,74 @@ public enum CodableValue: Codable, Sendable, CustomStringConvertible {
   
   public var description: String {
     return "\(toAny())"
+  }
+}
+
+// MARK: - Codable Implementation
+
+extension CodableValue: Codable {
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    switch self {
+    case .string(let value):
+      try container.encode(value)
+    case .int(let value):
+      try container.encode(value)
+    case .double(let value):
+      try container.encode(value)
+    case .bool(let value):
+      try container.encode(value)
+    case .array(let value):
+      try container.encode(value)
+    case .object(let value):
+      try container.encode(value)
+    case .null:
+      try container.encodeNil()
+    }
+  }
+  
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    
+    if container.decodeNil() {
+      self = .null
+      return
+    }
+    
+    if let value = try? container.decode(String.self) {
+      self = .string(value)
+      return
+    }
+    
+    if let value = try? container.decode(Int.self) {
+      self = .int(value)
+      return
+    }
+    
+    if let value = try? container.decode(Double.self) {
+      self = .double(value)
+      return
+    }
+    
+    if let value = try? container.decode(Bool.self) {
+      self = .bool(value)
+      return
+    }
+    
+    if let value = try? container.decode([CodableValue].self) {
+      self = .array(value)
+      return
+    }
+    
+    if let value = try? container.decode([String: CodableValue].self) {
+      self = .object(value)
+      return
+    }
+    
+    throw DecodingError.dataCorruptedError(
+      in: container,
+      debugDescription: "Cannot decode CodableValue"
+    )
   }
 }
 
