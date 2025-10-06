@@ -1,6 +1,5 @@
 import Foundation
 
-/// SDK lifecycle states as per spec
 public enum LifecycleState: String, Sendable {
     case idle = "idle"
     case initializing = "initializing"

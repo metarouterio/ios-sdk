@@ -114,8 +114,7 @@ public final class CircuitBreaker: @unchecked Sendable {
         let delta = jitter == 0 ? 0 : Int.random(in: -jitter...jitter)
         return max(0, base + delta)
     }
-    
-    // MARK: - State Inspection (for getDebugInfo)
+
     
     /// Get the current circuit breaker state
     public func getState() -> CircuitState {

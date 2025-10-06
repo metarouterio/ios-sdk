@@ -5,7 +5,7 @@
 //  Created by Christopher Houdlette on 9/5/25.
 //
 
-public enum CodableValue: Codable, Sendable {
+public enum CodableValue: Codable, Sendable, CustomStringConvertible {
   case string(String)
   case int(Int)
   case double(Double)
@@ -13,6 +13,10 @@ public enum CodableValue: Codable, Sendable {
   case array([CodableValue])
   case object([String: CodableValue])
   case null
+  
+  public var description: String {
+    return "\(toAny())"
+  }
 }
 
 extension CodableValue: ExpressibleByStringLiteral,
@@ -85,5 +89,34 @@ extension CodableValue {
       result[key] = converted
     }
     return result
+  }
+  
+  /// Convert CodableValue to simple Any representation for cleaner logging
+  internal func toAny() -> Any {
+    switch self {
+    case .string(let value):
+      return value
+    case .int(let value):
+      return value
+    case .double(let value):
+      return value
+    case .bool(let value):
+      return value
+    case .array(let values):
+      return values.map { $0.toAny() }
+    case .object(let dict):
+      return dict.mapValues { $0.toAny() }
+    case .null:
+      return "null"
+    }
+  }
+}
+
+
+extension Dictionary where Key == String, Value == CodableValue {
+  /// Returns a clean string representation without CodableValue wrappers
+  public var cleanDescription: String {
+    let simplified = self.mapValues { $0.toAny() }
+    return "\(simplified)"
   }
 }
