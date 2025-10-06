@@ -3,6 +3,117 @@ import XCTest
 
 final class CodableValueTests: XCTestCase {
     
+    func testEncodingProducesCleanJSON() throws {
+        let properties: [String: CodableValue] = [
+            "name": .string("John"),
+            "age": .int(30),
+            "price": .double(19.99),
+            "active": .bool(true),
+            "tags": .array([.string("swift"), .string("ios")]),
+            "metadata": .object([
+                "version": .string("1.0"),
+                "count": .int(5)
+            ]),
+            "nullValue": .null
+        ]
+        
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        let data = try encoder.encode(properties)
+        let jsonString = String(data: data, encoding: .utf8)!
+        
+        // Verify it doesn't contain enum structure
+        XCTAssertFalse(jsonString.contains("\"string\""), "Should not contain enum case names")
+        XCTAssertFalse(jsonString.contains("\"int\""), "Should not contain enum case names")
+        XCTAssertFalse(jsonString.contains("\"double\""), "Should not contain enum case names")
+        XCTAssertFalse(jsonString.contains("\"bool\""), "Should not contain enum case names")
+        XCTAssertFalse(jsonString.contains("\"array\""), "Should not contain enum case names")
+        XCTAssertFalse(jsonString.contains("\"object\""), "Should not contain enum case names")
+        XCTAssertFalse(jsonString.contains("\"_0\""), "Should not contain internal enum structure")
+        
+        // Verify it contains actual values
+        XCTAssertTrue(jsonString.contains("\"John\""))
+        XCTAssertTrue(jsonString.contains("30"))
+        XCTAssertTrue(jsonString.contains("19.99"))
+        XCTAssertTrue(jsonString.contains("true"))
+        XCTAssertTrue(jsonString.contains("null"))
+        
+        print("Encoded JSON:\n\(jsonString)")
+    }
+    
+    func testEncodingNestedStructure() throws {
+        let event: [String: CodableValue] = [
+            "event": .string("product_viewed"),
+            "properties": .object([
+                "product_id": .string("abc123"),
+                "price": .double(29.99),
+                "categories": .array([.string("electronics"), .string("phones")])
+            ])
+        ]
+        
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(event)
+        let jsonString = String(data: data, encoding: .utf8)!
+        
+        // Should not have double encoding
+        XCTAssertFalse(jsonString.contains("\\\""), "Should not have escaped quotes (double encoding)")
+        XCTAssertFalse(jsonString.contains("\"_0\""), "Should not contain enum internal structure")
+        
+        print("Nested structure JSON:\n\(jsonString)")
+    }
+    
+    func testDecodingMatchesEncoding() throws {
+        let original: [String: CodableValue] = [
+            "name": .string("Alice"),
+            "age": .int(25),
+            "score": .double(95.5),
+            "active": .bool(true),
+            "tags": .array([.string("a"), .string("b")]),
+            "meta": .object(["key": .string("value")]),
+            "empty": .null
+        ]
+        
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(original)
+        
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode([String: CodableValue].self, from: data)
+        
+        // Verify all values match
+        if case .string(let value) = decoded["name"] {
+            XCTAssertEqual(value, "Alice")
+        } else {
+            XCTFail("Expected string")
+        }
+        
+        if case .int(let value) = decoded["age"] {
+            XCTAssertEqual(value, 25)
+        } else {
+            XCTFail("Expected int")
+        }
+        
+        if case .double(let value) = decoded["score"] {
+            XCTAssertEqual(value, 95.5)
+        } else {
+            XCTFail("Expected double")
+        }
+        
+        if case .bool(let value) = decoded["active"] {
+            XCTAssertTrue(value)
+        } else {
+            XCTFail("Expected bool")
+        }
+        
+        if case .null = decoded["empty"] {
+            // Success
+        } else {
+            XCTFail("Expected null")
+        }
+    }
+    
+    // MARK: - Original Tests
+
+    
     // Basic Type Tests
     
     func testStringValue() {
