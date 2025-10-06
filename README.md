@@ -13,7 +13,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 Add the following dependency to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/metarouter/ios-sdk.git", from: "0.1.0")
+.package(url: "https://github.com/metarouter/ios-sdk.git", from: "0.0.10")
 ```
 
 Or add it via Xcode: **File → Add Package Dependencies → Enter repository URL**
