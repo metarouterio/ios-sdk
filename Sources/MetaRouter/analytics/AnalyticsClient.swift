@@ -115,7 +115,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             // Log the tracking event with properties
             if let props = convertedProps, !props.isEmpty {
                 Logger.log(
-                    "Tracking event: \(event) with properties: \(props)",
+                    "Tracking event: \(event) with properties: \(props.cleanDescription)",
                     writeKey: options.writeKey,
                     host: options.ingestionHost.absoluteString)
             } else {
@@ -154,7 +154,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             )
 
             Logger.log(
-                "identify userId='\(userId)', traits=\(convertedTraits ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "identify userId='\(userId)', traits=\((convertedTraits ?? [:]).cleanDescription), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
@@ -182,7 +182,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             )
 
             Logger.log(
-                "group groupId='\(groupId)', traits=\(convertedTraits ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "group groupId='\(groupId)', traits=\((convertedTraits ?? [:]).cleanDescription), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
@@ -223,7 +223,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             )
 
             Logger.log(
-                "screen name='\(name)', properties=\(convertedProps ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "screen name='\(name)', properties=\((convertedProps ?? [:]).cleanDescription), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 
@@ -248,7 +248,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             )
 
             Logger.log(
-                "page name='\(name)', properties=\(convertedProps ?? [:]), messageId=\(enrichedEvent.messageId)",
+                "page name='\(name)', properties=\((convertedProps ?? [:]).cleanDescription), messageId=\(enrichedEvent.messageId)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
 

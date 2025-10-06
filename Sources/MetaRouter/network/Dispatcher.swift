@@ -117,7 +117,6 @@ public actor Dispatcher {
         await queue.clear()
     }
     
-    // MARK: - State Inspection (for getDebugInfo)
     
     public func getQueueLength() async -> Int {
         return await queue.count
