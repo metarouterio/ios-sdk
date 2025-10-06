@@ -120,9 +120,9 @@ final class CodableValueLoggingTests: XCTestCase {
         XCTAssertEqual(metadata["valid"] as? Bool, true)
     }
     
-    // MARK: - toSimpleDict() Tests
+    // MARK: - cleanDescription Tests
     
-    func testToSimpleDictBasic() {
+    func testCleanDescriptionBasic() {
         let dict: [String: CodableValue] = [
             "name": .string("John"),
             "age": .int(30),
@@ -130,21 +130,27 @@ final class CodableValueLoggingTests: XCTestCase {
             "active": .bool(true)
         ]
         
-        let result = CodableValue.toSimpleDict(dict)
+        let description = dict.cleanDescription
         
-        XCTAssertEqual(result["name"] as? String, "John")
-        XCTAssertEqual(result["age"] as? Int, 30)
-        XCTAssertEqual(result["price"] as? Double, 19.99)
-        XCTAssertEqual(result["active"] as? Bool, true)
+        // Verify it doesn't contain CodableValue wrappers
+        XCTAssertFalse(description.contains("CodableValue"))
+        XCTAssertFalse(description.contains(".string"))
+        XCTAssertFalse(description.contains(".int"))
+        
+        // Verify it contains the actual values
+        XCTAssertTrue(description.contains("John"))
+        XCTAssertTrue(description.contains("30"))
+        XCTAssertTrue(description.contains("19.99"))
+        XCTAssertTrue(description.contains("true"))
     }
     
-    func testToSimpleDictEmpty() {
+    func testCleanDescriptionEmpty() {
         let dict: [String: CodableValue] = [:]
-        let result = CodableValue.toSimpleDict(dict)
-        XCTAssertTrue(result.isEmpty)
+        let description = dict.cleanDescription
+        XCTAssertTrue(description.contains("[:]") || description.contains("{}"))
     }
     
-    func testToSimpleDictWithNestedObjects() {
+    func testCleanDescriptionWithNestedObjects() {
         let dict: [String: CodableValue] = [
             "user": .object([
                 "name": .string("Alice"),
@@ -153,34 +159,32 @@ final class CodableValueLoggingTests: XCTestCase {
             "tags": .array([.string("swift"), .string("ios")])
         ]
         
-        let result = CodableValue.toSimpleDict(dict)
+        let description = dict.cleanDescription
         
-        guard let user = result["user"] as? [String: Any] else {
-            XCTFail("Expected user dictionary")
-            return
-        }
-        XCTAssertEqual(user["name"] as? String, "Alice")
-        XCTAssertEqual(user["age"] as? Int, 25)
+        // Verify no CodableValue wrappers
+        XCTAssertFalse(description.contains("CodableValue"))
+        XCTAssertFalse(description.contains(".string"))
+        XCTAssertFalse(description.contains(".int"))
+        XCTAssertFalse(description.contains(".array"))
+        XCTAssertFalse(description.contains(".object"))
         
-        guard let tags = result["tags"] as? [Any] else {
-            XCTFail("Expected tags array")
-            return
-        }
-        XCTAssertEqual(tags.count, 2)
-        XCTAssertEqual(tags[0] as? String, "swift")
-        XCTAssertEqual(tags[1] as? String, "ios")
+        // Verify values are present
+        XCTAssertTrue(description.contains("Alice"))
+        XCTAssertTrue(description.contains("25"))
+        XCTAssertTrue(description.contains("swift"))
+        XCTAssertTrue(description.contains("ios"))
     }
     
-    func testToSimpleDictWithNull() {
+    func testCleanDescriptionWithNull() {
         let dict: [String: CodableValue] = [
             "value": .null,
             "name": .string("test")
         ]
         
-        let result = CodableValue.toSimpleDict(dict)
+        let description = dict.cleanDescription
         
-        XCTAssertEqual(result["value"] as? String, "null")
-        XCTAssertEqual(result["name"] as? String, "test")
+        XCTAssertTrue(description.contains("null"))
+        XCTAssertTrue(description.contains("test"))
     }
     
     // MARK: - Real-world Use Case Tests
@@ -199,10 +203,8 @@ final class CodableValueLoggingTests: XCTestCase {
             ])
         ]
         
-        let simplified = CodableValue.toSimpleDict(properties)
-        
         // Verify it looks clean when printed
-        let description = "\(simplified)"
+        let description = properties.cleanDescription
         
         // Should not contain "CodableValue" in the string representation
         XCTAssertFalse(description.contains("CodableValue"))
@@ -210,6 +212,12 @@ final class CodableValueLoggingTests: XCTestCase {
         XCTAssertFalse(description.contains(".int"))
         XCTAssertFalse(description.contains(".double"))
         XCTAssertFalse(description.contains(".bool"))
+        
+        // Should contain the actual values
+        XCTAssertTrue(description.contains("abc123"))
+        XCTAssertTrue(description.contains("29.99"))
+        XCTAssertTrue(description.contains("2"))
+        XCTAssertTrue(description.contains("true"))
     }
 }
 
