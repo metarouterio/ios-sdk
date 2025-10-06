@@ -92,7 +92,7 @@ extension CodableValue {
   }
   
   /// Convert CodableValue to simple Any representation for cleaner logging
-  public func toAny() -> Any {
+  internal func toAny() -> Any {
     switch self {
     case .string(let value):
       return value
@@ -110,14 +110,8 @@ extension CodableValue {
       return "null"
     }
   }
-  
-  /// Convert [String: CodableValue] to [String: Any] for cleaner logging
-  public static func toSimpleDict(_ dict: [String: CodableValue]) -> [String: Any] {
-    return dict.mapValues { $0.toAny() }
-  }
 }
 
-// MARK: - Clean String Representation for Dictionary
 
 extension Dictionary where Key == String, Value == CodableValue {
   /// Returns a clean string representation without CodableValue wrappers
