@@ -153,8 +153,29 @@ extension CodableValue {
   public static func convert(_ dict: [String: Any]) -> [String: CodableValue]? {
     var result: [String: CodableValue] = [:]
     for (key, value) in dict {
-      guard let converted = CodableValue.from(value) else { return nil }
-      result[key] = converted
+      switch value {
+      case let string as String:
+        result[key] = .string(string)
+      case let int as Int:
+        result[key] = .int(int)
+      case let double as Double:
+        result[key] = .double(double)
+      case let float as Float:
+        result[key] = .double(Double(float))
+      case let bool as Bool:
+        result[key] = .bool(bool)
+      case let array as [Any]:
+        let converted = array.compactMap { CodableValue.from($0) }
+        guard converted.count == array.count else { return nil }
+        result[key] = .array(converted)
+      case let dict as [String: Any]:
+        guard let converted = CodableValue.convert(dict) else { return nil }
+        result[key] = .object(converted)
+      case Optional<Any>.none:
+        result[key] = .null
+      default:
+        return nil
+      }
     }
     return result
   }
