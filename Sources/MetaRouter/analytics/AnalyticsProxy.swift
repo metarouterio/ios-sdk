@@ -186,11 +186,11 @@ private actor ProxyState {
     private func forward(_ call: Call) {
         guard let r = real else { return }
         switch call {
-        case .track(let e, let p): r.track(e, properties: p)
-        case .identify(let userId, let traits): r.identify(userId, traits: traits)
-        case .group(let groupId, let traits): r.group(groupId, traits: traits)
-        case .screen(let name, let props): r.screen(name, properties: props)
-        case .page(let name, let props): r.page(name, properties: props)
+        case .track(let e, let p): r.track(e, properties: p?.mapValues { $0.toAny() })
+        case .identify(let userId, let traits): r.identify(userId, traits: traits?.mapValues { $0.toAny() })
+        case .group(let groupId, let traits): r.group(groupId, traits: traits?.mapValues { $0.toAny() })
+        case .screen(let name, let props): r.screen(name, properties: props?.mapValues { $0.toAny() })
+        case .page(let name, let props): r.page(name, properties: props?.mapValues { $0.toAny() })
         case .alias(let newUserId): r.alias(newUserId)
         case .enableDebugLogging: r.enableDebugLogging()
 
