@@ -61,7 +61,7 @@ final class AnalyticsProxyTests: XCTestCase {
         }
         
         XCTAssertTrue(forwarded)
-        XCTAssertEqual(mockClient.calls.first, .track(event: "test_event", properties: ["key": "value"]))
+        XCTAssertEqual(mockClient.calls.first, .track(event: "test_event", properties: ["key": .string("value")]))
     }
     
     func testIdentifyForwardedWhenBound() async {
@@ -73,7 +73,7 @@ final class AnalyticsProxyTests: XCTestCase {
         }
         
         XCTAssertTrue(forwarded)
-        XCTAssertEqual(mockClient.calls.first, .identify(userId: "user123", traits: ["name": "John"]))
+        XCTAssertEqual(mockClient.calls.first, .identify(userId: "user123", traits: ["name": .string("John")]))
     }
     
     func testGroupForwardedWhenBound() async {
@@ -85,7 +85,7 @@ final class AnalyticsProxyTests: XCTestCase {
         }
         
         XCTAssertTrue(forwarded)
-        XCTAssertEqual(mockClient.calls.first, .group(groupId: "company123", traits: ["name": "Acme"]))
+        XCTAssertEqual(mockClient.calls.first, .group(groupId: "company123", traits: ["name": .string("Acme")]))
     }
     
     func testScreenForwardedWhenBound() async {
@@ -97,7 +97,7 @@ final class AnalyticsProxyTests: XCTestCase {
         }
         
         XCTAssertTrue(forwarded)
-        XCTAssertEqual(mockClient.calls.first, .screen(name: "Home", properties: ["category": "main"]))
+        XCTAssertEqual(mockClient.calls.first, .screen(name: "Home", properties: ["category": .string("main")]))
     }
     
     func testPageForwardedWhenBound() async {
@@ -109,7 +109,7 @@ final class AnalyticsProxyTests: XCTestCase {
         }
         
         XCTAssertTrue(forwarded)
-        XCTAssertEqual(mockClient.calls.first, .page(name: "Landing", properties: ["url": "/"]))
+        XCTAssertEqual(mockClient.calls.first, .page(name: "Landing", properties: ["url": .string("/")]))
     }
     
     func testAliasForwardedWhenBound() async {
