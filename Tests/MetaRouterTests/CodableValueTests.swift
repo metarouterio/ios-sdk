@@ -237,6 +237,34 @@ final class CodableValueTests: XCTestCase {
         XCTAssertEqual(value, expected)
     }
     
+    func testNestedDictionaryConversion() {
+        let nested: [String: Any] = [
+            "brand": "Tropica Plants",
+            "category": "Plants",
+            "price": 39.99,
+            "metadata": [
+                "sku": "PL-1005",
+                "position": 5
+            ] as [String: Any]
+        ]
+        
+        // First convert to CodableValue
+        let converted = CodableValue.convert(nested)
+        XCTAssertNotNil(converted)
+        
+        // Then encode to verify proper nesting
+        let encoder = JSONEncoder()
+        let data = try! encoder.encode(["properties": converted!])
+        let json = String(data: data, encoding: .utf8)!
+        
+        // Should NOT contain escaped quotes (no double serialization)
+        XCTAssertFalse(json.contains("\\\""))
+        
+        // Should be a proper nested structure
+        XCTAssertTrue(json.contains(#""brand":"Tropica Plants""#))
+        XCTAssertTrue(json.contains(#""metadata":{"sku":"PL-1005""#))
+    }
+    
     // Equality Tests
     
     func testStringEquality() {
