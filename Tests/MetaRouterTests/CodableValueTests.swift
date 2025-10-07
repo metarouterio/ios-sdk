@@ -237,7 +237,6 @@ final class CodableValueTests: XCTestCase {
         XCTAssertEqual(value, expected)
     }
     
-    // MARK: - Value Access Tests
     
     func testValueAccessProperties() {
         // Test string value
