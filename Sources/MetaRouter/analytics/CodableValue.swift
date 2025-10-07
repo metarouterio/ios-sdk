@@ -42,7 +42,6 @@ public enum CodableValue: Sendable, CustomStringConvertible {
     return "\(toAny())"
   }
   
-  // MARK: - Value Access
   
   /// The string value if this is a .string case, nil otherwise
   public var stringValue: String? {
@@ -90,7 +89,6 @@ public enum CodableValue: Sendable, CustomStringConvertible {
   }
 }
 
-// MARK: - Codable Implementation
 
 extension CodableValue: Codable {
   public func encode(to encoder: Encoder) throws {
