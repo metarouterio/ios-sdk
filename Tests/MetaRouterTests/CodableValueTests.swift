@@ -237,6 +237,112 @@ final class CodableValueTests: XCTestCase {
         XCTAssertEqual(value, expected)
     }
     
+    // MARK: - Value Access Tests
+    
+    func testValueAccessProperties() {
+        // Test string value
+        let stringValue: CodableValue = "test"
+        XCTAssertEqual(stringValue.stringValue, "test")
+        XCTAssertNil(stringValue.intValue)
+        
+        // Test int value
+        let intValue: CodableValue = 42
+        XCTAssertEqual(intValue.intValue, 42)
+        XCTAssertEqual(intValue.doubleValue, 42.0)
+        XCTAssertNil(intValue.stringValue)
+        
+        // Test double value
+        let doubleValue: CodableValue = 3.14
+        XCTAssertEqual(doubleValue.doubleValue, 3.14)
+        XCTAssertNil(doubleValue.intValue)
+        
+        // Test bool value
+        let boolValue: CodableValue = true
+        XCTAssertEqual(boolValue.boolValue, true)
+        XCTAssertNil(boolValue.stringValue)
+        
+        // Test array value
+        let arrayValue: CodableValue = [1, "two", true]
+        XCTAssertEqual(arrayValue.arrayValue?.count, 3)
+        XCTAssertNil(arrayValue.objectValue)
+        
+        // Test object value
+        let objectValue: CodableValue = ["key": "value"]
+        XCTAssertEqual(objectValue.objectValue?.count, 1)
+        XCTAssertNil(objectValue.arrayValue)
+        
+        // Test null value
+        let nullValue: CodableValue = .null
+        XCTAssertTrue(nullValue.isNull)
+        XCTAssertNil(nullValue.stringValue)
+    }
+    
+    // MARK: - Type-Safe Conversion Tests
+    
+    func testTypeSafeConversions() {
+        let nested: CodableValue = [
+            "string": "value",
+            "int": 42,
+            "double": 3.14,
+            "bool": true,
+            "array": [1, 2, 3],
+            "object": ["nested": "value"],
+            "null": .null
+        ]
+        
+        // Test dictionary conversion
+        let dict = nested.toDictionary()
+        XCTAssertNotNil(dict)
+        XCTAssertEqual(dict?["string"] as? String, "value")
+        XCTAssertEqual(dict?["int"] as? Int, 42)
+        XCTAssertEqual(dict?["double"] as? Double, 3.14)
+        XCTAssertEqual(dict?["bool"] as? Bool, true)
+        XCTAssertEqual((dict?["array"] as? [Int])?.count, 3)
+        XCTAssertEqual((dict?["object"] as? [String: String])?["nested"], "value")
+        XCTAssertTrue(dict?["null"] is NSNull)
+        
+        // Test array conversion
+        let array: CodableValue = [1, "two", true, ["key": "value"]]
+        let converted = array.toArray()
+        XCTAssertNotNil(converted)
+        XCTAssertEqual(converted?.count, 4)
+        XCTAssertEqual(converted?[0] as? Int, 1)
+        XCTAssertEqual(converted?[1] as? String, "two")
+        XCTAssertEqual(converted?[2] as? Bool, true)
+        XCTAssertEqual((converted?[3] as? [String: String])?["key"], "value")
+    }
+    
+    func testNestedDictionaryConversion() {
+        let nested: [String: Any] = [
+            "brand": "Tropica Plants",
+            "category": "Plants",
+            "price": 39.99,
+            "metadata": [
+                "sku": "PL-1005",
+                "position": 5
+            ] as [String: Any]
+        ]
+        
+        print("Input dictionary: \(nested)")
+        
+        // First convert to CodableValue
+        let converted = CodableValue.convert(nested)
+        XCTAssertNotNil(converted)
+        
+        // Then encode to verify proper nesting
+        let encoder = JSONEncoder()
+        let data = try! encoder.encode(["properties": converted!])
+        let json = String(data: data, encoding: .utf8)!
+        print("JSON output: \(json)")
+        
+        // Should NOT contain escaped quotes (no double serialization)
+        XCTAssertFalse(json.contains("\\\""))
+        
+        // Should be a proper nested structure
+        XCTAssertTrue(json.contains(#""brand":"Tropica Plants""#))
+        XCTAssertTrue(json.contains(#""metadata":{"sku":"PL-1005""#))
+    }
+    
     // Equality Tests
     
     func testStringEquality() {
