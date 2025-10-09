@@ -13,7 +13,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 Add the following dependency to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/metarouter/ios-sdk.git", from: "0.0.10")
+.package(url: "https://github.com/metarouter/ios-sdk.git", from: "1.0.0")
 ```
 
 Or add it via Xcode: **File → Add Package Dependencies → Enter repository URL**
@@ -123,6 +123,30 @@ struct ContentView: View {
                 "timestamp": Date().timeIntervalSince1970
             ])
         }
+    }
+}
+```
+
+### Example
+
+Here's a simple example of how to integrate the MetaRouter SDK into your iOS app:
+
+```swift
+import UIKit
+import MetaRouter
+
+@UIApplicationMain
+class AppDelegate: UIResponder, UIApplicationDelegate {
+    var window: UIWindow?
+    var client: AnalyticsClient!
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        // Initialize the analytics client
+        client = AnalyticsClient.initialize(options: InitOptions(writeKey: "your-write-key", ingestionHost: "https://your-ingestion-host.com", debug: true))
+
+        // Note: The AnalyticsClient can be used as a singleton or assigned to a variable.
+        // Both approaches will use the same instance under the hood.
+        return true
     }
 }
 ```
