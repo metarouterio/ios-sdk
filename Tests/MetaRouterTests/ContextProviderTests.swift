@@ -317,7 +317,6 @@ final class ContextProviderTests: XCTestCase {
         XCTAssertNil(decodedContext.network)
     }
 
-    // MARK: - IDFA Tests
 
     func testDeviceContextWithAdvertisingId() {
         let device = DeviceContext(
