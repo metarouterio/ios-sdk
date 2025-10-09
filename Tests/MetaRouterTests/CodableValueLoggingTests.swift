@@ -3,7 +3,6 @@ import XCTest
 
 final class CodableValueLoggingTests: XCTestCase {
     
-    // MARK: - toAny() Tests
     
     func testToAnyString() {
         let value = CodableValue.string("hello")
@@ -120,7 +119,6 @@ final class CodableValueLoggingTests: XCTestCase {
         XCTAssertEqual(metadata["valid"] as? Bool, true)
     }
     
-    // MARK: - cleanDescription Tests
     
     func testCleanDescriptionBasic() {
         let dict: [String: CodableValue] = [
@@ -187,7 +185,6 @@ final class CodableValueLoggingTests: XCTestCase {
         XCTAssertTrue(description.contains("test"))
     }
     
-    // MARK: - Real-world Use Case Tests
     
     func testTrackingPropertiesConversion() {
         // Simulate what happens in analytics tracking

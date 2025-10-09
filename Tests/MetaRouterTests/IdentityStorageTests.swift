@@ -139,7 +139,6 @@ final class IdentityStorageTests: XCTestCase {
         XCTAssertEqual(storage.get(.anonymousId), "new-id")
     }
     
-    // MARK: - Storage Key Tests
     
     func testStorageKeysAreCorrect() {
         XCTAssertEqual(IdentityStorageKey.anonymousId.rawValue, "metarouter:anonymous_id")
@@ -155,7 +154,6 @@ final class IdentityStorageTests: XCTestCase {
         XCTAssertEqual(directValue, "test-value")
     }
     
-    // MARK: - Edge Cases
     
     func testSetEmptyString() {
         storage.set(.anonymousId, value: "")
