@@ -31,7 +31,8 @@ let options = InitOptions(
     ingestionHost: "https://your-ingestion-endpoint.com",
     debug: true, // Optional: enable debug mode
     flushIntervalSeconds: 30, // Optional: flush events every 30 seconds
-    maxQueueEvents: 2000 // Optional: max events in memory queue
+    maxQueueEvents: 2000, // Optional: max events in memory queue
+    advertisingId: nil // Optional: IDFA for ad tracking (see IDFA Setup section)
 )
 
 let analytics = MetaRouter.Analytics.initialize(with: options)
@@ -151,6 +152,188 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 ```
 
+## IDFA (Advertising Identifier) Setup
+
+The MetaRouter SDK supports including the IDFA (Identifier for Advertisers) in your analytics events for ad tracking and attribution purposes. This is useful for marketing analytics, ad campaign measurement, and user acquisition tracking.
+
+### Prerequisites
+
+1. **iOS 14.5+**: App Tracking Transparency (ATT) is required
+2. **Info.plist**: Add `NSUserTrackingUsageDescription` to explain why you need tracking permission
+3. **Frameworks**: Import `AppTrackingTransparency` and `AdSupport`
+
+### Setup Steps
+
+#### 1. Update Info.plist
+
+Add the tracking usage description to your `Info.plist`:
+
+```xml
+<key>NSUserTrackingUsageDescription</key>
+<string>We use your advertising identifier to measure ad campaign effectiveness and provide personalized experiences.</string>
+```
+
+#### 2. Request Tracking Authorization
+
+Request permission before accessing the IDFA:
+
+```swift
+import AppTrackingTransparency
+import AdSupport
+import MetaRouter
+
+// Request tracking authorization (typically in AppDelegate or SceneDelegate)
+func requestTrackingPermission() {
+    // Only request on iOS 14.5+
+    if #available(iOS 14.5, *) {
+        ATTrackingManager.requestTrackingAuthorization { status in
+            let advertisingId: String?
+
+            switch status {
+            case .authorized:
+                // Permission granted - get IDFA
+                advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+            case .denied, .restricted, .notDetermined:
+                // Permission not granted - don't include IDFA
+                advertisingId = nil
+            @unknown default:
+                advertisingId = nil
+            }
+
+            // Initialize MetaRouter with the advertising ID
+            let options = InitOptions(
+                writeKey: "your-write-key",
+                ingestionHost: "https://your-ingestion-endpoint.com",
+                advertisingId: advertisingId
+            )
+
+            let analytics = MetaRouter.Analytics.initialize(with: options)
+        }
+    } else {
+        // iOS 14.4 and below - IDFA available without ATT
+        let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+
+        let options = InitOptions(
+            writeKey: "your-write-key",
+            ingestionHost: "https://your-ingestion-endpoint.com",
+            advertisingId: advertisingId
+        )
+
+        let analytics = MetaRouter.Analytics.initialize(with: options)
+    }
+}
+```
+
+#### 3. SwiftUI Example
+
+```swift
+import SwiftUI
+import AppTrackingTransparency
+import AdSupport
+import MetaRouter
+
+@main
+struct MyApp: App {
+    @StateObject private var analyticsManager = AnalyticsManager()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(analyticsManager)
+                .onAppear {
+                    // Request tracking permission after a brief delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        requestTrackingAndInitialize()
+                    }
+                }
+        }
+    }
+
+    func requestTrackingAndInitialize() {
+        if #available(iOS 14.5, *) {
+            ATTrackingManager.requestTrackingAuthorization { status in
+                let advertisingId = status == .authorized
+                    ? ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                    : nil
+                analyticsManager.initialize(advertisingId: advertisingId)
+            }
+        } else {
+            let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+            analyticsManager.initialize(advertisingId: advertisingId)
+        }
+    }
+}
+
+class AnalyticsManager: ObservableObject {
+    private var analytics: AnalyticsInterface?
+
+    func initialize(advertisingId: String?) {
+        let options = InitOptions(
+            writeKey: "your-write-key",
+            ingestionHost: "https://your-ingestion-endpoint.com",
+            advertisingId: advertisingId
+        )
+        analytics = MetaRouter.Analytics.initialize(with: options)
+    }
+
+    func track(_ event: String, properties: [String: Any]? = nil) {
+        analytics?.track(event, properties: properties)
+    }
+}
+```
+
+### Privacy & Compliance
+
+#### Important Considerations
+
+⚠️ **IDFA is Personally Identifiable Information (PII)** and must be handled in compliance with privacy regulations:
+
+- **GDPR (Europe)**: Requires explicit user consent before collecting IDFA
+- **CCPA (California)**: Users must be able to opt-out of data selling/sharing
+- **App Store**: Must accurately declare data usage in your App Privacy details
+- **ATT (iOS 14.5+)**: Required before accessing IDFA
+
+#### Best Practices
+
+1. **Request permission contextually**: Explain the benefits before showing the ATT prompt
+2. **Respect user choice**: Don't repeatedly ask if denied
+3. **Update privacy policy**: Clearly state IDFA collection and usage
+4. **App Store privacy label**: Declare IDFA under "Identifiers" in App Store Connect
+5. **Handle nil gracefully**: Your analytics should work with or without IDFA
+
+#### Checking ATT Status
+
+```swift
+import AppTrackingTransparency
+
+func checkTrackingStatus() -> ATTrackingManager.AuthorizationStatus {
+    if #available(iOS 14, *) {
+        return ATTrackingManager.trackingAuthorizationStatus
+    } else {
+        return .notDetermined
+    }
+}
+```
+
+### Alternative: IDFV (Identifier for Vendor)
+
+If you don't need cross-app tracking, consider using IDFV instead, which doesn't require ATT permission:
+
+```swift
+import UIKit
+
+// IDFV - doesn't require ATT permission
+let vendorId = UIDevice.current.identifierForVendor?.uuidString
+
+let options = InitOptions(
+    writeKey: "your-write-key",
+    ingestionHost: "https://your-ingestion-endpoint.com",
+    advertisingId: vendorId // Note: This is IDFV, not IDFA
+)
+```
+
+**Note**: IDFV is app-vendor specific and resets when all apps from the same vendor are uninstalled.
+
 ## API Reference
 
 ### MetaRouter.Analytics.initialize(options)
@@ -168,6 +351,7 @@ Calls to `track`, `identify`, etc. are **buffered in-memory** by the proxy and r
 - `debug` (Bool, optional): Enable debug mode (default: `false`)
 - `flushIntervalSeconds` (Int, optional): Interval in seconds to flush events (default: `10`)
 - `maxQueueEvents` (Int, optional): Number of max events stored in memory (default: `2000`)
+- `advertisingId` (String?, optional): IDFA or IDFV for ad tracking and attribution (default: `nil`). See [IDFA Setup](#idfa-advertising-identifier-setup) section for details
 
 **Proxy behavior (quick notes):**
 

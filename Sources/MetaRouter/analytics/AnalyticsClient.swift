@@ -21,7 +21,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                    host: options.ingestionHost.absoluteString)
         
         self.options = options
-        self.contextProvider = contextProvider ?? DeviceContextProvider()
+        self.contextProvider = contextProvider ?? DeviceContextProvider(advertisingId: options.advertisingId)
         self.identityManager = IdentityManager(
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
