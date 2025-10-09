@@ -30,9 +30,15 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     private let contextActor = ContextActor()
     private let library: LibraryContext
+    private let advertisingId: String?
 
-    public init(libraryName: String = "metarouter-ios-sdk", libraryVersion: String = "1.0.0") {
+    public init(
+        libraryName: String = "metarouter-ios-sdk",
+        libraryVersion: String = "1.0.0",
+        advertisingId: String? = nil
+    ) {
         self.library = LibraryContext(name: libraryName, version: libraryVersion)
+        self.advertisingId = advertisingId
     }
 
     public func getContext() async -> EventContext {
@@ -100,17 +106,25 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
             manufacturer: "Apple",
             model: mappedModel,
             name: snapshot.name,
-            type: type
+            type: type,
+            advertisingId: advertisingId
         )
         #elseif canImport(AppKit)
         return DeviceContext(
             manufacturer: "Apple",
             model: macHardwareModel(), // e.g., "Mac14,5"
             name: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
-            type: "desktop"
+            type: "desktop",
+            advertisingId: advertisingId
         )
         #else
-        return DeviceContext(manufacturer: "Apple", model: "unknown", name: "unknown", type: "unknown")
+        return DeviceContext(
+            manufacturer: "Apple",
+            model: "unknown",
+            name: "unknown",
+            type: "unknown",
+            advertisingId: advertisingId
+        )
         #endif
     }
 

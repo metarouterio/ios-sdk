@@ -316,4 +316,126 @@ final class ContextProviderTests: XCTestCase {
         XCTAssertEqual(originalContext.timezone, decodedContext.timezone)
         XCTAssertNil(decodedContext.network)
     }
+
+    // MARK: - IDFA Tests
+
+    func testDeviceContextWithAdvertisingId() {
+        let device = DeviceContext(
+            manufacturer: "Apple",
+            model: "iPhone15,2",
+            name: "Test Device",
+            type: "phone",
+            advertisingId: "12345678-1234-1234-1234-123456789012"
+        )
+
+        XCTAssertEqual(device.advertisingId, "12345678-1234-1234-1234-123456789012")
+    }
+
+    func testDeviceContextWithoutAdvertisingId() {
+        let device = DeviceContext(
+            manufacturer: "Apple",
+            model: "iPhone15,2",
+            name: "Test Device",
+            type: "phone"
+        )
+
+        XCTAssertNil(device.advertisingId)
+    }
+
+    func testContextProviderWithAdvertisingId() async {
+        let testAdvertisingId = "ABCD1234-5678-90EF-GHIJ-KLMNOPQRSTUV"
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0",
+            advertisingId: testAdvertisingId
+        )
+
+        let context = await provider.getContext()
+
+        XCTAssertEqual(context.device.advertisingId, testAdvertisingId)
+    }
+
+    func testContextProviderWithNilAdvertisingId() async {
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0",
+            advertisingId: nil
+        )
+
+        let context = await provider.getContext()
+
+        XCTAssertNil(context.device.advertisingId)
+    }
+
+    func testContextProviderWithoutAdvertisingId() async {
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0"
+        )
+
+        let context = await provider.getContext()
+
+        XCTAssertNil(context.device.advertisingId)
+    }
+
+    func testDeviceContextCodableWithAdvertisingId() throws {
+        let device = DeviceContext(
+            manufacturer: "Apple",
+            model: "iPhone15,2",
+            name: "Test Device",
+            type: "phone",
+            advertisingId: "TEST-IDFA-UUID"
+        )
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(device)
+        XCTAssertFalse(data.isEmpty)
+
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(DeviceContext.self, from: data)
+
+        XCTAssertEqual(device.manufacturer, decoded.manufacturer)
+        XCTAssertEqual(device.model, decoded.model)
+        XCTAssertEqual(device.name, decoded.name)
+        XCTAssertEqual(device.type, decoded.type)
+        XCTAssertEqual(device.advertisingId, decoded.advertisingId)
+    }
+
+    func testDeviceContextCodableWithoutAdvertisingId() throws {
+        let device = DeviceContext(
+            manufacturer: "Apple",
+            model: "iPhone15,2",
+            name: "Test Device",
+            type: "phone"
+        )
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(device)
+        XCTAssertFalse(data.isEmpty)
+
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(DeviceContext.self, from: data)
+
+        XCTAssertEqual(device.manufacturer, decoded.manufacturer)
+        XCTAssertEqual(device.model, decoded.model)
+        XCTAssertEqual(device.name, decoded.name)
+        XCTAssertEqual(device.type, decoded.type)
+        XCTAssertNil(decoded.advertisingId)
+    }
+
+    func testAdvertisingIdPersistsInCachedContext() async {
+        let testId = "CACHED-TEST-ID"
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0",
+            advertisingId: testId
+        )
+
+        // Get context twice - both should have the same IDFA
+        let context1 = await provider.getContext()
+        let context2 = await provider.getContext()
+
+        XCTAssertEqual(context1.device.advertisingId, testId)
+        XCTAssertEqual(context2.device.advertisingId, testId)
+    }
 }
