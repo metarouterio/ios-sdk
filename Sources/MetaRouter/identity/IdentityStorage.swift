@@ -5,6 +5,7 @@ public enum IdentityStorageKey: String {
     case anonymousId = "metarouter:anonymous_id"
     case userId = "metarouter:user_id"
     case groupId = "metarouter:group_id"
+    case advertisingId = "metarouter:advertising_id"
 }
 
 /// Handles persistence of identity fields using UserDefaults
@@ -35,6 +36,7 @@ public struct IdentityStorage: @unchecked Sendable {
         remove(.anonymousId)
         remove(.userId)
         remove(.groupId)
+        remove(.advertisingId)
     }
 }
 
