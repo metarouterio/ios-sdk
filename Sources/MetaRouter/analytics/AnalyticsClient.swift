@@ -378,14 +378,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 await deviceProvider.setAdvertisingId(advertisingId)
             }
 
-            // Redact the advertisingId in logs for privacy
-            let redactedId = advertisingId.map { id in
-                let prefix = id.prefix(8)
-                return "\(prefix)***"
-            } ?? "nil"
-
             Logger.log(
-                "advertisingId updated to: \(redactedId)",
+                "Advertising ID updated, persisted, and context refreshed",
                 writeKey: self.options.writeKey,
                 host: self.options.ingestionHost.absoluteString)
         }
