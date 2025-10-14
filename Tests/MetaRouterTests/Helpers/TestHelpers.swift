@@ -136,6 +136,10 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
     func reset() {
         recordCall(.reset)
     }
+
+    func setAdvertisingId(_ advertisingId: String?) {
+        recordCall(.setAdvertisingId(advertisingId: advertisingId))
+    }
 }
 
 // Analytics Call Recording
@@ -152,6 +156,7 @@ enum AnalyticsCall: Equatable {
 
     case flush
     case reset
+    case setAdvertisingId(advertisingId: String?)
 }
 
 // CodableValue Test Extensions

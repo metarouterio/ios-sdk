@@ -21,7 +21,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                    host: options.ingestionHost.absoluteString)
         
         self.options = options
-        self.contextProvider = contextProvider ?? DeviceContextProvider(advertisingId: options.advertisingId)
+        self.contextProvider = contextProvider ?? DeviceContextProvider()
         self.identityManager = IdentityManager(
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
@@ -325,6 +325,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             await self.dispatcher.clearAll()
             self.disabled = false
             self.lifecycleState = .idle
+        }
+    }
+
+    public func setAdvertisingId(_ advertisingId: String?) {
+        Task { [weak self] in
+            guard let self else { return }
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
+                await deviceProvider.setAdvertisingId(advertisingId)
+                Logger.log(
+                    "advertisingId updated to: \(advertisingId ?? "nil")",
+                    writeKey: self.options.writeKey,
+                    host: self.options.ingestionHost.absoluteString)
+            }
         }
     }
 }

@@ -6,15 +6,13 @@ public struct InitOptions: Sendable {
     public let flushIntervalSeconds: Int
     public let debug: Bool
     public let maxQueueEvents: Int
-    public let advertisingId: String?
 
     public init(
         writeKey: String,
         ingestionHost: URL,
         flushIntervalSeconds: Int = 10,
         debug: Bool = false,
-        maxQueueEvents: Int = 2000,
-        advertisingId: String? = nil
+        maxQueueEvents: Int = 2000
     ) {
         precondition(!writeKey.isEmpty, "writeKey must not be empty")
 
@@ -27,7 +25,6 @@ public struct InitOptions: Sendable {
         self.flushIntervalSeconds = max(1, flushIntervalSeconds)
         self.debug = debug
         self.maxQueueEvents = max(1, maxQueueEvents)
-        self.advertisingId = advertisingId
     }
 }
 
@@ -37,8 +34,7 @@ extension InitOptions {
         ingestionHost: String,
         flushIntervalSeconds: Int = 10,
         debug: Bool = false,
-        maxQueueEvents: Int = 2000,
-        advertisingId: String? = nil
+        maxQueueEvents: Int = 2000
     ) {
         var host = ingestionHost.trimmingCharacters(in: .whitespacesAndNewlines)
         if host.hasSuffix("/") {
@@ -52,8 +48,7 @@ extension InitOptions {
             ingestionHost: url,
             flushIntervalSeconds: flushIntervalSeconds,
             debug: debug,
-            maxQueueEvents: maxQueueEvents,
-            advertisingId: advertisingId
+            maxQueueEvents: maxQueueEvents
         )
     }
 }

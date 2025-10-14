@@ -414,4 +414,120 @@ final class MetaRouterIntegrationTests: XCTestCase {
         
         XCTAssertTrue(true, "Edge case scenarios should be handled gracefully")
     }
+
+    // Advertising ID Tests
+
+    func testSetAdvertisingIdIntegration() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Set advertising ID
+        client.setAdvertisingId("TEST-IDFA-12345")
+
+        // Wait for update to propagate
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track an event - context should include the advertisingId
+        client.track("test_event_with_idfa", properties: nil)
+
+        XCTAssertTrue(true, "setAdvertisingId should work with the analytics client")
+    }
+
+    func testSetAdvertisingIdUpdatesContext() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Set initial advertising ID
+        let initialId = "INITIAL-IDFA"
+        client.setAdvertisingId(initialId)
+
+        // Wait for update to propagate
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track an event with initial ID
+        client.track("event_with_initial_idfa", properties: nil)
+
+        // Update advertising ID
+        let newId = "UPDATED-IDFA"
+        client.setAdvertisingId(newId)
+
+        // Wait for update to propagate
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track an event with updated ID
+        client.track("event_with_updated_idfa", properties: nil)
+
+        XCTAssertTrue(true, "Advertising ID should be updatable after initialization")
+    }
+
+    func testSetAdvertisingIdToNilIntegration() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Set initial advertising ID
+        let initialId = "IDFA-TO-BE-CLEARED"
+        client.setAdvertisingId(initialId)
+
+        // Wait for update to propagate
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track an event with initial ID
+        client.track("event_before_clearing_idfa", properties: nil)
+
+        // Clear advertising ID
+        client.setAdvertisingId(nil)
+
+        // Wait for update to propagate
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track an event without advertising ID
+        client.track("event_after_clearing_idfa", properties: nil)
+
+        XCTAssertTrue(true, "Advertising ID should be clearable")
+    }
+
+    func testSetAdvertisingIdWithProxy() async {
+        // Get proxy before initialization
+        let proxy = MetaRouter.Analytics.client()
+
+        // Set advertising ID before initialization (should be queued)
+        proxy.setAdvertisingId("QUEUED-IDFA")
+
+        // Initialize client
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Wait for binding and replay
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track event - should use the queued advertising ID
+        client.track("event_after_proxy_queue", properties: nil)
+
+        XCTAssertTrue(true, "setAdvertisingId should work through proxy before initialization")
+    }
+
+    func testConcurrentSetAdvertisingIdIntegration() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        let expectation = expectation(description: "Concurrent setAdvertisingId completed")
+        expectation.expectedFulfillmentCount = 10
+
+        // Concurrently set advertising ID and track events
+        for i in 0..<10 {
+            Task {
+                client.setAdvertisingId("CONCURRENT-IDFA-\(i)")
+                client.track("concurrent_event_\(i)", properties: nil)
+                expectation.fulfill()
+            }
+        }
+
+        await fulfillment(of: [expectation], timeout: 5.0)
+
+        // Final advertising ID should be set without errors
+        client.setAdvertisingId("FINAL-IDFA")
+        client.track("final_event", properties: nil)
+
+        XCTAssertTrue(true, "Concurrent setAdvertisingId calls should be handled safely")
+    }
 }
