@@ -358,11 +358,12 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 return
             }
 
-            // Validate UUID format if not nil
+            // Validate non-empty, non-whitespace if not nil
             if let id = advertisingId {
-                guard UUID(uuidString: id) != nil else {
+                let trimmed = id.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else {
                     Logger.log(
-                        "Invalid advertisingId format - must be a valid UUID string",
+                        "Invalid advertisingId - must be non-empty, non-whitespace string",
                         writeKey: self.options.writeKey,
                         host: self.options.ingestionHost.absoluteString)
                     return
