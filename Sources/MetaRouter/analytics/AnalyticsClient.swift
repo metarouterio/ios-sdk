@@ -78,13 +78,24 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
-            Logger.log("IdentityManager initialized successfully", 
-                       writeKey: self.options.writeKey, 
+            Logger.log("IdentityManager initialized successfully",
+                       writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
+
+            // Load advertisingId from IdentityManager and set it on DeviceContextProvider
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider,
+               let advertisingId = await self.identityManager.getAdvertisingId() {
+                await deviceProvider.setAdvertisingId(advertisingId)
+                let redactedId = "\(advertisingId.prefix(8))***"
+                Logger.log("Loaded advertisingId from storage: \(redactedId)",
+                           writeKey: self.options.writeKey,
+                           host: self.options.ingestionHost.absoluteString)
+            }
+
             await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
             self.lifecycleState = .ready
-            Logger.log("Analytics client initialization completed successfully", 
-                       writeKey: self.options.writeKey, 
+            Logger.log("Analytics client initialization completed successfully",
+                       writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
         }
         
@@ -320,11 +331,85 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             guard let self else { return }
             self.lifecycleState = .resetting
             await self.identityManager.reset()
+
+            // Clear advertisingId from DeviceContextProvider
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
+                await deviceProvider.setAdvertisingId(nil)
+            }
+
             await self.dispatcher.stopFlushLoop()
             await self.dispatcher.cancelScheduledRetry()
             await self.dispatcher.clearAll()
             self.disabled = false
             self.lifecycleState = .idle
+        }
+    }
+
+    public func setAdvertisingId(_ advertisingId: String?) {
+        Task { [weak self] in
+            guard let self else { return }
+
+            // Check lifecycle state
+            guard lifecycleState == .ready || lifecycleState == .initializing else {
+                Logger.log(
+                    "Cannot set advertisingId - client not ready (state: \(lifecycleState.rawValue))",
+                    writeKey: self.options.writeKey,
+                    host: self.options.ingestionHost.absoluteString)
+                return
+            }
+
+            // Validate non-empty, non-whitespace if not nil
+            if let id = advertisingId {
+                let trimmed = id.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else {
+                    Logger.log(
+                        "Invalid advertisingId - must be non-empty, non-whitespace string",
+                        writeKey: self.options.writeKey,
+                        host: self.options.ingestionHost.absoluteString)
+                    return
+                }
+            }
+
+            // Persist to IdentityManager first
+            await self.identityManager.setAdvertisingId(advertisingId)
+
+            // Update DeviceContextProvider to use the new value
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
+                await deviceProvider.setAdvertisingId(advertisingId)
+            }
+
+            Logger.log(
+                "Advertising ID updated, persisted, and context refreshed",
+                writeKey: self.options.writeKey,
+                host: self.options.ingestionHost.absoluteString)
+        }
+    }
+
+    public func clearAdvertisingId() {
+        Task { [weak self] in
+            guard let self else { return }
+
+            // Check lifecycle state
+            guard lifecycleState == .ready || lifecycleState == .initializing else {
+                Logger.log(
+                    "Cannot clear advertisingId - client not ready (state: \(lifecycleState.rawValue))",
+                    writeKey: self.options.writeKey,
+                    host: self.options.ingestionHost.absoluteString)
+                return
+            }
+
+            // Clear from IdentityManager first
+            await self.identityManager.clearAdvertisingId()
+
+            // Clear from DeviceContextProvider
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
+                await deviceProvider.setAdvertisingId(nil)
+            }
+
+            Logger.log(
+                "advertisingId cleared for GDPR compliance",
+                writeKey: self.options.writeKey,
+                host: self.options.ingestionHost.absoluteString)
         }
     }
 }

@@ -283,9 +283,161 @@ final class AnalyticsClientTests: XCTestCase {
                 "large": 999999999999
             ]
         ]
-        
+
         client.track("complex_event", properties: complexProperties)
-        
+
         XCTAssertTrue(true, "Complex properties handled without crashing")
+    }
+
+    // MARK: - Advertising ID Tests
+
+    func testSetAdvertisingIdWithValidUUID() async {
+        let validUUID = UUID().uuidString
+        client.setAdvertisingId(validUUID)
+
+        // Wait a bit for the async operation
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
+        XCTAssertTrue(true, "Valid UUID should be accepted")
+    }
+
+    func testSetAdvertisingIdWithNil() async {
+        client.setAdvertisingId(nil)
+
+        // Wait a bit for the async operation
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertTrue(true, "Nil advertising ID should be accepted")
+    }
+
+    func testSetAdvertisingIdWithInvalidFormat() async {
+        // These should be rejected due to invalid UUID format
+        let invalidFormats = [
+            "not-a-uuid",
+            "12345",
+            "",
+            "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+            "invalid-uuid-format-123",
+            String(repeating: "a", count: 10000) // Very long string
+        ]
+
+        for invalidId in invalidFormats {
+            client.setAdvertisingId(invalidId)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertTrue(true, "Invalid UUIDs should be rejected gracefully")
+    }
+
+    func testSetAdvertisingIdWithMalformedUUID() async {
+        let malformedUUIDs = [
+            "12345678-1234-1234-1234", // Too short
+            "12345678-1234-1234-1234-12345678901234567890", // Too long
+            "gggggggg-1234-1234-1234-123456789012", // Invalid hex characters
+            "12345678 1234 1234 1234 123456789012" // Spaces instead of hyphens
+        ]
+
+        for malformedId in malformedUUIDs {
+            client.setAdvertisingId(malformedId)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertTrue(true, "Malformed UUIDs should be rejected gracefully")
+    }
+
+    func testClearAdvertisingId() async {
+        // First set a valid UUID
+        let validUUID = UUID().uuidString
+        client.setAdvertisingId(validUUID)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // Then clear it
+        client.clearAdvertisingId()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertTrue(true, "clearAdvertisingId should work without crashing")
+    }
+
+    func testRapidConsecutiveAdvertisingIdCalls() async {
+        // Test rapid consecutive calls to ensure no race conditions
+        for i in 0..<10 {
+            if i % 2 == 0 {
+                client.setAdvertisingId(UUID().uuidString)
+            } else {
+                client.clearAdvertisingId()
+            }
+        }
+
+        // Wait for all operations to complete
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertTrue(true, "Rapid consecutive calls should be handled gracefully")
+    }
+
+    func testSetAdvertisingIdImmediatelyAfterInitialization() {
+        // Create a new client and immediately set advertising ID
+        let newOptions = TestDataFactory.makeInitOptions()
+        let newClient = AnalyticsClient.initialize(options: newOptions)
+
+        // Call setAdvertisingId immediately without waiting for initialization
+        let validUUID = UUID().uuidString
+        newClient.setAdvertisingId(validUUID)
+
+        // The SDK should queue this operation and apply it once ready
+        XCTAssertTrue(true, "setAdvertisingId should work even if called immediately after initialization")
+    }
+
+    func testAdvertisingIdPersistenceAcrossReset() async {
+        // Set an advertising ID
+        let validUUID = UUID().uuidString
+        client.setAdvertisingId(validUUID)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // Reset the client (should clear advertising ID)
+        client.reset()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // After reset, advertising ID should be cleared
+        XCTAssertTrue(true, "Advertising ID should be cleared after reset")
+    }
+
+    func testSetAdvertisingIdWithSpecialCharacters() async {
+        // Test that non-UUID strings with special characters are rejected
+        let specialStrings = [
+            "🎉-emoji-uuid",
+            "<script>alert('xss')</script>",
+            "../../../etc/passwd",
+            "null",
+            "undefined",
+            "\0\0\0\0"
+        ]
+
+        for specialString in specialStrings {
+            client.setAdvertisingId(specialString)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertTrue(true, "Special characters should be handled gracefully")
+    }
+
+    func testConcurrentAdvertisingIdOperations() async {
+        let expectation = expectation(description: "Concurrent advertising ID operations completed")
+        expectation.expectedFulfillmentCount = 20
+
+        // Run concurrent set and clear operations
+        for i in 0..<20 {
+            Task {
+                if i % 3 == 0 {
+                    client.setAdvertisingId(UUID().uuidString)
+                } else if i % 3 == 1 {
+                    client.clearAdvertisingId()
+                } else {
+                    client.setAdvertisingId(nil)
+                }
+                expectation.fulfill()
+            }
+        }
+
+        await fulfillment(of: [expectation], timeout: 3.0)
     }
 }

@@ -416,24 +416,180 @@ final class IdentityManagerTests: XCTestCase {
         // Initialize first manager
         await identityManager.initialize()
         await identityManager.identify("user-persistent")
-        
+
         let firstAnonymousId = await identityManager.getAnonymousId()
-        
+
         // Create new manager with same storage
         let newManager = IdentityManager(
             storage: testStorage,
             writeKey: "test-key",
             host: "https://test.com"
         )
-        
+
         await newManager.initialize()
-        
+
         // Should load same identity
         let newAnonymousId = await newManager.getAnonymousId()
         let newUserId = await newManager.getUserId()
-        
+
         XCTAssertEqual(newAnonymousId, firstAnonymousId)
         XCTAssertEqual(newUserId, "user-persistent")
+    }
+
+    // MARK: - Advertising ID Tests
+
+    func testSetAdvertisingId() async {
+        await identityManager.initialize()
+
+        await identityManager.setAdvertisingId("TEST-ADVERTISING-ID")
+
+        let advertisingId = await identityManager.getAdvertisingId()
+        XCTAssertEqual(advertisingId, "TEST-ADVERTISING-ID")
+    }
+
+    func testSetAdvertisingIdPersistsToStorage() async {
+        await identityManager.initialize()
+
+        await identityManager.setAdvertisingId("PERSISTED-IDFA")
+
+        // Verify persistence
+        let storedId = testStorage.get(.advertisingId)
+        XCTAssertEqual(storedId, "PERSISTED-IDFA")
+    }
+
+    func testSetAdvertisingIdToNilClearsValue() async {
+        await identityManager.initialize()
+
+        // First set a value
+        await identityManager.setAdvertisingId("INITIAL-IDFA")
+        let initialId = await identityManager.getAdvertisingId()
+        XCTAssertNotNil(initialId)
+
+        // Clear by setting to nil
+        await identityManager.setAdvertisingId(nil)
+
+        let advertisingId = await identityManager.getAdvertisingId()
+        XCTAssertNil(advertisingId)
+
+        // Verify storage is also cleared
+        let storedId = testStorage.get(.advertisingId)
+        XCTAssertNil(storedId)
+    }
+
+    func testClearAdvertisingId() async {
+        await identityManager.initialize()
+
+        // Set advertising ID
+        await identityManager.setAdvertisingId("IDFA-TO-CLEAR")
+        let initialId = await identityManager.getAdvertisingId()
+        XCTAssertNotNil(initialId)
+
+        // Clear it
+        await identityManager.clearAdvertisingId()
+
+        let advertisingId = await identityManager.getAdvertisingId()
+        XCTAssertNil(advertisingId)
+    }
+
+    func testClearAdvertisingIdRemovesFromStorage() async {
+        await identityManager.initialize()
+
+        // Set and verify storage
+        await identityManager.setAdvertisingId("STORED-IDFA")
+        let storedIdBefore = testStorage.get(.advertisingId)
+        XCTAssertNotNil(storedIdBefore)
+
+        // Clear and verify removed from storage
+        await identityManager.clearAdvertisingId()
+
+        let storedId = testStorage.get(.advertisingId)
+        XCTAssertNil(storedId)
+    }
+
+    func testClearAdvertisingIdForGDPRCompliance() async {
+        await identityManager.initialize()
+
+        // Simulate user consent
+        await identityManager.setAdvertisingId("USER-CONSENTED-IDFA")
+        let consentedId = await identityManager.getAdvertisingId()
+        XCTAssertEqual(consentedId, "USER-CONSENTED-IDFA")
+
+        // User withdraws consent - clear for GDPR compliance
+        await identityManager.clearAdvertisingId()
+
+        let advertisingId = await identityManager.getAdvertisingId()
+        XCTAssertNil(advertisingId, "Advertising ID should be cleared for GDPR compliance")
+
+        // Future events should not include advertising ID
+        let identity = await identityManager.getIdentityInfo()
+        XCTAssertNotNil(identity.anonymousId)
+        let finalAdvertisingId = await identityManager.getAdvertisingId()
+        XCTAssertNil(finalAdvertisingId)
+    }
+
+    func testClearAdvertisingIdIsIdempotent() async {
+        await identityManager.initialize()
+
+        await identityManager.setAdvertisingId("IDFA-VALUE")
+
+        // Clear multiple times
+        await identityManager.clearAdvertisingId()
+        await identityManager.clearAdvertisingId()
+        await identityManager.clearAdvertisingId()
+
+        // Should remain nil
+        let advertisingId = await identityManager.getAdvertisingId()
+        XCTAssertNil(advertisingId)
+    }
+
+    func testClearAdvertisingIdDoesNotAffectOtherIdentities() async {
+        await identityManager.initialize()
+        await identityManager.identify("user-123")
+        await identityManager.group("group-456")
+        await identityManager.setAdvertisingId("IDFA-789")
+
+        let anonymousIdBefore = await identityManager.getAnonymousId()
+
+        // Clear advertising ID
+        await identityManager.clearAdvertisingId()
+
+        // Other identities should be unaffected
+        let anonymousIdAfter = await identityManager.getAnonymousId()
+        let userIdAfter = await identityManager.getUserId()
+        let groupIdAfter = await identityManager.getGroupId()
+        let advertisingIdAfter = await identityManager.getAdvertisingId()
+
+        XCTAssertEqual(anonymousIdAfter, anonymousIdBefore)
+        XCTAssertEqual(userIdAfter, "user-123")
+        XCTAssertEqual(groupIdAfter, "group-456")
+        XCTAssertNil(advertisingIdAfter)
+    }
+
+    func testInitializeLoadsExistingAdvertisingId() async {
+        // Pre-populate storage with advertising ID
+        testStorage.set(.anonymousId, value: "anon-123")
+        testStorage.set(.advertisingId, value: "stored-idfa-456")
+
+        await identityManager.initialize()
+
+        let advertisingId = await identityManager.getAdvertisingId()
+        XCTAssertEqual(advertisingId, "stored-idfa-456")
+    }
+
+    func testResetClearsAdvertisingId() async {
+        await identityManager.initialize()
+        await identityManager.setAdvertisingId("IDFA-TO-RESET")
+
+        let beforeReset = await identityManager.getAdvertisingId()
+        XCTAssertNotNil(beforeReset)
+
+        await identityManager.reset()
+
+        let afterReset = await identityManager.getAdvertisingId()
+        XCTAssertNil(afterReset)
+
+        // Verify storage is cleared
+        XCTAssertNil(testStorage.get(.advertisingId))
     }
 }
 

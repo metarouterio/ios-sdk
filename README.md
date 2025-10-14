@@ -35,6 +35,9 @@ let options = InitOptions(
 )
 
 let analytics = MetaRouter.Analytics.initialize(with: options)
+
+// Optional: Set advertising ID (IDFA) for ad tracking - see IDFA Setup section
+// analytics.setAdvertisingId("your-idfa-string")
 ```
 
 ### Direct Usage
@@ -151,6 +154,191 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 ```
 
+## IDFA (Advertising Identifier) Setup
+
+The MetaRouter SDK supports including the IDFA (Identifier for Advertisers) in your analytics events for ad tracking and attribution purposes. This is useful for marketing analytics, ad campaign measurement, and user acquisition tracking.
+
+### Prerequisites
+
+1. **iOS 14.5+**: App Tracking Transparency (ATT) is required
+2. **Info.plist**: Add `NSUserTrackingUsageDescription` to explain why you need tracking permission
+3. **Frameworks**: Import `AppTrackingTransparency` and `AdSupport`
+
+### Setup Steps
+
+#### 1. Update Info.plist
+
+Add the tracking usage description to your `Info.plist`:
+
+```xml
+<key>NSUserTrackingUsageDescription</key>
+<string>We use your advertising identifier to measure ad campaign effectiveness and provide personalized experiences.</string>
+```
+
+#### 2. Request Tracking Authorization
+
+Request permission before accessing the IDFA:
+
+**Note**: The `setAdvertisingId()` method can be called at any time, even immediately after initialization. If called during initialization, the SDK will queue the operation and apply it once ready. The advertising ID is persisted to UserDefaults and will be automatically restored on subsequent app launches.
+
+```swift
+import AppTrackingTransparency
+import AdSupport
+import MetaRouter
+
+// Request tracking authorization (typically in AppDelegate or SceneDelegate)
+func requestTrackingPermission() {
+    // Initialize MetaRouter first
+    let options = InitOptions(
+        writeKey: "your-write-key",
+        ingestionHost: "https://your-ingestion-endpoint.com"
+    )
+    let analytics = MetaRouter.Analytics.initialize(with: options)
+
+    // Only request on iOS 14.5+
+    if #available(iOS 14.5, *) {
+        ATTrackingManager.requestTrackingAuthorization { status in
+            switch status {
+            case .authorized:
+                // Permission granted - get IDFA and set it
+                let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                analytics.setAdvertisingId(advertisingId)
+            case .denied, .restricted, .notDetermined:
+                // Permission not granted - don't include IDFA
+                analytics.setAdvertisingId(nil)
+            @unknown default:
+                analytics.setAdvertisingId(nil)
+            }
+        }
+    } else {
+        // iOS 14.4 and below - IDFA available without ATT
+        let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+        analytics.setAdvertisingId(advertisingId)
+    }
+}
+```
+
+#### 3. SwiftUI Example
+
+```swift
+import SwiftUI
+import AppTrackingTransparency
+import AdSupport
+import MetaRouter
+
+@main
+struct MyApp: App {
+    @StateObject private var analyticsManager = AnalyticsManager()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(analyticsManager)
+                .onAppear {
+                    // Request tracking permission after a brief delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        requestTrackingAndInitialize()
+                    }
+                }
+        }
+    }
+
+    func requestTrackingAndInitialize() {
+        // Initialize analytics first
+        analyticsManager.initialize()
+
+        // Then request tracking permission and set IDFA
+        if #available(iOS 14.5, *) {
+            ATTrackingManager.requestTrackingAuthorization { status in
+                let advertisingId = status == .authorized
+                    ? ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                    : nil
+                analyticsManager.setAdvertisingId(advertisingId)
+            }
+        } else {
+            let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+            analyticsManager.setAdvertisingId(advertisingId)
+        }
+    }
+}
+
+class AnalyticsManager: ObservableObject {
+    private var analytics: AnalyticsInterface?
+
+    func initialize() {
+        let options = InitOptions(
+            writeKey: "your-write-key",
+            ingestionHost: "https://your-ingestion-endpoint.com"
+        )
+        analytics = MetaRouter.Analytics.initialize(with: options)
+    }
+
+    func setAdvertisingId(_ advertisingId: String?) {
+        analytics?.setAdvertisingId(advertisingId)
+    }
+
+    func track(_ event: String, properties: [String: Any]? = nil) {
+        analytics?.track(event, properties: properties)
+    }
+}
+```
+
+### Privacy & Compliance
+
+#### Important Considerations
+
+⚠️ **IDFA is Personally Identifiable Information (PII)** and must be handled in compliance with privacy regulations:
+
+- **GDPR (Europe)**: Requires explicit user consent before collecting IDFA
+- **CCPA (California)**: Users must be able to opt-out of data selling/sharing
+- **App Store**: Must accurately declare data usage in your App Privacy details
+- **ATT (iOS 14.5+)**: Required before accessing IDFA
+
+#### GDPR Compliance: Clearing Advertising ID
+
+When users withdraw consent for advertising tracking (e.g., in response to a GDPR data subject request), you must stop collecting their IDFA. Use the `clearAdvertisingId()` method:
+
+```swift
+// User withdraws consent for advertising tracking
+analytics.clearAdvertisingId()
+
+// Analytics continues to work without IDFA
+// Only anonymous ID and user ID will be included in events
+analytics.track("checkout_completed", properties: ["order_id": "12345"])
+```
+
+**When to clear advertising ID:**
+
+- User opts out of advertising tracking in your app settings
+- User revokes ATT permission in iOS Settings
+- Responding to GDPR "right to erasure" requests
+- User unsubscribes from personalized advertising
+
+**Note**: Calling `clearAdvertisingId()` only removes the advertising ID from future events. It does not affect the user ID, anonymous ID, or other tracking. To completely reset all tracking, use `analytics.reset()`.
+
+#### Best Practices
+
+1. **Request permission contextually**: Explain the benefits before showing the ATT prompt
+2. **Respect user choice**: Don't repeatedly ask if denied
+3. **Update privacy policy**: Clearly state IDFA collection and usage
+4. **App Store privacy label**: Declare IDFA under "Identifiers" in App Store Connect
+5. **Handle nil gracefully**: Your analytics should work with or without IDFA
+6. **Provide opt-out**: Give users an in-app way to withdraw consent and clear their advertising ID
+
+#### Checking ATT Status
+
+```swift
+import AppTrackingTransparency
+
+func checkTrackingStatus() -> ATTrackingManager.AuthorizationStatus {
+    if #available(iOS 14, *) {
+        return ATTrackingManager.trackingAuthorizationStatus
+    } else {
+        return .notDetermined
+    }
+}
+```
+
 ## API Reference
 
 ### MetaRouter.Analytics.initialize(options)
@@ -186,8 +374,10 @@ The analytics client provides the following methods:
 - `screen(_ name: String, properties: [String: Any]?)`: Track screen views
 - `page(_ name: String, properties: [String: Any]?)`: Track page views
 - `alias(_ newUserId: String)`: Alias user IDs
+- `setAdvertisingId(_ advertisingId: String?)`: Set or update the IDFA/IDFV for ad tracking. See [IDFA Setup](#idfa-advertising-identifier-setup) section
+- `clearAdvertisingId()`: Clear the advertising ID for GDPR compliance. Removes IDFA from all future events while preserving user ID and anonymous ID
 - `flush()`: Flush events immediately
-- `reset()`: Reset analytics state and clear all stored data
+- `reset()`: Reset analytics state and clear all stored data (including advertising ID)
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
 
@@ -324,7 +514,7 @@ The SDK automatically handles app lifecycle events:
 
 - **App Foreground**: Starts periodic flush loop and immediately flushes any queued events
 - **App Background**: Flushes events, stops flush loop, and cancels any scheduled retries
-- **Identity Persistence**: Anonymous ID, user ID, and group ID are persisted to UserDefaults across app launches
+- **Identity Persistence**: Anonymous ID, user ID, group ID, and advertising ID are persisted to UserDefaults across app launches
 
 ## License
 

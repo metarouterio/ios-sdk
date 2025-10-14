@@ -13,6 +13,7 @@ public actor IdentityManager {
     private var anonymousId: String?
     private var userId: String?
     private var groupId: String?
+    private var advertisingId: String?
     
     public init(storage: IdentityStorage = IdentityStorage(), writeKey: String, host: String) {
         self.storage = storage
@@ -34,12 +35,16 @@ public actor IdentityManager {
             Logger.log("Generated and stored new anonymous ID: \(newId)", writeKey: writeKey, host: host)
         }
         
-        // Load userId and groupId if they exist
+        // Load userId, groupId, and advertisingId if they exist
         self.userId = storage.get(.userId)
         self.groupId = storage.get(.groupId)
-        
+        self.advertisingId = storage.get(.advertisingId)
+
+        // Redact advertisingId in logs for privacy
+        let redactedAdvertisingId = advertisingId.map { "\($0.prefix(8))***" } ?? "undefined"
+
         Logger.log(
-            "IdentityManager initialized with anonymous ID: \(anonymousId ?? "nil") userId: \(userId ?? "undefined") groupId: \(groupId ?? "undefined")",
+            "IdentityManager initialized with anonymous ID: \(anonymousId ?? "nil") userId: \(userId ?? "undefined") groupId: \(groupId ?? "undefined") advertisingId: \(redactedAdvertisingId)",
             writeKey: writeKey,
             host: host
         )
@@ -73,7 +78,34 @@ public actor IdentityManager {
     public func getGroupId() -> String? {
         return groupId
     }
-    
+
+    /// Sets the advertising ID for the current session.
+    public func setAdvertisingId(_ advertisingId: String?) {
+        self.advertisingId = advertisingId
+        if let advertisingId = advertisingId {
+            storage.set(.advertisingId, value: advertisingId)
+            // Redact advertisingId in logs for privacy
+            let redactedId = "\(advertisingId.prefix(8))***"
+            Logger.log("Advertising ID set: \(redactedId)", writeKey: writeKey, host: host)
+        } else {
+            storage.remove(.advertisingId)
+            Logger.log("Advertising ID cleared", writeKey: writeKey, host: host)
+        }
+    }
+
+    /// Retrieves the current advertising ID.
+    public func getAdvertisingId() -> String? {
+        return advertisingId
+    }
+
+    /// Clears the advertising ID for GDPR compliance.
+    /// This is equivalent to calling setAdvertisingId(nil) but more explicit for compliance purposes.
+    public func clearAdvertisingId() {
+        self.advertisingId = nil
+        storage.remove(.advertisingId)
+        Logger.log("Advertising ID cleared for GDPR compliance", writeKey: writeKey, host: host)
+    }
+
     /// Returns identity information for event enrichment.
     public func getIdentityInfo() -> (anonymousId: String, userId: String?, groupId: String?) {
         return (
@@ -89,6 +121,7 @@ public actor IdentityManager {
         self.anonymousId = nil
         self.userId = nil
         self.groupId = nil
+        self.advertisingId = nil
         storage.clear()
         Logger.log("IdentityManager reset", writeKey: writeKey, host: host)
     }
