@@ -86,7 +86,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             if let deviceProvider = self.contextProvider as? DeviceContextProvider,
                let advertisingId = await self.identityManager.getAdvertisingId() {
                 await deviceProvider.setAdvertisingId(advertisingId)
-                Logger.log("Loaded advertisingId from storage: \(advertisingId)",
+                let redactedId = "\(advertisingId.prefix(8))***"
+                Logger.log("Loaded advertisingId from storage: \(redactedId)",
                            writeKey: self.options.writeKey,
                            host: self.options.ingestionHost.absoluteString)
             }
@@ -348,6 +349,26 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task { [weak self] in
             guard let self else { return }
 
+            // Check lifecycle state
+            guard lifecycleState == .ready || lifecycleState == .initializing else {
+                Logger.log(
+                    "Cannot set advertisingId - client not ready (state: \(lifecycleState.rawValue))",
+                    writeKey: self.options.writeKey,
+                    host: self.options.ingestionHost.absoluteString)
+                return
+            }
+
+            // Validate UUID format if not nil
+            if let id = advertisingId {
+                guard UUID(uuidString: id) != nil else {
+                    Logger.log(
+                        "Invalid advertisingId format - must be a valid UUID string",
+                        writeKey: self.options.writeKey,
+                        host: self.options.ingestionHost.absoluteString)
+                    return
+                }
+            }
+
             // Persist to IdentityManager first
             await self.identityManager.setAdvertisingId(advertisingId)
 
@@ -356,8 +377,14 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 await deviceProvider.setAdvertisingId(advertisingId)
             }
 
+            // Redact the advertisingId in logs for privacy
+            let redactedId = advertisingId.map { id in
+                let prefix = id.prefix(8)
+                return "\(prefix)***"
+            } ?? "nil"
+
             Logger.log(
-                "advertisingId updated to: \(advertisingId ?? "nil")",
+                "advertisingId updated to: \(redactedId)",
                 writeKey: self.options.writeKey,
                 host: self.options.ingestionHost.absoluteString)
         }
@@ -366,6 +393,15 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     public func clearAdvertisingId() {
         Task { [weak self] in
             guard let self else { return }
+
+            // Check lifecycle state
+            guard lifecycleState == .ready || lifecycleState == .initializing else {
+                Logger.log(
+                    "Cannot clear advertisingId - client not ready (state: \(lifecycleState.rawValue))",
+                    writeKey: self.options.writeKey,
+                    host: self.options.ingestionHost.absoluteString)
+                return
+            }
 
             // Clear from IdentityManager first
             await self.identityManager.clearAdvertisingId()

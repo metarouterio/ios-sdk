@@ -179,6 +179,8 @@ Add the tracking usage description to your `Info.plist`:
 
 Request permission before accessing the IDFA:
 
+**Note**: The `setAdvertisingId()` method can be called at any time, even immediately after initialization. If called during initialization, the SDK will queue the operation and apply it once ready. The advertising ID is persisted to UserDefaults and will be automatically restored on subsequent app launches.
+
 ```swift
 import AppTrackingTransparency
 import AdSupport
@@ -336,28 +338,6 @@ func checkTrackingStatus() -> ATTrackingManager.AuthorizationStatus {
     }
 }
 ```
-
-### Alternative: IDFV (Identifier for Vendor)
-
-If you don't need cross-app tracking, consider using IDFV instead, which doesn't require ATT permission:
-
-```swift
-import UIKit
-
-// IDFV - doesn't require ATT permission
-let vendorId = UIDevice.current.identifierForVendor?.uuidString
-
-let options = InitOptions(
-    writeKey: "your-write-key",
-    ingestionHost: "https://your-ingestion-endpoint.com"
-)
-let analytics = MetaRouter.Analytics.initialize(with: options)
-
-// Set IDFV as the advertising identifier
-analytics.setAdvertisingId(vendorId) // Note: This is IDFV, not IDFA
-```
-
-**Note**: IDFV is app-vendor specific and resets when all apps from the same vendor are uninstalled.
 
 ## API Reference
 

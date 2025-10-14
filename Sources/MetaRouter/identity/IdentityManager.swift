@@ -40,8 +40,11 @@ public actor IdentityManager {
         self.groupId = storage.get(.groupId)
         self.advertisingId = storage.get(.advertisingId)
 
+        // Redact advertisingId in logs for privacy
+        let redactedAdvertisingId = advertisingId.map { "\($0.prefix(8))***" } ?? "undefined"
+
         Logger.log(
-            "IdentityManager initialized with anonymous ID: \(anonymousId ?? "nil") userId: \(userId ?? "undefined") groupId: \(groupId ?? "undefined") advertisingId: \(advertisingId ?? "undefined")",
+            "IdentityManager initialized with anonymous ID: \(anonymousId ?? "nil") userId: \(userId ?? "undefined") groupId: \(groupId ?? "undefined") advertisingId: \(redactedAdvertisingId)",
             writeKey: writeKey,
             host: host
         )
@@ -81,7 +84,9 @@ public actor IdentityManager {
         self.advertisingId = advertisingId
         if let advertisingId = advertisingId {
             storage.set(.advertisingId, value: advertisingId)
-            Logger.log("Advertising ID set: \(advertisingId)", writeKey: writeKey, host: host)
+            // Redact advertisingId in logs for privacy
+            let redactedId = "\(advertisingId.prefix(8))***"
+            Logger.log("Advertising ID set: \(redactedId)", writeKey: writeKey, host: host)
         } else {
             storage.remove(.advertisingId)
             Logger.log("Advertising ID cleared", writeKey: writeKey, host: host)
