@@ -78,13 +78,23 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
-            Logger.log("IdentityManager initialized successfully", 
-                       writeKey: self.options.writeKey, 
+            Logger.log("IdentityManager initialized successfully",
+                       writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
+
+            // Load advertisingId from IdentityManager and set it on DeviceContextProvider
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider,
+               let advertisingId = await self.identityManager.getAdvertisingId() {
+                await deviceProvider.setAdvertisingId(advertisingId)
+                Logger.log("Loaded advertisingId from storage: \(advertisingId)",
+                           writeKey: self.options.writeKey,
+                           host: self.options.ingestionHost.absoluteString)
+            }
+
             await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
             self.lifecycleState = .ready
-            Logger.log("Analytics client initialization completed successfully", 
-                       writeKey: self.options.writeKey, 
+            Logger.log("Analytics client initialization completed successfully",
+                       writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
         }
         
@@ -320,6 +330,12 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             guard let self else { return }
             self.lifecycleState = .resetting
             await self.identityManager.reset()
+
+            // Clear advertisingId from DeviceContextProvider
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
+                await deviceProvider.setAdvertisingId(nil)
+            }
+
             await self.dispatcher.stopFlushLoop()
             await self.dispatcher.cancelScheduledRetry()
             await self.dispatcher.clearAll()
@@ -331,13 +347,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     public func setAdvertisingId(_ advertisingId: String?) {
         Task { [weak self] in
             guard let self else { return }
+
+            // Persist to IdentityManager first
+            await self.identityManager.setAdvertisingId(advertisingId)
+
+            // Update DeviceContextProvider to use the new value
             if let deviceProvider = self.contextProvider as? DeviceContextProvider {
                 await deviceProvider.setAdvertisingId(advertisingId)
-                Logger.log(
-                    "advertisingId updated to: \(advertisingId ?? "nil")",
-                    writeKey: self.options.writeKey,
-                    host: self.options.ingestionHost.absoluteString)
             }
+
+            Logger.log(
+                "advertisingId updated to: \(advertisingId ?? "nil")",
+                writeKey: self.options.writeKey,
+                host: self.options.ingestionHost.absoluteString)
         }
     }
 }
