@@ -22,4 +22,5 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     func flush()
     func reset()
     func setAdvertisingId(_ advertisingId: String?)
+    func clearAdvertisingId()
 }

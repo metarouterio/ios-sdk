@@ -292,6 +292,28 @@ class AnalyticsManager: ObservableObject {
 - **App Store**: Must accurately declare data usage in your App Privacy details
 - **ATT (iOS 14.5+)**: Required before accessing IDFA
 
+#### GDPR Compliance: Clearing Advertising ID
+
+When users withdraw consent for advertising tracking (e.g., in response to a GDPR data subject request), you must stop collecting their IDFA. Use the `clearAdvertisingId()` method:
+
+```swift
+// User withdraws consent for advertising tracking
+analytics.clearAdvertisingId()
+
+// Analytics continues to work without IDFA
+// Only anonymous ID and user ID will be included in events
+analytics.track("checkout_completed", properties: ["order_id": "12345"])
+```
+
+**When to clear advertising ID:**
+
+- User opts out of advertising tracking in your app settings
+- User revokes ATT permission in iOS Settings
+- Responding to GDPR "right to erasure" requests
+- User unsubscribes from personalized advertising
+
+**Note**: Calling `clearAdvertisingId()` only removes the advertising ID from future events. It does not affect the user ID, anonymous ID, or other tracking. To completely reset all tracking, use `analytics.reset()`.
+
 #### Best Practices
 
 1. **Request permission contextually**: Explain the benefits before showing the ATT prompt
@@ -299,6 +321,7 @@ class AnalyticsManager: ObservableObject {
 3. **Update privacy policy**: Clearly state IDFA collection and usage
 4. **App Store privacy label**: Declare IDFA under "Identifiers" in App Store Connect
 5. **Handle nil gracefully**: Your analytics should work with or without IDFA
+6. **Provide opt-out**: Give users an in-app way to withdraw consent and clear their advertising ID
 
 #### Checking ATT Status
 
@@ -372,8 +395,9 @@ The analytics client provides the following methods:
 - `page(_ name: String, properties: [String: Any]?)`: Track page views
 - `alias(_ newUserId: String)`: Alias user IDs
 - `setAdvertisingId(_ advertisingId: String?)`: Set or update the IDFA/IDFV for ad tracking. See [IDFA Setup](#idfa-advertising-identifier-setup) section
+- `clearAdvertisingId()`: Clear the advertising ID for GDPR compliance. Removes IDFA from all future events while preserving user ID and anonymous ID
 - `flush()`: Flush events immediately
-- `reset()`: Reset analytics state and clear all stored data
+- `reset()`: Reset analytics state and clear all stored data (including advertising ID)
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
 

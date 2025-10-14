@@ -362,4 +362,23 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 host: self.options.ingestionHost.absoluteString)
         }
     }
+
+    public func clearAdvertisingId() {
+        Task { [weak self] in
+            guard let self else { return }
+
+            // Clear from IdentityManager first
+            await self.identityManager.clearAdvertisingId()
+
+            // Clear from DeviceContextProvider
+            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
+                await deviceProvider.setAdvertisingId(nil)
+            }
+
+            Logger.log(
+                "advertisingId cleared for GDPR compliance",
+                writeKey: self.options.writeKey,
+                host: self.options.ingestionHost.absoluteString)
+        }
+    }
 }

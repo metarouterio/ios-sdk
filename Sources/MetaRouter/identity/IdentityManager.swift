@@ -93,6 +93,14 @@ public actor IdentityManager {
         return advertisingId
     }
 
+    /// Clears the advertising ID for GDPR compliance.
+    /// This is equivalent to calling setAdvertisingId(nil) but more explicit for compliance purposes.
+    public func clearAdvertisingId() {
+        self.advertisingId = nil
+        storage.remove(.advertisingId)
+        Logger.log("Advertising ID cleared for GDPR compliance", writeKey: writeKey, host: host)
+    }
+
     /// Returns identity information for event enrichment.
     public func getIdentityInfo() -> (anonymousId: String, userId: String?, groupId: String?) {
         return (

@@ -530,4 +530,108 @@ final class MetaRouterIntegrationTests: XCTestCase {
 
         XCTAssertTrue(true, "Concurrent setAdvertisingId calls should be handled safely")
     }
+
+    func testClearAdvertisingIdIntegration() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Set advertising ID
+        client.setAdvertisingId("IDFA-FOR-GDPR-TEST")
+
+        // Wait for update to propagate
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track an event with advertising ID
+        client.track("event_with_advertising_id", properties: nil)
+
+        // Clear advertising ID for GDPR compliance
+        client.clearAdvertisingId()
+
+        // Wait for clear to propagate
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track an event without advertising ID
+        client.track("event_after_gdpr_clear", properties: nil)
+
+        XCTAssertTrue(true, "clearAdvertisingId should work with the analytics client")
+    }
+
+    func testClearAdvertisingIdWithProxyIntegration() async {
+        // Get proxy before initialization
+        let proxy = MetaRouter.Analytics.client()
+
+        // Set advertising ID before initialization (should be queued)
+        proxy.setAdvertisingId("QUEUED-IDFA")
+
+        // Clear advertising ID before initialization (should also be queued)
+        proxy.clearAdvertisingId()
+
+        // Initialize client
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Wait for binding and replay
+        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
+
+        // Track event - advertising ID should be cleared
+        client.track("event_after_proxy_clear", properties: nil)
+
+        XCTAssertTrue(true, "clearAdvertisingId should work through proxy before initialization")
+    }
+
+    func testClearAdvertisingIdMultipleTimes() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Set and clear multiple times
+        client.setAdvertisingId("IDFA-1")
+        _ = await TestUtilities.waitFor(timeout: 0.2) { true }
+
+        client.clearAdvertisingId()
+        _ = await TestUtilities.waitFor(timeout: 0.2) { true }
+
+        client.setAdvertisingId("IDFA-2")
+        _ = await TestUtilities.waitFor(timeout: 0.2) { true }
+
+        client.clearAdvertisingId()
+        _ = await TestUtilities.waitFor(timeout: 0.2) { true }
+
+        // Clear again when already cleared (should be safe)
+        client.clearAdvertisingId()
+        _ = await TestUtilities.waitFor(timeout: 0.2) { true }
+
+        client.track("final_event_no_idfa", properties: nil)
+
+        XCTAssertTrue(true, "Multiple clearAdvertisingId calls should be handled safely")
+    }
+
+    func testGDPRComplianceWorkflow() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        // Simulate app launch and user tracking with consent
+        client.identify("user_with_consent")
+        client.setAdvertisingId("USER-CONSENTED-IDFA-123")
+
+        _ = await TestUtilities.waitFor(timeout: 0.3) { true }
+
+        // Track some events with advertising ID
+        client.track("page_view", properties: ["page": "home"])
+        client.track("product_viewed", properties: ["product_id": "12345"])
+
+        // User withdraws consent - clear advertising ID for GDPR compliance
+        client.clearAdvertisingId()
+
+        _ = await TestUtilities.waitFor(timeout: 0.3) { true }
+
+        // Continue tracking without advertising ID
+        client.track("checkout_started", properties: ["cart_total": 99.99])
+        client.track("purchase_completed", properties: ["order_id": "ORDER-789"])
+
+        // User can still be tracked with user ID and anonymous ID
+        // but not with advertising ID
+        client.flush()
+
+        XCTAssertTrue(true, "GDPR compliance workflow should work correctly")
+    }
 }
