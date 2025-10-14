@@ -111,7 +111,6 @@ final class CodableValueTests: XCTestCase {
         }
     }
     
-    // MARK: - Original Tests
 
     
     // Basic Type Tests
@@ -276,7 +275,6 @@ final class CodableValueTests: XCTestCase {
         XCTAssertNil(nullValue.stringValue)
     }
     
-    // MARK: - Type-Safe Conversion Tests
     
     func testTypeSafeConversions() {
         let nested: CodableValue = [
@@ -330,16 +328,17 @@ final class CodableValueTests: XCTestCase {
         
         // Then encode to verify proper nesting
         let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
         let data = try! encoder.encode(["properties": converted!])
         let json = String(data: data, encoding: .utf8)!
         print("JSON output: \(json)")
         
         // Should NOT contain escaped quotes (no double serialization)
         XCTAssertFalse(json.contains("\\\""))
-        
-        // Should be a proper nested structure
+
+        // Should be a proper nested structure (keys are sorted alphabetically)
         XCTAssertTrue(json.contains(#""brand":"Tropica Plants""#))
-        XCTAssertTrue(json.contains(#""metadata":{"sku":"PL-1005""#))
+        XCTAssertTrue(json.contains(#""metadata":{"position":5,"sku":"PL-1005""#))
     }
     
     // Equality Tests

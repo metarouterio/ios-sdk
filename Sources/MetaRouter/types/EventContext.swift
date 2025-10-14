@@ -21,12 +21,14 @@ public struct DeviceContext: Codable, Equatable, Sendable {
     public let model: String
     public let name: String
     public let type: String
+    public let advertisingId: String?
 
-    public init(manufacturer: String, model: String, name: String, type: String) {
+    public init(manufacturer: String, model: String, name: String, type: String, advertisingId: String? = nil) {
         self.manufacturer = manufacturer
         self.model = model
         self.name = name
         self.type = type
+        self.advertisingId = advertisingId
     }
 }
 

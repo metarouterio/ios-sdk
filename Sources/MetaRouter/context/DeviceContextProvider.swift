@@ -30,8 +30,12 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     private let contextActor = ContextActor()
     private let library: LibraryContext
+    private let advertisingIdActor = AdvertisingIdActor()
 
-    public init(libraryName: String = "metarouter-ios-sdk", libraryVersion: String = "1.0.0") {
+    public init(
+        libraryName: String = "metarouter-ios-sdk",
+        libraryVersion: String = "1.0.0"
+    ) {
         self.library = LibraryContext(name: libraryName, version: libraryVersion)
     }
 
@@ -43,6 +47,11 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     public func clearCache() {
         Task { await contextActor.clearCache() }
+    }
+
+    public func setAdvertisingId(_ advertisingId: String?) async {
+        await advertisingIdActor.set(advertisingId)
+        await contextActor.clearCache()
     }
 
 
@@ -82,6 +91,8 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
     }
 
     private func collectDeviceContext() async -> DeviceContext {
+        let currentAdvertisingId = await advertisingIdActor.get()
+
         #if canImport(UIKit)
         let snapshot = await readDeviceSnapshot()
 
@@ -100,17 +111,25 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
             manufacturer: "Apple",
             model: mappedModel,
             name: snapshot.name,
-            type: type
+            type: type,
+            advertisingId: currentAdvertisingId
         )
         #elseif canImport(AppKit)
         return DeviceContext(
             manufacturer: "Apple",
             model: macHardwareModel(), // e.g., "Mac14,5"
             name: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
-            type: "desktop"
+            type: "desktop",
+            advertisingId: currentAdvertisingId
         )
         #else
-        return DeviceContext(manufacturer: "Apple", model: "unknown", name: "unknown", type: "unknown")
+        return DeviceContext(
+            manufacturer: "Apple",
+            model: "unknown",
+            name: "unknown",
+            type: "unknown",
+            advertisingId: currentAdvertisingId
+        )
         #endif
     }
 
@@ -283,4 +302,16 @@ private actor ContextActor {
     }
 
     func clearCache() { cachedContext = nil }
+}
+
+private actor AdvertisingIdActor {
+    private var advertisingId: String?
+
+    func set(_ newValue: String?) {
+        advertisingId = newValue
+    }
+
+    func get() -> String? {
+        return advertisingId
+    }
 }
