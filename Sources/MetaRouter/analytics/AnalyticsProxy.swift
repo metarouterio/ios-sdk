@@ -126,6 +126,10 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 
     public func flush() { Task { await state.enqueue(.flush) } }
     public func reset() { Task { await state.enqueue(.reset) } }
+
+    public func setAdvertisingId(_ advertisingId: String?) {
+        Task { await state.enqueue(.setAdvertisingId(advertisingId)) }
+    }
 }
 
 extension AnalyticsProxy {
@@ -155,6 +159,7 @@ private enum Call {
 
     case flush
     case reset
+    case setAdvertisingId(String?)
 }
 
 private actor ProxyState {
@@ -196,6 +201,7 @@ private actor ProxyState {
 
         case .flush: r.flush()
         case .reset: r.reset()
+        case .setAdvertisingId(let advertisingId): r.setAdvertisingId(advertisingId)
         }
     }
 }

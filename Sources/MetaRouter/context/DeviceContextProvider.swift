@@ -30,15 +30,13 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     private let contextActor = ContextActor()
     private let library: LibraryContext
-    private let advertisingId: String?
+    private let advertisingIdActor = AdvertisingIdActor()
 
     public init(
         libraryName: String = "metarouter-ios-sdk",
-        libraryVersion: String = "1.0.0",
-        advertisingId: String? = nil
+        libraryVersion: String = "1.0.0"
     ) {
         self.library = LibraryContext(name: libraryName, version: libraryVersion)
-        self.advertisingId = advertisingId
     }
 
     public func getContext() async -> EventContext {
@@ -49,6 +47,11 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     public func clearCache() {
         Task { await contextActor.clearCache() }
+    }
+
+    public func setAdvertisingId(_ advertisingId: String?) async {
+        await advertisingIdActor.set(advertisingId)
+        await contextActor.clearCache()
     }
 
 
@@ -88,6 +91,8 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
     }
 
     private func collectDeviceContext() async -> DeviceContext {
+        let currentAdvertisingId = await advertisingIdActor.get()
+
         #if canImport(UIKit)
         let snapshot = await readDeviceSnapshot()
 
@@ -107,7 +112,7 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
             model: mappedModel,
             name: snapshot.name,
             type: type,
-            advertisingId: advertisingId
+            advertisingId: currentAdvertisingId
         )
         #elseif canImport(AppKit)
         return DeviceContext(
@@ -115,7 +120,7 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
             model: macHardwareModel(), // e.g., "Mac14,5"
             name: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
             type: "desktop",
-            advertisingId: advertisingId
+            advertisingId: currentAdvertisingId
         )
         #else
         return DeviceContext(
@@ -123,7 +128,7 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
             model: "unknown",
             name: "unknown",
             type: "unknown",
-            advertisingId: advertisingId
+            advertisingId: currentAdvertisingId
         )
         #endif
     }
@@ -297,4 +302,16 @@ private actor ContextActor {
     }
 
     func clearCache() { cachedContext = nil }
+}
+
+private actor AdvertisingIdActor {
+    private var advertisingId: String?
+
+    func set(_ newValue: String?) {
+        advertisingId = newValue
+    }
+
+    func get() -> String? {
+        return advertisingId
+    }
 }

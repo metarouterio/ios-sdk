@@ -21,4 +21,5 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     func getDebugInfo() async -> [String: CodableValue]
     func flush()
     func reset()
+    func setAdvertisingId(_ advertisingId: String?)
 }

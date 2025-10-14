@@ -27,32 +27,6 @@ final class InitOptionsTests: XCTestCase {
         XCTAssertEqual(options.ingestionHost.path, "/base")
         XCTAssertEqual(options.ingestionHost.absoluteString, "https://host.tld/base")
     }
-
-    func testInitOptionsWithAdvertisingId() {
-        let testId = "TEST-IDFA-12345"
-        let options = InitOptions(
-            writeKey: "wk",
-            ingestionHost: "https://example.com",
-            advertisingId: testId
-        )
-
-        XCTAssertEqual(options.advertisingId, testId)
-    }
-
-    func testInitOptionsWithoutAdvertisingId() {
-        let options = InitOptions(writeKey: "wk", ingestionHost: "https://example.com")
-        XCTAssertNil(options.advertisingId)
-    }
-
-    func testInitOptionsWithNilAdvertisingId() {
-        let options = InitOptions(
-            writeKey: "wk",
-            ingestionHost: "https://example.com",
-            advertisingId: nil
-        )
-
-        XCTAssertNil(options.advertisingId)
-    }
 }
 
 

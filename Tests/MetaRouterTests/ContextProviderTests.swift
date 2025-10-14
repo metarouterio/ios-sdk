@@ -345,10 +345,10 @@ final class ContextProviderTests: XCTestCase {
         let testAdvertisingId = "ABCD1234-5678-90EF-GHIJ-KLMNOPQRSTUV"
         let provider = DeviceContextProvider(
             libraryName: "test-sdk",
-            libraryVersion: "1.0.0",
-            advertisingId: testAdvertisingId
+            libraryVersion: "1.0.0"
         )
 
+        await provider.setAdvertisingId(testAdvertisingId)
         let context = await provider.getContext()
 
         XCTAssertEqual(context.device.advertisingId, testAdvertisingId)
@@ -357,8 +357,7 @@ final class ContextProviderTests: XCTestCase {
     func testContextProviderWithNilAdvertisingId() async {
         let provider = DeviceContextProvider(
             libraryName: "test-sdk",
-            libraryVersion: "1.0.0",
-            advertisingId: nil
+            libraryVersion: "1.0.0"
         )
 
         let context = await provider.getContext()
@@ -426,9 +425,10 @@ final class ContextProviderTests: XCTestCase {
         let testId = "CACHED-TEST-ID"
         let provider = DeviceContextProvider(
             libraryName: "test-sdk",
-            libraryVersion: "1.0.0",
-            advertisingId: testId
+            libraryVersion: "1.0.0"
         )
+
+        await provider.setAdvertisingId(testId)
 
         // Get context twice - both should have the same IDFA
         let context1 = await provider.getContext()
@@ -436,5 +436,111 @@ final class ContextProviderTests: XCTestCase {
 
         XCTAssertEqual(context1.device.advertisingId, testId)
         XCTAssertEqual(context2.device.advertisingId, testId)
+    }
+
+    func testSetAdvertisingId() async {
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0"
+        )
+
+        // Initial context should have nil advertisingId
+        let context1 = await provider.getContext()
+        XCTAssertNil(context1.device.advertisingId)
+
+        // Update advertisingId
+        let newId = "NEW-ADVERTISING-ID"
+        await provider.setAdvertisingId(newId)
+
+        // New context should have updated advertisingId
+        let context2 = await provider.getContext()
+        XCTAssertEqual(context2.device.advertisingId, newId)
+    }
+
+    func testSetAdvertisingIdUpdatesExistingValue() async {
+        let initialId = "INITIAL-ID"
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0"
+        )
+
+        await provider.setAdvertisingId(initialId)
+
+        // Initial context should have initial ID
+        let context1 = await provider.getContext()
+        XCTAssertEqual(context1.device.advertisingId, initialId)
+
+        // Update advertisingId to a new value
+        let updatedId = "UPDATED-ID"
+        await provider.setAdvertisingId(updatedId)
+
+        // New context should have updated advertisingId
+        let context2 = await provider.getContext()
+        XCTAssertEqual(context2.device.advertisingId, updatedId)
+    }
+
+    func testSetAdvertisingIdToNil() async {
+        let initialId = "INITIAL-ID"
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0"
+        )
+
+        await provider.setAdvertisingId(initialId)
+
+        // Initial context should have initial ID
+        let context1 = await provider.getContext()
+        XCTAssertEqual(context1.device.advertisingId, initialId)
+
+        // Update advertisingId to nil
+        await provider.setAdvertisingId(nil)
+
+        // New context should have nil advertisingId
+        let context2 = await provider.getContext()
+        XCTAssertNil(context2.device.advertisingId)
+    }
+
+    func testSetAdvertisingIdClearsCachedContext() async {
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0"
+        )
+
+        await provider.setAdvertisingId("INITIAL-ID")
+
+        // Get initial context to populate cache
+        let context1 = await provider.getContext()
+        XCTAssertEqual(context1.device.advertisingId, "INITIAL-ID")
+
+        // Set new advertising ID (which should clear cache)
+        await provider.setAdvertisingId("NEW-ID")
+
+        // Get context again - should have new value
+        let context2 = await provider.getContext()
+        XCTAssertEqual(context2.device.advertisingId, "NEW-ID")
+        XCTAssertNotEqual(context1.device.advertisingId, context2.device.advertisingId)
+    }
+
+    func testConcurrentSetAdvertisingId() async {
+        let provider = DeviceContextProvider(
+            libraryName: "test-sdk",
+            libraryVersion: "1.0.0"
+        )
+
+        // Concurrently set advertising ID multiple times
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<5 {
+                group.addTask {
+                    await provider.setAdvertisingId("ID-\(i)")
+                }
+            }
+
+            for await _ in group {}
+        }
+
+        // Should still be able to get context and have a valid ID
+        let context = await provider.getContext()
+        XCTAssertNotNil(context.device.advertisingId)
+        XCTAssertTrue(context.device.advertisingId?.starts(with: "ID-") ?? false)
     }
 }
