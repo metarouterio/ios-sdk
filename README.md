@@ -31,11 +31,13 @@ let options = InitOptions(
     ingestionHost: "https://your-ingestion-endpoint.com",
     debug: true, // Optional: enable debug mode
     flushIntervalSeconds: 30, // Optional: flush events every 30 seconds
-    maxQueueEvents: 2000, // Optional: max events in memory queue
-    advertisingId: nil // Optional: IDFA for ad tracking (see IDFA Setup section)
+    maxQueueEvents: 2000 // Optional: max events in memory queue
 )
 
 let analytics = MetaRouter.Analytics.initialize(with: options)
+
+// Optional: Set advertising ID (IDFA) for ad tracking - see IDFA Setup section
+// analytics.setAdvertisingId("your-idfa-string")
 ```
 
 ### Direct Usage
@@ -184,42 +186,32 @@ import MetaRouter
 
 // Request tracking authorization (typically in AppDelegate or SceneDelegate)
 func requestTrackingPermission() {
+    // Initialize MetaRouter first
+    let options = InitOptions(
+        writeKey: "your-write-key",
+        ingestionHost: "https://your-ingestion-endpoint.com"
+    )
+    let analytics = MetaRouter.Analytics.initialize(with: options)
+
     // Only request on iOS 14.5+
     if #available(iOS 14.5, *) {
         ATTrackingManager.requestTrackingAuthorization { status in
-            let advertisingId: String?
-
             switch status {
             case .authorized:
-                // Permission granted - get IDFA
-                advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                // Permission granted - get IDFA and set it
+                let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                analytics.setAdvertisingId(advertisingId)
             case .denied, .restricted, .notDetermined:
                 // Permission not granted - don't include IDFA
-                advertisingId = nil
+                analytics.setAdvertisingId(nil)
             @unknown default:
-                advertisingId = nil
+                analytics.setAdvertisingId(nil)
             }
-
-            // Initialize MetaRouter with the advertising ID
-            let options = InitOptions(
-                writeKey: "your-write-key",
-                ingestionHost: "https://your-ingestion-endpoint.com",
-                advertisingId: advertisingId
-            )
-
-            let analytics = MetaRouter.Analytics.initialize(with: options)
         }
     } else {
         // iOS 14.4 and below - IDFA available without ATT
         let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
-
-        let options = InitOptions(
-            writeKey: "your-write-key",
-            ingestionHost: "https://your-ingestion-endpoint.com",
-            advertisingId: advertisingId
-        )
-
-        let analytics = MetaRouter.Analytics.initialize(with: options)
+        analytics.setAdvertisingId(advertisingId)
     }
 }
 ```
@@ -250,16 +242,20 @@ struct MyApp: App {
     }
 
     func requestTrackingAndInitialize() {
+        // Initialize analytics first
+        analyticsManager.initialize()
+
+        // Then request tracking permission and set IDFA
         if #available(iOS 14.5, *) {
             ATTrackingManager.requestTrackingAuthorization { status in
                 let advertisingId = status == .authorized
                     ? ASIdentifierManager.shared().advertisingIdentifier.uuidString
                     : nil
-                analyticsManager.initialize(advertisingId: advertisingId)
+                analyticsManager.setAdvertisingId(advertisingId)
             }
         } else {
             let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
-            analyticsManager.initialize(advertisingId: advertisingId)
+            analyticsManager.setAdvertisingId(advertisingId)
         }
     }
 }
@@ -267,13 +263,16 @@ struct MyApp: App {
 class AnalyticsManager: ObservableObject {
     private var analytics: AnalyticsInterface?
 
-    func initialize(advertisingId: String?) {
+    func initialize() {
         let options = InitOptions(
             writeKey: "your-write-key",
-            ingestionHost: "https://your-ingestion-endpoint.com",
-            advertisingId: advertisingId
+            ingestionHost: "https://your-ingestion-endpoint.com"
         )
         analytics = MetaRouter.Analytics.initialize(with: options)
+    }
+
+    func setAdvertisingId(_ advertisingId: String?) {
+        analytics?.setAdvertisingId(advertisingId)
     }
 
     func track(_ event: String, properties: [String: Any]? = nil) {
@@ -327,9 +326,12 @@ let vendorId = UIDevice.current.identifierForVendor?.uuidString
 
 let options = InitOptions(
     writeKey: "your-write-key",
-    ingestionHost: "https://your-ingestion-endpoint.com",
-    advertisingId: vendorId // Note: This is IDFV, not IDFA
+    ingestionHost: "https://your-ingestion-endpoint.com"
 )
+let analytics = MetaRouter.Analytics.initialize(with: options)
+
+// Set IDFV as the advertising identifier
+analytics.setAdvertisingId(vendorId) // Note: This is IDFV, not IDFA
 ```
 
 **Note**: IDFV is app-vendor specific and resets when all apps from the same vendor are uninstalled.
@@ -351,7 +353,6 @@ Calls to `track`, `identify`, etc. are **buffered in-memory** by the proxy and r
 - `debug` (Bool, optional): Enable debug mode (default: `false`)
 - `flushIntervalSeconds` (Int, optional): Interval in seconds to flush events (default: `10`)
 - `maxQueueEvents` (Int, optional): Number of max events stored in memory (default: `2000`)
-- `advertisingId` (String?, optional): IDFA or IDFV for ad tracking and attribution (default: `nil`). See [IDFA Setup](#idfa-advertising-identifier-setup) section for details
 
 **Proxy behavior (quick notes):**
 
@@ -370,6 +371,7 @@ The analytics client provides the following methods:
 - `screen(_ name: String, properties: [String: Any]?)`: Track screen views
 - `page(_ name: String, properties: [String: Any]?)`: Track page views
 - `alias(_ newUserId: String)`: Alias user IDs
+- `setAdvertisingId(_ advertisingId: String?)`: Set or update the IDFA/IDFV for ad tracking. See [IDFA Setup](#idfa-advertising-identifier-setup) section
 - `flush()`: Flush events immediately
 - `reset()`: Reset analytics state and clear all stored data
 - `enableDebugLogging()`: Enable debug logging
@@ -508,7 +510,7 @@ The SDK automatically handles app lifecycle events:
 
 - **App Foreground**: Starts periodic flush loop and immediately flushes any queued events
 - **App Background**: Flushes events, stops flush loop, and cancels any scheduled retries
-- **Identity Persistence**: Anonymous ID, user ID, and group ID are persisted to UserDefaults across app launches
+- **Identity Persistence**: Anonymous ID, user ID, group ID, and advertising ID are persisted to UserDefaults across app launches
 
 ## License
 
