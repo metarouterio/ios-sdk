@@ -358,7 +358,7 @@ final class MockContextProvider: ContextProvider, @unchecked Sendable {
                 manufacturer: "Apple",
                 model: "iPhone15,2",
                 name: "Test Device",
-                type: "phone"
+                type: "ios"
             ),
             library: LibraryContext(
                 name: "test-sdk",
