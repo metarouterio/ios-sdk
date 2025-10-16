@@ -119,7 +119,7 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
             manufacturer: "Apple",
             model: macHardwareModel(), // e.g., "Mac14,5"
             name: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
-            type: "desktop",
+            type: "macos",
             advertisingId: currentAdvertisingId
         )
         #else
@@ -207,12 +207,12 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     private func deviceTypeFromIdiom(_ idiom: UIUserInterfaceIdiom) -> String {
         switch idiom {
-        case .phone: return "phone"
-        case .pad: return "tablet"
+        case .phone: return "ios"
+        case .pad: return "ios"
         case .tv: return "tv"
         case .carPlay: return "car"
         default:
-            if #available(iOS 14.0, *), ProcessInfo.processInfo.isiOSAppOnMac { return "desktop" }
+            if #available(iOS 14.0, *), ProcessInfo.processInfo.isiOSAppOnMac { return "macos" }
             return "unknown"
         }
     }
