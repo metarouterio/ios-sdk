@@ -21,7 +21,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "phone")
+            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -52,7 +52,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "phone")
+            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -133,8 +133,7 @@ final class ContextProviderTests: XCTestCase {
         XCTAssertFalse(context.device.model.isEmpty)
         XCTAssertFalse(context.device.name.isEmpty)
         XCTAssertTrue(
-            context.device.type == "phone" || context.device.type == "tablet"
-                || context.device.type == "desktop")
+            context.device.type == "ios" || context.device.type == "macos")
     }
 
     func testOSContext() async {
@@ -242,7 +241,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "phone")
+            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -282,7 +281,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "phone")
+            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -323,7 +322,7 @@ final class ContextProviderTests: XCTestCase {
             manufacturer: "Apple",
             model: "iPhone15,2",
             name: "Test Device",
-            type: "phone",
+            type: "ios",
             advertisingId: "12345678-1234-1234-1234-123456789012"
         )
 
@@ -335,7 +334,7 @@ final class ContextProviderTests: XCTestCase {
             manufacturer: "Apple",
             model: "iPhone15,2",
             name: "Test Device",
-            type: "phone"
+            type: "ios"
         )
 
         XCTAssertNil(device.advertisingId)
@@ -381,7 +380,7 @@ final class ContextProviderTests: XCTestCase {
             manufacturer: "Apple",
             model: "iPhone15,2",
             name: "Test Device",
-            type: "phone",
+            type: "ios",
             advertisingId: "TEST-IDFA-UUID"
         )
 
@@ -404,7 +403,7 @@ final class ContextProviderTests: XCTestCase {
             manufacturer: "Apple",
             model: "iPhone15,2",
             name: "Test Device",
-            type: "phone"
+            type: "ios"
         )
 
         let encoder = JSONEncoder()
