@@ -10,7 +10,8 @@ public protocol Networking: Sendable {
     func postJSON(
         url: URL,
         body: Data,
-        timeoutMs: Int
+        timeoutMs: Int,
+        additionalHeaders: [String: String]?
     ) async throws -> NetworkResponse
 
     func parseRetryAfterMs(from headers: [String: String]) -> Int?
@@ -28,13 +29,21 @@ public final class NetworkClient: Networking {
     public func postJSON(
         url: URL,
         body: Data,
-        timeoutMs: Int
+        timeoutMs: Int,
+        additionalHeaders: [String: String]? = nil
     ) async throws -> NetworkResponse {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = TimeInterval(Double(timeoutMs) / 1000.0)
         request.httpBody = body
+
+        // Add any additional headers
+        if let headers = additionalHeaders {
+            for (key, value) in headers {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+        }
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {

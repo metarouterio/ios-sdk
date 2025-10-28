@@ -23,4 +23,5 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     func reset()
     func setAdvertisingId(_ advertisingId: String?)
     func clearAdvertisingId()
+    func setTracing(_ enabled: Bool)
 }

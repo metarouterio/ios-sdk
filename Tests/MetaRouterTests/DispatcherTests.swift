@@ -5,8 +5,10 @@ private final class StubNetworking: Networking {
     enum Mode { case success, http(Int), error }
     var mode: Mode = .success
     var lastBody: Data?
-    func postJSON(url: URL, body: Data, timeoutMs: Int) async throws -> NetworkResponse {
+    var lastHeaders: [String: String]?
+    func postJSON(url: URL, body: Data, timeoutMs: Int, additionalHeaders: [String: String]?) async throws -> NetworkResponse {
         lastBody = body
+        lastHeaders = additionalHeaders
         switch mode {
         case .success:
             return NetworkResponse(statusCode: 200, headers: [:], body: Data())
@@ -68,6 +70,128 @@ final class DispatcherTests: XCTestCase {
         await dispatcher.flush()
 
         XCTAssertEqual(calledStatus, 401)
+    }
+
+    func testTracingDisabledByDefault() async throws {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+
+        let ctx = EventContext(
+            app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
+            device: DeviceContext(manufacturer: "a", model: "m", name: "n", type: "t"),
+            library: LibraryContext(name: "l", version: "1"),
+            os: OSContext(name: "iOS", version: "1"),
+            screen: ScreenContext(density: 2.0, width: 1, height: 1),
+            network: nil,
+            locale: "en_US",
+            timezone: "UTC"
+        )
+        let e = EnrichedEventPayload(type: "track", event: "ev", userId: nil, anonymousId: "anon", properties: nil, traits: nil, integrations: nil, timestamp: "now", writeKey: "wk", messageId: "mid", context: ctx)
+
+        await dispatcher.offer(e)
+        await dispatcher.flush()
+
+        // Verify no Trace header was sent
+        XCTAssertNil(stub.lastHeaders)
+    }
+
+    func testTracingEnabledAddsHeader() async throws {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+
+        // Enable tracing
+        await dispatcher.setTracing(true)
+
+        let ctx = EventContext(
+            app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
+            device: DeviceContext(manufacturer: "a", model: "m", name: "n", type: "t"),
+            library: LibraryContext(name: "l", version: "1"),
+            os: OSContext(name: "iOS", version: "1"),
+            screen: ScreenContext(density: 2.0, width: 1, height: 1),
+            network: nil,
+            locale: "en_US",
+            timezone: "UTC"
+        )
+        let e = EnrichedEventPayload(type: "track", event: "ev", userId: nil, anonymousId: "anon", properties: nil, traits: nil, integrations: nil, timestamp: "now", writeKey: "wk", messageId: "mid", context: ctx)
+
+        await dispatcher.offer(e)
+        await dispatcher.flush()
+
+        // Verify Trace header was sent
+        XCTAssertNotNil(stub.lastHeaders)
+        XCTAssertEqual(stub.lastHeaders?["Trace"], "true")
+    }
+
+    func testTracingCanBeDisabled() async throws {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+
+        let ctx = EventContext(
+            app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
+            device: DeviceContext(manufacturer: "a", model: "m", name: "n", type: "t"),
+            library: LibraryContext(name: "l", version: "1"),
+            os: OSContext(name: "iOS", version: "1"),
+            screen: ScreenContext(density: 2.0, width: 1, height: 1),
+            network: nil,
+            locale: "en_US",
+            timezone: "UTC"
+        )
+        let e = EnrichedEventPayload(type: "track", event: "ev", userId: nil, anonymousId: "anon", properties: nil, traits: nil, integrations: nil, timestamp: "now", writeKey: "wk", messageId: "mid", context: ctx)
+
+        // Enable tracing
+        await dispatcher.setTracing(true)
+        await dispatcher.offer(e)
+        await dispatcher.flush()
+
+        // Verify Trace header was sent
+        XCTAssertNotNil(stub.lastHeaders)
+        XCTAssertEqual(stub.lastHeaders?["Trace"], "true")
+
+        // Reset stub
+        stub.lastHeaders = nil
+
+        // Disable tracing
+        await dispatcher.setTracing(false)
+        await dispatcher.offer(e)
+        await dispatcher.flush()
+
+        // Verify no Trace header was sent
+        XCTAssertNil(stub.lastHeaders)
+    }
+
+    func testTracingPersistsAcrossMultipleFlushes() async throws {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+
+        // Enable tracing
+        await dispatcher.setTracing(true)
+
+        let ctx = EventContext(
+            app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
+            device: DeviceContext(manufacturer: "a", model: "m", name: "n", type: "t"),
+            library: LibraryContext(name: "l", version: "1"),
+            os: OSContext(name: "iOS", version: "1"),
+            screen: ScreenContext(density: 2.0, width: 1, height: 1),
+            network: nil,
+            locale: "en_US",
+            timezone: "UTC"
+        )
+        let e = EnrichedEventPayload(type: "track", event: "ev", userId: nil, anonymousId: "anon", properties: nil, traits: nil, integrations: nil, timestamp: "now", writeKey: "wk", messageId: "mid", context: ctx)
+
+        // First flush
+        await dispatcher.offer(e)
+        await dispatcher.flush()
+        XCTAssertEqual(stub.lastHeaders?["Trace"], "true")
+
+        // Reset and second flush
+        stub.lastHeaders = nil
+        await dispatcher.offer(e)
+        await dispatcher.flush()
+        XCTAssertEqual(stub.lastHeaders?["Trace"], "true")
     }
 }
 
