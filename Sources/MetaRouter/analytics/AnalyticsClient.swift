@@ -412,4 +412,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 host: self.options.ingestionHost.absoluteString)
         }
     }
+
+    public func setTracing(_ enabled: Bool) {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.dispatcher.setTracing(enabled)
+        }
+    }
 }

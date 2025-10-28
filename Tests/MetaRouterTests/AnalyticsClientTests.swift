@@ -440,4 +440,43 @@ final class AnalyticsClientTests: XCTestCase {
 
         await fulfillment(of: [expectation], timeout: 3.0)
     }
+
+    // MARK: - Tracing Tests
+
+    func testSetTracingEnabled() {
+        client.setTracing(true)
+        XCTAssertTrue(true, "setTracing(true) completed without crashing")
+    }
+
+    func testSetTracingDisabled() {
+        client.setTracing(false)
+        XCTAssertTrue(true, "setTracing(false) completed without crashing")
+    }
+
+    func testSetTracingToggle() async {
+        client.setTracing(true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        client.setTracing(false)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        client.setTracing(true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(true, "Toggling tracing should work without crashing")
+    }
+
+    func testConcurrentTracingCalls() async {
+        let expectation = expectation(description: "Concurrent tracing calls completed")
+        expectation.expectedFulfillmentCount = 20
+
+        for i in 0..<20 {
+            Task {
+                client.setTracing(i % 2 == 0)
+                expectation.fulfill()
+            }
+        }
+
+        await fulfillment(of: [expectation], timeout: 2.0)
+    }
 }

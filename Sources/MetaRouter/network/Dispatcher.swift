@@ -30,6 +30,7 @@ public actor Dispatcher {
     private var retryTimerTask: Task<Void, Never>? = nil
     private var isFlushing = false
     private let config: Config
+    private var tracingEnabled = false
 
     public init(
         options: InitOptions,
@@ -50,6 +51,14 @@ public actor Dispatcher {
 
     public func setFatalConfigHandler(_ handler: FatalConfigHandler?) {
         self.onFatalConfigError = handler
+    }
+
+    public func setTracing(_ enabled: Bool) {
+        self.tracingEnabled = enabled
+        Logger.log(
+            "Tracing \(enabled ? "enabled" : "disabled")",
+            writeKey: options.writeKey,
+            host: options.ingestionHost.absoluteString)
     }
 
 
@@ -159,14 +168,20 @@ public actor Dispatcher {
             }
 
             let url = options.ingestionHost.appendingPathComponent(config.endpointPath)
-            
+
             Logger.log(
                 "Making API call to: \(url.absoluteString)",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
-            
+
+            // Add Trace header if tracing is enabled
+            var headers: [String: String]? = nil
+            if tracingEnabled {
+                headers = ["Trace": "true"]
+            }
+
             do {
-                let resp = try await http.postJSON(url: url, body: body, timeoutMs: config.timeoutMs)
+                let resp = try await http.postJSON(url: url, body: body, timeoutMs: config.timeoutMs, additionalHeaders: headers)
                 
                 if (200..<300).contains(resp.statusCode) {
                     Logger.log(

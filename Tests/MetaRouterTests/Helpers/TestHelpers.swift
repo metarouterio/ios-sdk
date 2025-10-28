@@ -144,6 +144,10 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
     func clearAdvertisingId() {
         recordCall(.clearAdvertisingId)
     }
+
+    func setTracing(_ enabled: Bool) {
+        recordCall(.setTracing(enabled: enabled))
+    }
 }
 
 // Analytics Call Recording
@@ -162,6 +166,7 @@ enum AnalyticsCall: Equatable {
     case reset
     case setAdvertisingId(advertisingId: String?)
     case clearAdvertisingId
+    case setTracing(enabled: Bool)
 }
 
 // CodableValue Test Extensions
