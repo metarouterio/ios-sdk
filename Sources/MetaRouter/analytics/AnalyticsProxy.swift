@@ -134,6 +134,10 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     public func clearAdvertisingId() {
         Task { await state.enqueue(.clearAdvertisingId) }
     }
+
+    public func setTracing(_ enabled: Bool) {
+        Task { await state.enqueue(.setTracing(enabled)) }
+    }
 }
 
 extension AnalyticsProxy {
@@ -165,6 +169,7 @@ private enum Call {
     case reset
     case setAdvertisingId(String?)
     case clearAdvertisingId
+    case setTracing(Bool)
 }
 
 private actor ProxyState {
@@ -208,6 +213,7 @@ private actor ProxyState {
         case .reset: r.reset()
         case .setAdvertisingId(let advertisingId): r.setAdvertisingId(advertisingId)
         case .clearAdvertisingId: r.clearAdvertisingId()
+        case .setTracing(let enabled): r.setTracing(enabled)
         }
     }
 }

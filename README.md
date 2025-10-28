@@ -225,6 +225,7 @@ The analytics client provides the following methods:
 - `reset()`: Reset analytics state and clear all stored data (includes clearing advertising ID)
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
+- `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
 
 ### Testing APIs
 
@@ -304,14 +305,31 @@ print("Analytics debug info:", debugInfo)
 // - advertisingId: Current advertising ID (if set)
 ```
 
-### 3. Force Flush Events
+### 3. Enable Tracing
+
+When working with MetaRouter support or debugging event delivery issues, you can enable tracing to add a `Trace: true` header to all API requests:
+
+```swift
+// Enable tracing for detailed backend diagnostics
+analytics.setTracing(true)
+
+// Send events - they'll now include the Trace header
+analytics.track("Debug Event", properties: ["test": true])
+
+// Disable tracing when done
+analytics.setTracing(false)
+```
+
+This helps backend engineers trace your events through the ingestion pipeline and identify delivery issues.
+
+### 4. Force Flush Events
 
 ```swift
 // Manually flush events to see if they're being sent
 analytics.flush()
 ```
 
-### 4. Common Issues
+### 5. Common Issues
 
 - **Network Permissions**: Ensure your app has network permissions in Info.plist
 - **UserDefaults**: The SDK uses UserDefaults for identity persistence (anonymousId, userId, groupId, advertisingId)
