@@ -55,10 +55,7 @@ public actor Dispatcher {
 
     public func setTracing(_ enabled: Bool) {
         self.tracingEnabled = enabled
-        Logger.log(
-            "Tracing \(enabled ? "enabled" : "disabled")",
-            writeKey: options.writeKey,
-            host: options.ingestionHost.absoluteString)
+        Logger.log("Tracing \(enabled ? "enabled" : "disabled")")
     }
 
 
