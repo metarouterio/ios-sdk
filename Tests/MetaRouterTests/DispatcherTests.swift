@@ -1,11 +1,21 @@
 import XCTest
 @testable import MetaRouter
 
-private final class StubNetworking: Networking {
+private final class StatusHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: Int?
+    var value: Int? {
+        get { lock.withLock { _value } }
+        set { lock.withLock { _value = newValue } }
+    }
+}
+
+private final class StubNetworking: Networking, @unchecked Sendable {
     enum Mode { case success, http(Int), error }
     var mode: Mode = .success
     var lastBody: Data?
     var lastHeaders: [String: String]?
+
     func postJSON(url: URL, body: Data, timeoutMs: Int, additionalHeaders: [String: String]?) async throws -> NetworkResponse {
         lastBody = body
         lastHeaders = additionalHeaders
@@ -18,6 +28,7 @@ private final class StubNetworking: Networking {
             throw URLError(.timedOut)
         }
     }
+
     func parseRetryAfterMs(from headers: [String : String]) -> Int? { nil }
 }
 
@@ -50,9 +61,10 @@ final class DispatcherTests: XCTestCase {
 
     func testFatalConfigClearsAndCallback() async {
         let options = TestDataFactory.makeInitOptions()
-        let stub = StubNetworking(); stub.mode = .http(401)
-        var calledStatus: Int? = nil
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 10, onFatalConfigError: { status in calledStatus = status })
+        let stub = StubNetworking()
+        stub.mode = .http(401)
+        let statusHolder = StatusHolder()
+        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 10, onFatalConfigError: { status in statusHolder.value = status })
 
         let ctx = EventContext(
             app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
@@ -69,7 +81,7 @@ final class DispatcherTests: XCTestCase {
         await dispatcher.offer(e)
         await dispatcher.flush()
 
-        XCTAssertEqual(calledStatus, 401)
+        XCTAssertEqual(statusHolder.value, 401)
     }
 
     func testTracingDisabledByDefault() async throws {

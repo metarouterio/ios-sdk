@@ -25,10 +25,7 @@ let package = Package(
         .testTarget(
             name: "MetaRouterTests",
             dependencies: ["MetaRouter"],
-            path: "Tests/MetaRouterTests",
-            swiftSettings: [
-                .swiftLanguageMode(.v5)
-            ]
+            path: "Tests/MetaRouterTests"
         ),
     ]
 )
