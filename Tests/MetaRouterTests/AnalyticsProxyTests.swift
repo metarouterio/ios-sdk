@@ -288,15 +288,16 @@ final class AnalyticsProxyTests: XCTestCase {
     func testConcurrentCallsBeforeBinding() async {
         let expectation = expectation(description: "Concurrent calls completed")
         expectation.expectedFulfillmentCount = 10
-        
+
         // Make concurrent calls before binding
+        let proxy = self.proxy!
         for i in 0..<10 {
             Task {
                 proxy.track("concurrent_\(i)", properties: nil)
                 expectation.fulfill()
             }
         }
-        
+
         await fulfillment(of: [expectation], timeout: 2.0)
         
         // Now bind and verify all calls were queued and replayed
@@ -311,18 +312,19 @@ final class AnalyticsProxyTests: XCTestCase {
     
     func testConcurrentCallsAfterBinding() async {
         proxy.bind(mockClient)
-        
+
         let expectation = expectation(description: "Concurrent calls completed")
         expectation.expectedFulfillmentCount = 10
-        
+
         // Make concurrent calls after binding
+        let proxy = self.proxy!
         for i in 0..<10 {
             Task {
                 proxy.track("concurrent_\(i)", properties: nil)
                 expectation.fulfill()
             }
         }
-        
+
         await fulfillment(of: [expectation], timeout: 2.0)
         
         let allForwarded = await TestUtilities.waitFor { [weak self] in
@@ -335,22 +337,24 @@ final class AnalyticsProxyTests: XCTestCase {
     func testBindingAndUnbindingRace() async {
         let expectation = expectation(description: "Binding race completed")
         expectation.expectedFulfillmentCount = 20
-        
+
         // Rapidly bind and unbind while making calls
+        let proxy = self.proxy!
+        let mockClient = self.mockClient!
         for i in 0..<10 {
             Task {
                 proxy.bind(mockClient)
                 proxy.track("race_\(i)", properties: nil)
                 expectation.fulfill()
             }
-            
+
             Task {
                 proxy.unbind()
                 proxy.track("race_unbound_\(i)", properties: nil)
                 expectation.fulfill()
             }
         }
-        
+
         await fulfillment(of: [expectation], timeout: 3.0)
         
         // Test should complete without crashing

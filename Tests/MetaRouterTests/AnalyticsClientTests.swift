@@ -233,7 +233,8 @@ final class AnalyticsClientTests: XCTestCase {
     func testConcurrentCalls() async {
         let expectation = expectation(description: "Concurrent calls completed")
         expectation.expectedFulfillmentCount = 10
-        
+
+        let client = self.client!
         for i in 0..<10 {
             Task {
                 client.track("event_\(i)", properties: nil)
@@ -242,7 +243,7 @@ final class AnalyticsClientTests: XCTestCase {
                 expectation.fulfill()
             }
         }
-        
+
         await fulfillment(of: [expectation], timeout: 2.0)
     }
     
@@ -425,6 +426,7 @@ final class AnalyticsClientTests: XCTestCase {
         expectation.expectedFulfillmentCount = 20
 
         // Run concurrent set and clear operations
+        let client = self.client!
         for i in 0..<20 {
             Task {
                 if i % 3 == 0 {
@@ -470,6 +472,7 @@ final class AnalyticsClientTests: XCTestCase {
         let expectation = expectation(description: "Concurrent tracing calls completed")
         expectation.expectedFulfillmentCount = 20
 
+        let client = self.client!
         for i in 0..<20 {
             Task {
                 client.setTracing(i % 2 == 0)
