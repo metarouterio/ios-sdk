@@ -318,10 +318,11 @@ final class EventEnrichmentTests: XCTestCase {
             )
         }
 
+        let service = enrichmentService!
         let enrichedEvents = await withTaskGroup(of: EnrichedEventPayload.self) { group in
             for event in events {
                 group.addTask {
-                    return await self.enrichmentService.enrichEvent(event)
+                    return await service.enrichEvent(event)
                 }
             }
 

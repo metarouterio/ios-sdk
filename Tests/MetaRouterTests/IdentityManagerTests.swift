@@ -314,12 +314,13 @@ final class IdentityManagerTests: XCTestCase {
     
     func testConcurrentIdentifyCalls() async {
         await identityManager.initialize()
-        
+
         // Make multiple concurrent identify calls
+        let manager = identityManager!
         await withTaskGroup(of: Void.self) { group in
             for i in 0..<10 {
                 group.addTask {
-                    await self.identityManager.identify("user-\(i)")
+                    await manager.identify("user-\(i)")
                 }
             }
         }
@@ -332,12 +333,13 @@ final class IdentityManagerTests: XCTestCase {
     
     func testConcurrentGroupCalls() async {
         await identityManager.initialize()
-        
+
         // Make multiple concurrent group calls
+        let manager = identityManager!
         await withTaskGroup(of: Void.self) { group in
             for i in 0..<10 {
                 group.addTask {
-                    await self.identityManager.group("group-\(i)")
+                    await manager.group("group-\(i)")
                 }
             }
         }
@@ -351,15 +353,16 @@ final class IdentityManagerTests: XCTestCase {
     func testConcurrentGetIdentityInfoCalls() async {
         await identityManager.initialize()
         await identityManager.identify("user-123")
-        
+
         // Make multiple concurrent reads
+        let manager = identityManager!
         let results = await withTaskGroup(of: (String, String?, String?).self) { group in
             for _ in 0..<10 {
                 group.addTask {
-                    return await self.identityManager.getIdentityInfo()
+                    return await manager.getIdentityInfo()
                 }
             }
-            
+
             var allResults: [(String, String?, String?)] = []
             for await result in group {
                 allResults.append(result)

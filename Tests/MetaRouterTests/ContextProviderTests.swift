@@ -186,11 +186,12 @@ final class ContextProviderTests: XCTestCase {
 
 
     func testConcurrentContextAccess() async {
+        let provider = contextProvider!
         await withTaskGroup(of: EventContext.self) { group in
             // Launch multiple concurrent context requests
             for _ in 0..<10 {
                 group.addTask {
-                    return await self.contextProvider.getContext()
+                    return await provider.getContext()
                 }
             }
 
@@ -215,16 +216,17 @@ final class ContextProviderTests: XCTestCase {
         let _ = await contextProvider.getContext()
 
         // Test concurrent cache clearing doesn't cause issues
+        let provider = contextProvider!
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<5 {
                 group.addTask {
-                    self.contextProvider.clearCache()
+                    provider.clearCache()
                 }
             }
 
             for _ in 0..<5 {
                 group.addTask {
-                    let _ = await self.contextProvider.getContext()
+                    let _ = await provider.getContext()
                 }
             }
 
