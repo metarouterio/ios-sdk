@@ -34,7 +34,7 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     public init(
         libraryName: String = "metarouter-ios-sdk",
-        libraryVersion: String = "1.0.0"
+        libraryVersion: String = MetaRouterSDK.version
     ) {
         self.library = LibraryContext(name: libraryName, version: libraryVersion)
     }
