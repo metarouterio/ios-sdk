@@ -42,7 +42,7 @@ public enum MessageIdGenerator {
         guard components.count == 6 else { return false }
 
         // First component should be a valid timestamp
-        guard Int64(components[0]) != nil else { return false }
+        guard let first = components.first, Int64(first) != nil else { return false }
 
         // Remaining components should form a valid UUID
         let uuidString = components.dropFirst().joined(separator: "-")

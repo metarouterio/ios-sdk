@@ -17,13 +17,18 @@ public protocol Networking: Sendable {
     func parseRetryAfterMs(from headers: [String: String]) -> Int?
 }
 
-public final class NetworkClient: Networking {
-    private let session: URLSession
+/// Abstraction over URLSession for testability.
+public protocol URLSessionable: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
 
-    public init() {
-        let config = URLSessionConfiguration.ephemeral
-        // Per-request timeout is set on the URLRequest; keep reasonable session defaults
-        session = URLSession(configuration: config)
+extension URLSession: URLSessionable {}
+
+public final class NetworkClient: Networking {
+    private let session: URLSessionable
+
+    public init(session: URLSessionable? = nil) {
+        self.session = session ?? URLSession(configuration: .ephemeral)
     }
 
     public func postJSON(
