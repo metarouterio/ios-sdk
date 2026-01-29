@@ -1,6 +1,16 @@
 import Foundation
 
 
+/// Injectable dependencies for testing. All fields optional — defaults to production implementations.
+internal struct AnalyticsDependencies: Sendable {
+    var networking: Networking?
+    var circuitBreaker: CircuitBreaker?
+    var contextProvider: ContextProvider?
+    var dispatcherConfig: Dispatcher.Config?
+
+    static let production = AnalyticsDependencies()
+}
+
 internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertible,
     CustomDebugStringConvertible, @unchecked Sendable
 {
@@ -9,19 +19,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private let identityManager: IdentityManager
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
-    private var lifecycle: AppLifecycleObserver!
+    private var lifecycle: AppLifecycleObserver?
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
 
-    private init(options: InitOptions, contextProvider: ContextProvider? = nil) {
+    private init(options: InitOptions, deps: AnalyticsDependencies = .production) {
         self.lifecycleState = .initializing
-        
-        Logger.log("Starting analytics client initialization...", 
-                   writeKey: options.writeKey, 
+
+        Logger.log("Starting analytics client initialization...",
+                   writeKey: options.writeKey,
                    host: options.ingestionHost.absoluteString)
-        
+
         self.options = options
-        self.contextProvider = contextProvider ?? DeviceContextProvider()
+        self.contextProvider = deps.contextProvider ?? DeviceContextProvider()
         self.identityManager = IdentityManager(
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
@@ -34,10 +44,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
         self.dispatcher = Dispatcher(
             options: options,
-            http: NetworkClient(),
-            breaker: CircuitBreaker(),
+            http: deps.networking ?? NetworkClient(),
+            breaker: deps.circuitBreaker ?? CircuitBreaker(),
             queueCapacity: options.maxQueueEvents,
-            config: Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
+            config: deps.dispatcherConfig ?? Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
         
         // Enable debug logging if requested
@@ -104,8 +114,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                    host: options.ingestionHost.absoluteString)
     }
 
-    internal static func initialize(options: InitOptions) -> AnalyticsClient {
-        AnalyticsClient(options: options)
+    internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {
+        AnalyticsClient(options: options, deps: deps)
     }
 
     public var description: String {
@@ -358,14 +368,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 return
             }
 
-            // Validate non-empty, non-whitespace if not nil
+            // Validate UUID format if not nil
             if let id = advertisingId {
-                let trimmed = id.trimmingCharacters(in: .whitespaces)
-                guard !trimmed.isEmpty else {
-                    Logger.log(
-                        "Invalid advertisingId - must be non-empty, non-whitespace string",
-                        writeKey: self.options.writeKey,
-                        host: self.options.ingestionHost.absoluteString)
+                guard UUID(uuidString: id) != nil else {
+                    Logger.warn(
+                        "Invalid advertisingId '\(id.prefix(20))' — must be a valid UUID (e.g. '550E8400-E29B-41D4-A716-446655440000')")
                     return
                 }
             }

@@ -159,7 +159,11 @@ public actor Dispatcher {
             }
             
             let payload = ["batch": batch]
-            guard let body = try? JSONEncoder().encode(payload) else {
+            let body: Data
+            do {
+                body = try JSONEncoder().encode(payload)
+            } catch {
+                Logger.error("Failed to encode batch of \(batch.count) events: \(error)")
                 await handleNonRetryableDrop(count: batch.count)
                 continue
             }
@@ -205,7 +209,10 @@ public actor Dispatcher {
         switch resp.statusCode {
         case 200..<300:
             breaker.onSuccess()
-            // Success: batch already drained
+            // Gradually recover batch size after 413-induced reduction
+            if maxBatchSize < config.initialMaxBatchSize {
+                maxBatchSize = min(maxBatchSize * 2, config.initialMaxBatchSize)
+            }
             return
         case 500..<600, 408:
             breaker.onFailure()
