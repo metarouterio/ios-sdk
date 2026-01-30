@@ -350,7 +350,7 @@ This SDK uses a circuit breaker around network I/O. It keeps ordering stable, av
 Success → breaker CLOSED (keep flushing).
 Failure → breaker OPEN again with longer cooldown.
 
-**sentAt semantics:** `sentAt` is stamped when the event is enqueued. If the client is backing off, the actual transmit may be later; `sentAt` reflects when the event entered the queue.
+**sentAt semantics:** `sentAt` is stamped when the batch is prepared for transmission. If the client is backing off, the actual transmit may be later; `sentAt` reflects when the batch was assembled for sending.
 
 | Status / Failure                    | Action                                                               | Breaker | Queue effect                   |
 | ----------------------------------- | -------------------------------------------------------------------- | ------- | ------------------------------ |
@@ -358,7 +358,7 @@ Failure → breaker OPEN again with longer cooldown.
 | `5xx`                               | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
 | `408` (timeout)                     | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
 | `429` (throttle)                    | Retry: requeue **front**, wait = `max(Retry-After, breaker, 1000ms)` | open↑   | Requeued (front)               |
-| `413` (payload too large)           | Halve `maxBatchSize`; requeue and retry; if already `1`, **drop**    | close   | Requeued or dropped (`size=1`) |
+| `413` (payload too large)           | Halve `maxBatchSize`; requeue and retry; if already `1`, **drop**. On subsequent `2xx`, batch size recovers (`maxBatchSize * 2` up to `initialMaxBatchSize`). | close   | Requeued or dropped (`size=1`) |
 | `400`, `422`, other non-fatal `4xx` | **Drop** bad batch, continue                                         | close   | Dropped                        |
 | `401`, `403`, `404`                 | **Disable** client (stop timers), clear queue                        | close   | Cleared                        |
 | Network error / Timeout             | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
@@ -879,8 +879,7 @@ func checkTrackingStatus() -> ATTrackingManager.AuthorizationStatus {
 
 The SDK validates advertising IDs before setting them:
 
-- Must be a non-empty string
-- Cannot be only whitespace
+- Must be a valid UUID format (parsed via `UUID(uuidString:)`), e.g. `"123E4567-E89B-12D3-A456-426614174000"`
 - Invalid values are rejected and logged as warnings
 
 ## License
