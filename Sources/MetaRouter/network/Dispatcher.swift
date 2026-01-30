@@ -43,7 +43,7 @@ public actor Dispatcher {
         self.options = options
         self.http = http
         self.breaker = breaker
-        self.queue = EventQueue<EnrichedEventPayload>(capacity: queueCapacity, overflowBehavior: .dropOldest)
+        self.queue = EventQueue<EnrichedEventPayload>(capacity: queueCapacity)
         self.maxBatchSize = config.initialMaxBatchSize
         self.config = config
         self.onFatalConfigError = onFatalConfigError

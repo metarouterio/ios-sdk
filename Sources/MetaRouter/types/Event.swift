@@ -118,7 +118,7 @@ public struct EnrichedEventPayload: Codable, Sendable {
 }
 
 /// Event types enumeration
-public enum EventType: String, CaseIterable, Codable, Sendable {
+public enum EventType: String, Codable, Sendable {
     case track
     case identify
     case group
