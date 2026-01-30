@@ -14,7 +14,8 @@ internal struct AnalyticsDependencies: Sendable {
     static let production = AnalyticsDependencies()
 }
 
-internal final class AnalyticsClient: AnalyticsInterface, @unchecked Sendable
+internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertible,
+    CustomDebugStringConvertible, @unchecked Sendable
 {
     private let options: InitOptions
     private let contextProvider: ContextProvider
@@ -118,6 +119,14 @@ internal final class AnalyticsClient: AnalyticsInterface, @unchecked Sendable
 
     internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {
         AnalyticsClient(options: options, deps: deps)
+    }
+
+    public var description: String {
+        return "MetaRouter.Analytics"
+    }
+
+    public var debugDescription: String {
+        return "MetaRouter.Analytics(internal)"
     }
 
     public func track(_ event: String, properties: [String: Any]?) {
