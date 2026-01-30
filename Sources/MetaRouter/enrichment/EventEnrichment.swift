@@ -37,29 +37,6 @@ public final class EventEnrichmentService: Sendable {
         )
     }
 
-    /// Convenience method to enrich an event with custom message ID
-    public func enrichEvent(
-        _ event: EventWithIdentity,
-        messageId: String
-    ) async -> EnrichedEventPayload {
-        let context = await contextProvider.getContext()
-
-        return EnrichedEventPayload(
-            type: event.type,
-            event: event.event,
-            userId: event.userId,
-            anonymousId: event.anonymousId,
-            groupId: event.groupId,
-            properties: event.properties,
-            traits: event.traits,
-            integrations: event.integrations,
-            timestamp: event.timestamp,
-            writeKey: writeKey,
-            messageId: messageId,
-            context: context
-        )
-    }
-
     /// Enrich a base event by first adding identity information, then enriching
     public func enrichEvent(
         _ baseEvent: BaseEvent
@@ -172,28 +149,3 @@ public final class EventEnrichmentService: Sendable {
     }
 }
 
-/// Extension for JSON serialization
-extension EnrichedEventPayload {
-
-    /// Convert the enriched event to JSON data for network transmission
-    public func toJsonData() throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(self)
-    }
-
-    /// Convert the enriched event to a JSON string for debugging
-    public func toJsonString() throws -> String {
-        let data = try toJsonData()
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-
-    /// Create a pretty-printed JSON string for debugging
-    public func toPrettyJsonString() throws -> String {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-}
