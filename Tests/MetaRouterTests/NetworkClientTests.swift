@@ -1,7 +1,6 @@
 import XCTest
 @testable import MetaRouter
 
-// MARK: - Mock URLSession
 
 private final class MockURLSession: URLSessionable, @unchecked Sendable {
     var responseStatusCode: Int = 200
@@ -26,11 +25,8 @@ private final class MockURLSession: URLSessionable, @unchecked Sendable {
     }
 }
 
-// MARK: - Tests
-
 final class NetworkClientTests: XCTestCase {
 
-    // MARK: - Retry-After Parsing
 
     func testParseRetryAfterSeconds() {
         let client = NetworkClient()
@@ -56,8 +52,6 @@ final class NetworkClientTests: XCTestCase {
         let headers: [String: String] = ["Retry-After": "not-a-date"]
         XCTAssertNil(client.parseRetryAfterMs(from: headers))
     }
-
-    // MARK: - URLSession Injection
 
     func testPostJSONWithMockSession() async throws {
         let mock = MockURLSession()

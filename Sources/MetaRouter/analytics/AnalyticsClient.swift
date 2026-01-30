@@ -2,7 +2,6 @@ import Foundation
 
 
 /// Injectable dependencies for testing. All fields optional — defaults to production implementations.
-/// Mirrors the Kotlin SDK's `MetaRouterAnalyticsClient.initialize(...)` parameter list.
 internal struct AnalyticsDependencies: Sendable {
     var identityManager: IdentityManager?
     var contextProvider: ContextProvider?
@@ -381,10 +380,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 }
             }
 
-            // Persist to IdentityManager first
+
             await self.identityManager.setAdvertisingId(advertisingId)
 
-            // Update DeviceContextProvider to use the new value
+
             if let deviceProvider = self.contextProvider as? DeviceContextProvider {
                 await deviceProvider.setAdvertisingId(advertisingId)
             }
