@@ -1,54 +1,32 @@
 import Foundation
 
 internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible,
-    CustomDebugStringConvertible, @unchecked Sendable
+    CustomDebugStringConvertible, Sendable
 {
     private let state = ProxyState()
-    private let debugInfoLock = NSLock()
-    private nonisolated(unsafe) var _boundClient: AnalyticsInterface?
-    private var bootstrapDebugInfo: [String: CodableValue] = [:]
 
     public var description: String {
         return "MetaRouter.Analytics"
     }
 
     public var debugDescription: String {
-        debugInfoLock.lock()
-        let isBound = _boundClient != nil
-        debugInfoLock.unlock()
-        let method = isBound ? "ready" : "initializing"
-        return "MetaRouter.Analytics(\(method))"
+        return "MetaRouter.Analytics(proxy)"
     }
 
     internal func bind(_ real: AnalyticsInterface) {
-        // Store reference to bound client for synchronous debug info access
-        debugInfoLock.lock()
-        _boundClient = real
-        debugInfoLock.unlock()
-
         Task { await state.bind(real) }
     }
 
     internal func unbind() {
-        // Clear bound client reference
-        debugInfoLock.lock()
-        _boundClient = nil
-        debugInfoLock.unlock()
-
-        Task {
-            await state.unbind()
-        }
+        Task { await state.unbind() }
     }
 
     // Awaitable helpers for barrier APIs
     func _bindAndReplay(_ real: any AnalyticsInterface) async {
-        // Avoid NSLock from async context; assign directly and then await state.bind
-        _boundClient = real
         await state.bind(real)
     }
 
     func _unbindAndClear() async {
-        _boundClient = nil
         await state.unbind()
     }
 
@@ -106,22 +84,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     }
 
     public func getDebugInfo() async -> [String: CodableValue] {
-        // Get client and bootstrap info atomically
-        let (client, bootstrapInfo): (AnalyticsInterface?, [String: CodableValue]) = {
-            debugInfoLock.lock()
-            defer { debugInfoLock.unlock() }
-            return (_boundClient, bootstrapDebugInfo)
-        }()
-
-        // If we have a bound client, get debug info from it
-        if let client = client {
-            return await client.getDebugInfo()
-        }
-
-        // No bound client, return bootstrap info with proxy flag
-        var info = bootstrapInfo
-        info["proxy"] = .bool(true)
-        return info
+        return await state.getDebugInfo()
     }
 
     public func flush() { Task { await state.enqueue(.flush) } }
@@ -143,16 +106,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 extension AnalyticsProxy {
     // Internal helper to seed debug info prior to binding
     internal func setBootstrapDebugInfo(writeKey: String, host: String) {
-        debugInfoLock.lock()
-        // Mask writeKey to show only last 4 characters
-        let maskedKey = writeKey.count > 4 
-            ? "***" + writeKey.suffix(4) 
-            : "***"
-        bootstrapDebugInfo = [
-            "writeKey": .string(maskedKey),
-            "ingestionHost": .string(host),
-        ]
-        debugInfoLock.unlock()
+        Task { await state.setBootstrapDebugInfo(writeKey: writeKey, host: host) }
     }
 }
 
@@ -176,6 +130,7 @@ private actor ProxyState {
     private var real: AnalyticsInterface?
     private var queue: [Call] = []
     private let cap = 20
+    private var bootstrapDebugInfo: [String: CodableValue] = [:]
 
     func bind(_ client: AnalyticsInterface) {
         real = client
@@ -196,6 +151,25 @@ private actor ProxyState {
             if queue.count >= cap { _ = queue.removeFirst() }
             queue.append(call)
         }
+    }
+
+    func setBootstrapDebugInfo(writeKey: String, host: String) {
+        let maskedKey = writeKey.count > 4
+            ? "***" + writeKey.suffix(4)
+            : "***"
+        bootstrapDebugInfo = [
+            "writeKey": .string(maskedKey),
+            "ingestionHost": .string(host),
+        ]
+    }
+
+    func getDebugInfo() async -> [String: CodableValue] {
+        if let client = real {
+            return await client.getDebugInfo()
+        }
+        var info = bootstrapDebugInfo
+        info["proxy"] = .bool(true)
+        return info
     }
 
     private func forward(_ call: Call) {

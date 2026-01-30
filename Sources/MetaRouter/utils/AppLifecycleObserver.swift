@@ -53,13 +53,22 @@ public final class AppLifecycleObserver: @unchecked Sendable {
     @objc private func appDidBecomeActive() { onForeground() }
     @MainActor @objc private func appDidEnterBackground() {
         #if canImport(UIKit)
+        let endOnce = BackgroundTaskGuard()
         var taskId: UIBackgroundTaskIdentifier = .invalid
         taskId = UIApplication.shared.beginBackgroundTask(withName: "MetaRouterFlush") {
-            UIApplication.shared.endBackgroundTask(taskId)
+            // Expiration handler — only end if async work hasn't already ended it
+            if endOnce.claim() {
+                UIApplication.shared.endBackgroundTask(taskId)
+            }
         }
+        guard taskId != .invalid else { return }
         Task { [onBackgroundAsync] in
             await onBackgroundAsync()
-            UIApplication.shared.endBackgroundTask(taskId)
+            if endOnce.claim() {
+                await MainActor.run {
+                    UIApplication.shared.endBackgroundTask(taskId)
+                }
+            }
         }
         #else
         Task { [onBackgroundAsync] in
@@ -68,4 +77,18 @@ public final class AppLifecycleObserver: @unchecked Sendable {
         #endif
     }
     #endif
+}
+
+/// Thread-safe one-shot guard to ensure `endBackgroundTask` is called exactly once.
+private final class BackgroundTaskGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
+    }
 }
