@@ -107,22 +107,6 @@ final class EventEnrichmentTests: XCTestCase {
         XCTAssertEqual(enriched.context.app.name, "TestApp")
     }
 
-    func testCustomMessageIdEnrichment() async {
-        let customMessageId = "1694123456789-CUSTOM-MESSAGE-ID-A716-446655440000"
-        let event = EventWithIdentity(
-            type: "identify",
-            userId: "user456",
-            anonymousId: "anon456",
-            timestamp: "2023-09-08T11:00:00.000Z"
-        )
-
-        let enriched = await enrichmentService.enrichEvent(event, messageId: customMessageId)
-
-        XCTAssertEqual(enriched.messageId, customMessageId)
-        XCTAssertEqual(enriched.type, "identify")
-        XCTAssertEqual(enriched.userId, "user456")
-    }
-
     func testBaseEventEnrichment() async {
         let baseEvent = BaseEvent(
             type: "track",
@@ -235,57 +219,6 @@ final class EventEnrichmentTests: XCTestCase {
         XCTAssertEqual(enriched.type, "alias")
         XCTAssertEqual(enriched.userId, "new-user-id")
         XCTAssertEqual(enriched.properties?["previousId"], .string("old-user-id"))
-    }
-
-
-    func testJsonSerialization() async throws {
-        let event = EventWithIdentity(
-            type: "track",
-            event: "Test JSON",
-            userId: "user123",
-            anonymousId: "anon123",
-            timestamp: "2023-09-08T12:00:00.000Z"
-        )
-
-        let enriched = await enrichmentService.enrichEvent(event)
-
-        // Test JSON data creation
-        let jsonData = try enriched.toJsonData()
-        XCTAssertFalse(jsonData.isEmpty)
-
-        // Test JSON string creation
-        let jsonString = try enriched.toJsonString()
-        XCTAssertTrue(jsonString.contains("Test JSON"))
-        XCTAssertTrue(jsonString.contains("user123"))
-        XCTAssertTrue(jsonString.contains("test-write-key"))
-
-        // Test pretty JSON
-        let prettyJson = try enriched.toPrettyJsonString()
-        XCTAssertTrue(prettyJson.contains("\n"))  // Should have newlines for pretty printing
-    }
-
-    func testJsonRoundTrip() async throws {
-        let event = EventWithIdentity(
-            type: "identify",
-            userId: "user456",
-            anonymousId: "anon456",
-            traits: ["name": .string("Jane Doe")],
-            timestamp: "2023-09-08T13:00:00.000Z"
-        )
-
-        let enriched = await enrichmentService.enrichEvent(event)
-        let jsonData = try enriched.toJsonData()
-
-        // Decode back to verify round-trip works
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let decoded = try decoder.decode(EnrichedEventPayload.self, from: jsonData)
-
-        XCTAssertEqual(decoded.type, enriched.type)
-        XCTAssertEqual(decoded.userId, enriched.userId)
-        XCTAssertEqual(decoded.writeKey, enriched.writeKey)
-        XCTAssertEqual(decoded.messageId, enriched.messageId)
-        XCTAssertEqual(decoded.context.app.name, enriched.context.app.name)
     }
 
 

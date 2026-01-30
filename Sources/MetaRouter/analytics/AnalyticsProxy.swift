@@ -1,17 +1,8 @@
 import Foundation
 
-internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible,
-    CustomDebugStringConvertible, Sendable
+internal final class AnalyticsProxy: AnalyticsInterface, Sendable
 {
     private let state = ProxyState()
-
-    public var description: String {
-        return "MetaRouter.Analytics"
-    }
-
-    public var debugDescription: String {
-        return "MetaRouter.Analytics(proxy)"
-    }
 
     internal func bind(_ real: AnalyticsInterface) {
         Task { await state.bind(real) }

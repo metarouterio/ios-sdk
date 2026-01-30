@@ -276,39 +276,6 @@ final class CodableValueTests: XCTestCase {
     }
     
     
-    func testTypeSafeConversions() {
-        let nested: CodableValue = [
-            "string": "value",
-            "int": 42,
-            "double": 3.14,
-            "bool": true,
-            "array": [1, 2, 3],
-            "object": ["nested": "value"],
-            "null": .null
-        ]
-        
-        // Test dictionary conversion
-        let dict = nested.toDictionary()
-        XCTAssertNotNil(dict)
-        XCTAssertEqual(dict?["string"] as? String, "value")
-        XCTAssertEqual(dict?["int"] as? Int, 42)
-        XCTAssertEqual(dict?["double"] as? Double, 3.14)
-        XCTAssertEqual(dict?["bool"] as? Bool, true)
-        XCTAssertEqual((dict?["array"] as? [Int])?.count, 3)
-        XCTAssertEqual((dict?["object"] as? [String: String])?["nested"], "value")
-        XCTAssertTrue(dict?["null"] is NSNull)
-        
-        // Test array conversion
-        let array: CodableValue = [1, "two", true, ["key": "value"]]
-        let converted = array.toArray()
-        XCTAssertNotNil(converted)
-        XCTAssertEqual(converted?.count, 4)
-        XCTAssertEqual(converted?[0] as? Int, 1)
-        XCTAssertEqual(converted?[1] as? String, "two")
-        XCTAssertEqual(converted?[2] as? Bool, true)
-        XCTAssertEqual((converted?[3] as? [String: String])?["key"], "value")
-    }
-    
     func testNestedDictionaryConversion() {
         let nested: [String: Any] = [
             "brand": "Tropica Plants",

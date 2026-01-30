@@ -1,7 +1,7 @@
 import Foundation
 
 /// App-specific context information
-public struct AppContext: Codable, Equatable, Sendable {
+public struct AppContext: Codable, Sendable {
     public let name: String
     public let version: String
     public let build: String
@@ -16,7 +16,7 @@ public struct AppContext: Codable, Equatable, Sendable {
 }
 
 /// Device-specific context information
-public struct DeviceContext: Codable, Equatable, Sendable {
+public struct DeviceContext: Codable, Sendable {
     public let manufacturer: String
     public let model: String
     public let name: String
@@ -33,7 +33,7 @@ public struct DeviceContext: Codable, Equatable, Sendable {
 }
 
 /// Library-specific context information
-public struct LibraryContext: Codable, Equatable, Sendable {
+public struct LibraryContext: Codable, Sendable {
     public let name: String
     public let version: String
 
@@ -44,7 +44,7 @@ public struct LibraryContext: Codable, Equatable, Sendable {
 }
 
 /// Operating system context information
-public struct OSContext: Codable, Equatable, Sendable {
+public struct OSContext: Codable, Sendable {
     public let name: String
     public let version: String
 
@@ -55,7 +55,7 @@ public struct OSContext: Codable, Equatable, Sendable {
 }
 
 /// Screen/display context information
-public struct ScreenContext: Codable, Equatable, Sendable {
+public struct ScreenContext: Codable, Sendable {
     public let density: Double
     public let width: Int
     public let height: Int
@@ -68,7 +68,7 @@ public struct ScreenContext: Codable, Equatable, Sendable {
 }
 
 /// Network context information (optional)
-public struct NetworkContext: Codable, Equatable, Sendable {
+public struct NetworkContext: Codable, Sendable {
     public let wifi: Bool
 
     public init(wifi: Bool) {

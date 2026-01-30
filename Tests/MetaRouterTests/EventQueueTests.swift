@@ -17,7 +17,7 @@ final class EventQueueTests: XCTestCase {
     }
 
     func testCapacityDropOldest() async {
-        let q = EventQueue<Int>(capacity: 2, overflowBehavior: .dropOldest)
+        let q = EventQueue<Int>(capacity: 2)
         await q.enqueue(1)
         await q.enqueue(2)
         await q.enqueue(3) // drops 1
