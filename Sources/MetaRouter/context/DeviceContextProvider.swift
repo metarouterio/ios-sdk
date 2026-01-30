@@ -166,13 +166,33 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
     private func collectNetworkContext() async -> NetworkContext? {
         let monitor = NWPathMonitor()
         let queue = DispatchQueue(label: "network-monitor")
+        let once = NetworkContinuationGuard()
 
-        return await withCheckedContinuation { continuation in
-            monitor.pathUpdateHandler = { path in
-                continuation.resume(returning: NetworkContext(wifi: path.usesInterfaceType(.wifi)))
-                monitor.cancel()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                monitor.pathUpdateHandler = { path in
+                    if once.claim() {
+                        continuation.resume(returning: NetworkContext(wifi: path.usesInterfaceType(.wifi)))
+                    }
+                    monitor.cancel()
+                }
+                monitor.start(queue: queue)
+
+                // Timeout after 2 seconds to prevent leak if handler never fires
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if once.claim() {
+                        monitor.cancel()
+                        continuation.resume(returning: nil)
+                    }
+                }
             }
-            monitor.start(queue: queue)
+        } onCancel: {
+            if once.claim() {
+                // onCancel can't resume the continuation safely here,
+                // but cancelling the monitor will cause the timeout to fire
+            }
+            monitor.cancel()
         }
     }
 
@@ -302,6 +322,21 @@ private actor ContextActor {
     }
 
     func clearCache() { cachedContext = nil }
+}
+
+/// Thread-safe one-shot guard ensuring a continuation is resumed exactly once.
+private final class NetworkContinuationGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    /// Returns `true` the first time it is called; `false` thereafter.
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
+    }
 }
 
 private actor AdvertisingIdActor {
