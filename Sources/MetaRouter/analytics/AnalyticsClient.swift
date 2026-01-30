@@ -2,11 +2,15 @@ import Foundation
 
 
 /// Injectable dependencies for testing. All fields optional — defaults to production implementations.
+/// Mirrors the Kotlin SDK's `MetaRouterAnalyticsClient.initialize(...)` parameter list.
 internal struct AnalyticsDependencies: Sendable {
+    var identityManager: IdentityManager?
+    var contextProvider: ContextProvider?
+    var enrichmentService: EventEnrichmentService?
     var networking: Networking?
     var circuitBreaker: CircuitBreaker?
-    var contextProvider: ContextProvider?
     var dispatcherConfig: Dispatcher.Config?
+    var dispatcher: Dispatcher?
 
     static let production = AnalyticsDependencies()
 }
@@ -32,17 +36,17 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
         self.options = options
         self.contextProvider = deps.contextProvider ?? DeviceContextProvider()
-        self.identityManager = IdentityManager(
+        self.identityManager = deps.identityManager ?? IdentityManager(
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
         )
-        self.enrichmentService = EventEnrichmentService(
+        self.enrichmentService = deps.enrichmentService ?? EventEnrichmentService(
             contextProvider: self.contextProvider,
             identityManager: self.identityManager,
             writeKey: options.writeKey
         )
 
-        self.dispatcher = Dispatcher(
+        self.dispatcher = deps.dispatcher ?? Dispatcher(
             options: options,
             http: deps.networking ?? NetworkClient(),
             breaker: deps.circuitBreaker ?? CircuitBreaker(),
