@@ -239,30 +239,6 @@ extension CodableValue {
     }
   }
   
-  /// Convert to Dictionary with type-safe values
-  public func toDictionary() -> [String: Any]? {
-    guard case .object(let dict) = self else { return nil }
-    return dict.mapValues { $0.toTypedValue() }
-  }
-  
-  /// Convert to Array with type-safe values
-  public func toArray() -> [Any]? {
-    guard case .array(let array) = self else { return nil }
-    return array.map { $0.toTypedValue() }
-  }
-  
-  /// Convert to a type-safe value
-  private func toTypedValue() -> Any {
-    switch self {
-    case .string(let value): return value
-    case .int(let value): return value
-    case .double(let value): return value
-    case .bool(let value): return value
-    case .array(let values): return values.map { $0.toTypedValue() }
-    case .object(let dict): return dict.mapValues { $0.toTypedValue() }
-    case .null: return NSNull()
-    }
-  }
 }
 
 
