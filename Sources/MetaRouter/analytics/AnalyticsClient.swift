@@ -10,6 +10,7 @@ internal struct AnalyticsDependencies: Sendable {
     var circuitBreaker: CircuitBreaker?
     var dispatcherConfig: Dispatcher.Config?
     var dispatcher: Dispatcher?
+    var persistentQueue: PersistentEventQueue?
 
     static let production = AnalyticsDependencies()
 }
@@ -45,11 +46,16 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             writeKey: options.writeKey
         )
 
+        let persistentQueue = deps.persistentQueue ?? PersistentEventQueue(
+            diskStorage: DiskStorage(),
+            maxEventCount: options.maxQueueEvents
+        )
+
         self.dispatcher = deps.dispatcher ?? Dispatcher(
             options: options,
             http: deps.networking ?? NetworkClient(),
             breaker: deps.circuitBreaker ?? CircuitBreaker(),
-            queueCapacity: options.maxQueueEvents,
+            persistentQueue: persistentQueue,
             config: deps.dispatcherConfig ?? Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
         
@@ -79,6 +85,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             onBackgroundAsync: { [weak self] in
                 guard let self else { return }
                 await self.dispatcher.flush()
+                try? await self.dispatcher.flushToDisk()
                 await self.dispatcher.stopFlushLoop()
                 await self.dispatcher.cancelScheduledRetry()
             }
@@ -94,6 +101,14 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             Logger.log("IdentityManager initialized successfully",
                        writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
+
+            // Rehydrate persisted events from disk
+            let rehydratedCount = await self.dispatcher.rehydrate()
+            if rehydratedCount > 0 {
+                Logger.log("Rehydrated \(rehydratedCount) events from disk",
+                           writeKey: self.options.writeKey,
+                           host: self.options.ingestionHost.absoluteString)
+            }
 
             // Load advertisingId from IdentityManager and set it on DeviceContextProvider
             if let deviceProvider = self.contextProvider as? DeviceContextProvider,
