@@ -287,6 +287,103 @@ final class PersistentEventQueueTests: XCTestCase {
             atPath: tempDir.appendingPathComponent("queue.v1.json").path
         ), "clear() must delete disk snapshot to prevent stale rehydration")
     }
+
+    // MARK: - Integration: Full Round-Trip
+
+    func testFullRoundTrip_EnqueueFlushRehydrate() async throws {
+        // Phase 1: Enqueue events and flush to disk
+        let queue1 = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+        for i in 0..<5 {
+            await queue1.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+        try await queue1.flushToDisk()
+
+        // Simulate new process
+        PersistentEventQueue.resetRehydrationGuard()
+
+        // Phase 2: Create new queue and rehydrate
+        let queue2 = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+        let rehydrated = await queue2.rehydrate()
+        XCTAssertEqual(rehydrated, 5)
+
+        // Phase 3: Verify order preserved
+        let drained = await queue2.drain(max: 10)
+        XCTAssertEqual(drained.count, 5)
+        for i in 0..<5 {
+            XCTAssertEqual(drained[i].messageId, "e\(i)")
+        }
+    }
+
+    func testPartialDrainThenFlush() async throws {
+        let queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+
+        for i in 0..<5 {
+            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+        _ = await queue.drain(max: 2) // removes e0, e1
+        try await queue.flushToDisk()
+
+        PersistentEventQueue.resetRehydrationGuard()
+
+        let queue2 = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+        let rehydrated = await queue2.rehydrate()
+        XCTAssertEqual(rehydrated, 3)
+
+        let drained = await queue2.drain(max: 10)
+        XCTAssertEqual(drained[0].messageId, "e2")
+        XCTAssertEqual(drained[2].messageId, "e4")
+    }
+
+    func testFlushOverwriteEliminatesDuplicates() async throws {
+        let queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+
+        // First flush with 3 events
+        for i in 0..<3 {
+            await queue.enqueue(makeTestEvent(messageId: "batch1-e\(i)"))
+        }
+        try await queue.flushToDisk()
+
+        // Drain all, enqueue 2 new events, flush again
+        _ = await queue.drain(max: 10)
+        await queue.enqueue(makeTestEvent(messageId: "batch2-e0"))
+        await queue.enqueue(makeTestEvent(messageId: "batch2-e1"))
+        try await queue.flushToDisk()
+
+        PersistentEventQueue.resetRehydrationGuard()
+
+        let queue2 = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+        let rehydrated = await queue2.rehydrate()
+
+        // Should only have batch2 events — full overwrite, no duplicates
+        XCTAssertEqual(rehydrated, 2)
+        let drained = await queue2.drain(max: 10)
+        XCTAssertEqual(drained[0].messageId, "batch2-e0")
+        XCTAssertEqual(drained[1].messageId, "batch2-e1")
+    }
 }
 
 // MARK: - Test Helper
