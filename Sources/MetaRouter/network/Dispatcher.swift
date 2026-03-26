@@ -20,7 +20,7 @@ public actor Dispatcher {
     }
 
     private let options: InitOptions
-    private let queue: EventQueue<EnrichedEventPayload>
+    private let queue: PersistentEventQueue
     private let http: Networking
     private let breaker: CircuitBreaker
     private var maxBatchSize: Int
@@ -32,6 +32,25 @@ public actor Dispatcher {
     private let config: Config
     private var tracingEnabled = false
 
+    /// Primary init accepting a PersistentEventQueue (used by AnalyticsClient).
+    public init(
+        options: InitOptions,
+        http: Networking = NetworkClient(),
+        breaker: CircuitBreaker = CircuitBreaker(),
+        persistentQueue: PersistentEventQueue,
+        config: Config = Config(),
+        onFatalConfigError: FatalConfigHandler? = nil
+    ) {
+        self.options = options
+        self.http = http
+        self.breaker = breaker
+        self.queue = persistentQueue
+        self.maxBatchSize = config.initialMaxBatchSize
+        self.config = config
+        self.onFatalConfigError = onFatalConfigError
+    }
+
+    /// Backward-compatible init (tests, simple usage). Creates an internal PersistentEventQueue.
     public init(
         options: InitOptions,
         http: Networking = NetworkClient(),
@@ -43,7 +62,11 @@ public actor Dispatcher {
         self.options = options
         self.http = http
         self.breaker = breaker
-        self.queue = EventQueue<EnrichedEventPayload>(capacity: queueCapacity)
+        self.queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("metarouter-noop-\(UUID().uuidString)")),
+            maxEventCount: queueCapacity
+        )
         self.maxBatchSize = config.initialMaxBatchSize
         self.config = config
         self.onFatalConfigError = onFatalConfigError
@@ -64,18 +87,39 @@ public actor Dispatcher {
             "Enqueuing event {\"messageId\": \"\(event.messageId)\", \"type\": \"\(event.type)\"}",
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString)
-        
+
         await queue.enqueue(event)
-        
+
         let queueLength = await queue.count
         Logger.log(
             "Event enqueued, queue length: \(queueLength)",
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString)
-        
+
+        // Check disk flush threshold
+        if await queue.needsFlushToDisk {
+            do {
+                try await queue.flushToDisk()
+                Logger.log("Auto disk flush triggered (threshold reached)")
+            } catch {
+                Logger.warn("Auto disk flush failed: \(error)")
+            }
+        }
+
         if queueLength >= config.autoFlushThreshold {
             await flush()
         }
+    }
+
+    /// Flush current memory state to disk.
+    public func flushToDisk() async throws {
+        try await queue.flushToDisk()
+    }
+
+    /// Rehydrate events from disk. Returns the number of events loaded.
+    @discardableResult
+    public func rehydrate() async -> Int {
+        await queue.rehydrate()
     }
 
     public func flush() async {

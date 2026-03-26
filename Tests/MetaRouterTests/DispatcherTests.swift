@@ -379,6 +379,33 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(remaining, 0, "All events should drain after batch size recovery")
     }
 
+    func testFlushToDiskDelegatesToQueue() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DispatcherDiskTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        PersistentEventQueue.resetRehydrationGuard()
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        let dispatcher = Dispatcher(
+            options: options,
+            http: stub,
+            breaker: CircuitBreaker(),
+            persistentQueue: PersistentEventQueue(
+                diskStorage: DiskStorage(baseDirectory: tempDir),
+                maxEventCount: 100
+            )
+        )
+
+        await dispatcher.offer(makeTestEvent(messageId: "disk-test"))
+        try await dispatcher.flushToDisk()
+
+        let diskStorage = DiskStorage(baseDirectory: tempDir)
+        let snapshot = await diskStorage.read()
+        XCTAssertEqual(snapshot?.events.count, 1)
+        XCTAssertEqual(snapshot?.events[0].messageId, "disk-test")
+    }
+
     func testAutoFlushTriggersAtThreshold() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
