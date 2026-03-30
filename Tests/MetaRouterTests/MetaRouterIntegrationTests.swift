@@ -20,15 +20,15 @@ final class MetaRouterIntegrationTests: XCTestCase {
     
     func testCompleteAnalyticsWorkflow() async {
         let options = TestDataFactory.makeInitOptions()
-        
-        // Initialize the analytics client
-        let client = MetaRouter.Analytics.initialize(with: options)
+
+        // Initialize the analytics client (wait for full binding)
+        let client = await MetaRouter.Analytics.initializeAndWait(with: options)
         XCTAssertNotNil(client)
-        
+
         // Enable debug logging
         MetaRouter.Analytics.setDebugLogging(true)
         client.enableDebugLogging()
-        
+
         // Perform various analytics operations
         client.track("app_opened", properties: nil)
         client.identify("user123", traits: TestDataFactory.makeTraits())
@@ -36,13 +36,10 @@ final class MetaRouterIntegrationTests: XCTestCase {
         client.screen("Home Screen", properties: nil)
         client.page("Landing Page", properties: nil)
         client.alias("new_user_id")
-        
+
         // Test utility methods
         client.flush()
-        
-        // Wait for client to fully initialize
-        _ = await TestUtilities.waitFor(timeout: 0.5) { true }
-        
+
         let debugInfo = await client.getDebugInfo()
         if case .string(let writeKey) = debugInfo["writeKey"] {
             XCTAssertTrue(writeKey.contains("***"), "writeKey should be masked, got: \(writeKey)")
