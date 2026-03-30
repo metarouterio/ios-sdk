@@ -238,10 +238,7 @@ public actor Dispatcher {
                 
                 await handleResponse(resp, originalBatch: batch)
             } catch {
-                Logger.warn(
-                    "API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry",
-                    writeKey: options.writeKey,
-                    host: options.ingestionHost.absoluteString)
+                Logger.warn("API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry")
                 breaker.onFailure()
                 await queue.requeueToFront(batch)
                 await scheduleRetry(afterMs: breaker.beforeRequest())
