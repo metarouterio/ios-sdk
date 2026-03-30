@@ -126,14 +126,14 @@ public actor Dispatcher {
         guard !isFlushing else { return }
         guard await queue.count > 0 else { return }
         isFlushing = true
-        defer {
-            isFlushing = false
+        defer { isFlushing = false }
+        await processUntilEmpty()
+        if await queue.count == 0 {
             Logger.log(
                 "Flush completed successfully",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
         }
-        await processUntilEmpty()
     }
 
     public func startFlushLoop(intervalSeconds: Int = 10) {
@@ -238,8 +238,8 @@ public actor Dispatcher {
                 
                 await handleResponse(resp, originalBatch: batch)
             } catch {
-                Logger.log(
-                    "API call failed: \(error.localizedDescription)",
+                Logger.warn(
+                    "API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry",
                     writeKey: options.writeKey,
                     host: options.ingestionHost.absoluteString)
                 breaker.onFailure()
@@ -263,6 +263,7 @@ public actor Dispatcher {
             breaker.onFailure()
             await queue.requeueToFront(originalBatch)
             let delay = http.parseRetryAfterMs(from: resp.headers) ?? breaker.beforeRequest()
+            Logger.warn("Server error \(resp.statusCode), will retry \(originalBatch.count) event(s) in \(delay)ms")
             await scheduleRetry(afterMs: max(100, delay))
         case 429:
             breaker.onFailure()
@@ -270,6 +271,7 @@ public actor Dispatcher {
             let headerDelay = http.parseRetryAfterMs(from: resp.headers)
             let cbDelay = breaker.beforeRequest()
             let delay = max(1000, max(headerDelay ?? 0, cbDelay))
+            Logger.warn("Rate limited (429), will retry \(originalBatch.count) event(s) in \(delay)ms")
             await scheduleRetry(afterMs: delay)
         case 413:
             breaker.onNonRetryable()
