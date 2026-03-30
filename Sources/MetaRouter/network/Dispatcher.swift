@@ -124,8 +124,9 @@ public actor Dispatcher {
 
     public func flush() async {
         guard !isFlushing else { return }
+        guard await queue.count > 0 else { return }
         isFlushing = true
-        defer { 
+        defer {
             isFlushing = false
             Logger.log(
                 "Flush completed successfully",
