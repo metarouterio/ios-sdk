@@ -384,7 +384,7 @@ final class DispatcherTests: XCTestCase {
             .appendingPathComponent("DispatcherDiskTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        PersistentEventQueue.resetRehydrationGuard()
+
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
         let dispatcher = Dispatcher(

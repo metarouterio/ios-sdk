@@ -7,7 +7,6 @@ final class PersistentEventQueueTests: XCTestCase {
     override func setUp() async throws {
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PersistentQueueTests-\(UUID().uuidString)")
-        PersistentEventQueue.resetRehydrationGuard()
     }
 
     override func tearDown() async throws {
@@ -134,32 +133,22 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(drained[1].messageId, "disk2")
     }
 
-    func testRehydrateOnlyHappensOnce() async throws {
+    func testRehydrateIsIdempotentViaDiskDeletion() async throws {
         let diskStorage = DiskStorage(baseDirectory: tempDir)
         let snapshot = QueueSnapshot(events: [makeTestEvent(messageId: "disk1")])
         try await diskStorage.write(snapshot)
 
-        let queue1 = PersistentEventQueue(
+        let queue = PersistentEventQueue(
             diskStorage: DiskStorage(baseDirectory: tempDir),
             maxEventCount: 2000,
             maxSizeBytes: 5_000_000
         )
-        let count1 = await queue1.rehydrate()
+        let count1 = await queue.rehydrate()
         XCTAssertEqual(count1, 1)
 
-        // Write new data to disk for second queue
-        try await diskStorage.write(QueueSnapshot(events: [makeTestEvent(messageId: "disk2")]))
-
-        let queue2 = PersistentEventQueue(
-            diskStorage: DiskStorage(baseDirectory: tempDir),
-            maxEventCount: 2000,
-            maxSizeBytes: 5_000_000
-        )
-        let count2 = await queue2.rehydrate()
+        // Second rehydrate is a no-op because disk file was deleted
+        let count2 = await queue.rehydrate()
         XCTAssertEqual(count2, 0)
-
-        let q2Count = await queue2.count
-        XCTAssertEqual(q2Count, 0)
     }
 
     func testRehydrateEnforcesCapacity() async throws {
@@ -262,6 +251,79 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(drained.map(\.messageId), ["e1", "e2", "e3"])
     }
 
+    // MARK: - TTL (7-day expiry)
+
+    func testRehydrateDropsEventsOlderThan7Days() async throws {
+        let now = Date()
+        let eightDaysAgo = now.addingTimeInterval(-8 * 24 * 60 * 60)
+        let sixDaysAgo = now.addingTimeInterval(-6 * 24 * 60 * 60)
+
+        let diskStorage = DiskStorage(baseDirectory: tempDir)
+        let snapshot = QueueSnapshot(events: [
+            makeTestEvent(messageId: "old", timestamp: iso8601(eightDaysAgo)),
+            makeTestEvent(messageId: "recent", timestamp: iso8601(sixDaysAgo)),
+            makeTestEvent(messageId: "fresh", timestamp: iso8601(now)),
+        ])
+        try await diskStorage.write(snapshot)
+
+        let queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+        let rehydrated = await queue.rehydrate()
+
+        XCTAssertEqual(rehydrated, 2)
+        let drained = await queue.drain(max: 10)
+        XCTAssertEqual(drained.map(\.messageId), ["recent", "fresh"])
+    }
+
+    func testRehydrateKeepsEventsWithUnparseableTimestamp() async throws {
+        let eightDaysAgo = Date().addingTimeInterval(-8 * 24 * 60 * 60)
+
+        let diskStorage = DiskStorage(baseDirectory: tempDir)
+        let snapshot = QueueSnapshot(events: [
+            makeTestEvent(messageId: "unparseable", timestamp: "not-a-date"),
+            makeTestEvent(messageId: "old", timestamp: iso8601(eightDaysAgo)),
+        ])
+        try await diskStorage.write(snapshot)
+
+        let queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+        let rehydrated = await queue.rehydrate()
+
+        // Unparseable kept (fail-open), old one dropped
+        XCTAssertEqual(rehydrated, 1)
+        let drained = await queue.drain(max: 10)
+        XCTAssertEqual(drained[0].messageId, "unparseable")
+    }
+
+    func testRehydrateDropsAllExpiredEvents() async throws {
+        let eightDaysAgo = Date().addingTimeInterval(-8 * 24 * 60 * 60)
+        let tenDaysAgo = Date().addingTimeInterval(-10 * 24 * 60 * 60)
+
+        let diskStorage = DiskStorage(baseDirectory: tempDir)
+        let snapshot = QueueSnapshot(events: [
+            makeTestEvent(messageId: "e1", timestamp: iso8601(eightDaysAgo)),
+            makeTestEvent(messageId: "e2", timestamp: iso8601(tenDaysAgo)),
+        ])
+        try await diskStorage.write(snapshot)
+
+        let queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000,
+            maxSizeBytes: 5_000_000
+        )
+        let rehydrated = await queue.rehydrate()
+
+        XCTAssertEqual(rehydrated, 0)
+        let count = await queue.count
+        XCTAssertEqual(count, 0)
+    }
+
     // MARK: - clear
 
     func testClear() async throws {
@@ -303,7 +365,7 @@ final class PersistentEventQueueTests: XCTestCase {
         try await queue1.flushToDisk()
 
         // Simulate new process
-        PersistentEventQueue.resetRehydrationGuard()
+
 
         // Phase 2: Create new queue and rehydrate
         let queue2 = PersistentEventQueue(
@@ -335,7 +397,7 @@ final class PersistentEventQueueTests: XCTestCase {
         _ = await queue.drain(max: 2) // removes e0, e1
         try await queue.flushToDisk()
 
-        PersistentEventQueue.resetRehydrationGuard()
+
 
         let queue2 = PersistentEventQueue(
             diskStorage: DiskStorage(baseDirectory: tempDir),
@@ -369,7 +431,7 @@ final class PersistentEventQueueTests: XCTestCase {
         await queue.enqueue(makeTestEvent(messageId: "batch2-e1"))
         try await queue.flushToDisk()
 
-        PersistentEventQueue.resetRehydrationGuard()
+
 
         let queue2 = PersistentEventQueue(
             diskStorage: DiskStorage(baseDirectory: tempDir),
@@ -388,7 +450,7 @@ final class PersistentEventQueueTests: XCTestCase {
 
 // MARK: - Test Helper
 
-private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
+private func makeTestEvent(messageId: String = "mid", timestamp: String = "now") -> EnrichedEventPayload {
     let ctx = EventContext(
         app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
         device: DeviceContext(manufacturer: "a", model: "m", name: "n", type: "t"),
@@ -402,6 +464,10 @@ private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
     return EnrichedEventPayload(
         type: "track", event: "ev", userId: nil, anonymousId: "anon",
         properties: nil, traits: nil, integrations: nil,
-        timestamp: "now", writeKey: "wk", messageId: messageId, context: ctx
+        timestamp: timestamp, writeKey: "wk", messageId: messageId, context: ctx
     )
+}
+
+private func iso8601(_ date: Date) -> String {
+    ISO8601DateFormatter().string(from: date)
 }

@@ -5,24 +5,15 @@ import Foundation
 /// - `enqueue()` writes to memory only (no disk I/O)
 /// - `drain()` reads from memory only (no disk I/O)
 /// - `flushToDisk()` snapshots current memory state to disk (full overwrite)
-/// - `rehydrate()` loads events from disk once per process lifetime
+/// - `rehydrate()` loads events from disk (idempotent — disk file deleted after load)
 ///
 /// Capacity: single shared cap — count OR bytes, whichever first. Overflow: drop oldest.
 public actor PersistentEventQueue {
 
-    // MARK: - Process-level rehydration guard
-
-    /// Ensures rehydration happens at most once per process lifetime.
-    /// nonisolated(unsafe) is acceptable because it's only toggled once (false->true)
-    /// and the worst case of a race is a redundant no-op rehydration attempt.
-    private nonisolated(unsafe) static var hasRehydrated = false
-
-    /// Reset for testing only.
-    public static func resetRehydrationGuard() {
-        hasRehydrated = false
-    }
-
     // MARK: - Configuration
+
+    /// Events older than this are dropped during rehydration.
+    static let eventTTL: TimeInterval = 7 * 24 * 60 * 60 // 7 days
 
     private let maxEventCount: Int
     private let maxSizeBytes: Int
@@ -109,22 +100,28 @@ public actor PersistentEventQueue {
         try await diskStorage.write(snapshot)
     }
 
-    /// Rehydrate events from disk into memory. Happens at most once per process lifetime.
+    /// Rehydrate events from disk into memory.
+    /// Idempotent — the disk file is deleted after a successful load, so subsequent calls are no-ops.
+    /// Drops events older than `eventTTL` (7 days).
     /// Returns the number of events loaded.
     @discardableResult
     public func rehydrate() async -> Int {
-        guard !Self.hasRehydrated else {
-            Logger.log("Skipping rehydration — already rehydrated this process")
-            return 0
-        }
-        Self.hasRehydrated = true
-
         guard let snapshot = await diskStorage.read() else {
             Logger.log("No queue snapshot found on disk — nothing to rehydrate")
             return 0
         }
 
-        var events = snapshot.events
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        var events = snapshot.events.filter { event in
+            guard let ts = iso.date(from: event.timestamp) else { return true }
+            return now.timeIntervalSince(ts) <= Self.eventTTL
+        }
+
+        let expiredCount = snapshot.events.count - events.count
+        if expiredCount > 0 {
+            Logger.warn("Rehydration: dropped \(expiredCount) event(s) older than 7 days")
+        }
 
         // Enforce capacity: keep newest, drop oldest
         if events.count > maxEventCount {
