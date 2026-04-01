@@ -120,6 +120,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                            host: self.options.ingestionHost.absoluteString)
             }
 
+            // Flush rehydrated events immediately — they've been waiting on disk
+            if rehydratedCount > 0 {
+                await self.dispatcher.flush()
+            }
+
             await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
             self.lifecycleState = .ready
             Logger.log("Analytics client initialization completed successfully",
