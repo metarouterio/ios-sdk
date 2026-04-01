@@ -137,7 +137,9 @@ public actor Dispatcher {
     }
 
     public func startFlushLoop(intervalSeconds: Int = 10) {
-        stopFlushLoop()
+        // If already running, don't restart — avoids cancelling in-flight requests
+        if flushTimerTask != nil { return }
+
         let interval = max(1, intervalSeconds)
         
         Logger.log(
