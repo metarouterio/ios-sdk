@@ -238,9 +238,9 @@ public actor Dispatcher {
                 
                 await handleResponse(resp, originalBatch: batch)
             } catch {
-                Logger.warn("API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry")
                 breaker.onFailure()
                 await queue.requeueToFront(batch)
+                Logger.warn("API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry")
                 await scheduleRetry(afterMs: breaker.beforeRequest())
                 return
             }

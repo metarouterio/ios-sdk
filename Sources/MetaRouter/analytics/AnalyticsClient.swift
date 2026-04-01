@@ -75,7 +75,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
         self.lifecycle = AppLifecycleObserver(
             onForeground: { [weak self] in
-                guard let self else { return }
+                guard let self, self.lifecycleState == .ready else { return }
                 Task { [weak self] in
                     guard let self else { return }
                     await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
