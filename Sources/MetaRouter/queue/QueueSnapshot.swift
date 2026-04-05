@@ -4,6 +4,7 @@ import Foundation
 /// Version 1 stores events as a flat JSON array of EnrichedEventPayload.
 public struct QueueSnapshot: Sendable {
     public static let currentVersion = 1
+    private static let jsonEncoder = JSONEncoder()
 
     public let version: Int
     public let events: [EnrichedEventPayload]
@@ -16,7 +17,7 @@ public struct QueueSnapshot: Sendable {
     /// Estimated serialized size in bytes.
     /// Called during threshold checks, not on every enqueue.
     public var estimatedSizeBytes: Int {
-        guard let data = try? JSONEncoder().encode(self) else { return 0 }
+        guard let data = try? Self.jsonEncoder.encode(self) else { return 0 }
         return data.count
     }
 }

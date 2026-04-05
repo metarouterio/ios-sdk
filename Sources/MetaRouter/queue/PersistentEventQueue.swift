@@ -10,6 +10,7 @@ import Foundation
 /// Capacity: single shared cap — count OR bytes, whichever first. Overflow: drop oldest.
 public actor PersistentEventQueue {
 
+    private static let jsonEncoder = JSONEncoder()
 
     /// Events older than this are dropped during rehydration.
     static let eventTTL: TimeInterval = 7 * 24 * 60 * 60 // 7 days
@@ -168,8 +169,6 @@ public actor PersistentEventQueue {
         }
         return all
     }
-
-    private static let jsonEncoder = JSONEncoder()
 
     /// Fast per-event size estimate. Encodes once per event (at enqueue time only),
     /// not the entire queue on every threshold check.

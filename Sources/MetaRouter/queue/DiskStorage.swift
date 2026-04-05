@@ -13,6 +13,9 @@ public actor DiskStorage {
     private static let directoryName = "metarouter/disk-queue"
     private static let fileName = "queue.v1.json"
 
+    private static let jsonEncoder = JSONEncoder()
+    private static let jsonDecoder = JSONDecoder()
+
     private let baseDirectory: URL
     private let filePath: URL
 
@@ -54,7 +57,7 @@ public actor DiskStorage {
         resourceValues.isExcludedFromBackup = true
         try dir.setResourceValues(resourceValues)
 
-        let data = try JSONEncoder().encode(snapshot)
+        let data = try Self.jsonEncoder.encode(snapshot)
         try data.write(to: filePath, options: .atomic)
 
         Logger.log("Queue snapshot written to disk: \(snapshot.events.count) events, \(data.count) bytes")
@@ -70,7 +73,7 @@ public actor DiskStorage {
 
         do {
             let data = try Data(contentsOf: filePath)
-            let snapshot = try JSONDecoder().decode(QueueSnapshot.self, from: data)
+            let snapshot = try Self.jsonDecoder.decode(QueueSnapshot.self, from: data)
             Logger.log("Queue snapshot read from disk: \(snapshot.events.count) events, \(data.count) bytes")
             return snapshot
         } catch {
