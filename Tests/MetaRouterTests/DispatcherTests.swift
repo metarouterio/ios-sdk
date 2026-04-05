@@ -406,6 +406,145 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(snapshot?.events[0].messageId, "disk-test")
     }
 
+    // MARK: - Rehydration + Multi-Batch Flush Tests
+
+    func testRehydratedEventsFlushInMultipleBatches() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RehydrationBatchTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Seed disk with 250 events
+        let diskStorage = DiskStorage(baseDirectory: tempDir)
+        let events = (0..<250).map { makeTestEvent(messageId: "rehydrated-\($0)") }
+        let snapshot = QueueSnapshot(events: events)
+        try await diskStorage.write(snapshot)
+
+        let recorder = BatchRecordingNetworking()
+        let dispatcher = Dispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: recorder,
+            breaker: CircuitBreaker(),
+            persistentQueue: PersistentEventQueue(
+                diskStorage: DiskStorage(baseDirectory: tempDir),
+                maxEventCount: 2000
+            ),
+            config: Dispatcher.Config(initialMaxBatchSize: 100)
+        )
+
+        let rehydrated = await dispatcher.rehydrate()
+        XCTAssertEqual(rehydrated, 250)
+
+        await dispatcher.flush()
+
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "All rehydrated events should be drained")
+        XCTAssertEqual(recorder.callCount, 3, "250 events with batchSize=100 should take 3 API calls")
+
+        let batchSizes = recorder.batchSizes
+        XCTAssertEqual(batchSizes, [100, 100, 50], "Batches should be 100, 100, 50")
+    }
+
+    func testRehydratedEventsPlusNewEventsAllDrainInSingleFlush() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RehydrationPlusNewTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Seed disk with 5 events
+        let diskStorage = DiskStorage(baseDirectory: tempDir)
+        let diskEvents = (0..<5).map { makeTestEvent(messageId: "rehydrated-\($0)") }
+        try await diskStorage.write(QueueSnapshot(events: diskEvents))
+
+        let recorder = BatchRecordingNetworking()
+        let dispatcher = Dispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: recorder,
+            breaker: CircuitBreaker(),
+            persistentQueue: PersistentEventQueue(
+                diskStorage: DiskStorage(baseDirectory: tempDir),
+                maxEventCount: 2000
+            ),
+            config: Dispatcher.Config(initialMaxBatchSize: 100)
+        )
+
+        let rehydrated = await dispatcher.rehydrate()
+        XCTAssertEqual(rehydrated, 5)
+
+        // Add new events after rehydration (before flush)
+        for i in 0..<3 {
+            await dispatcher.offer(makeTestEvent(messageId: "new-\(i)"))
+        }
+
+        await dispatcher.flush()
+
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "All events (rehydrated + new) should be drained")
+        XCTAssertEqual(recorder.callCount, 1, "8 events should fit in a single batch")
+
+        let batchSizes = recorder.batchSizes
+        XCTAssertEqual(batchSizes, [8], "All 8 events should be in one batch")
+    }
+
+    func testRehydrationOverCapacityDropsOldestAndFlushesRemainder() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RehydrationOverCapTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Seed disk with 150 events, but queue capacity is only 50
+        let diskStorage = DiskStorage(baseDirectory: tempDir)
+        let events = (0..<150).map { makeTestEvent(messageId: "evt-\($0)") }
+        try await diskStorage.write(QueueSnapshot(events: events))
+
+        let recorder = BatchRecordingNetworking()
+        let dispatcher = Dispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: recorder,
+            breaker: CircuitBreaker(),
+            persistentQueue: PersistentEventQueue(
+                diskStorage: DiskStorage(baseDirectory: tempDir),
+                maxEventCount: 50
+            ),
+            config: Dispatcher.Config(initialMaxBatchSize: 25)
+        )
+
+        let rehydrated = await dispatcher.rehydrate()
+        // Should cap at 50, dropping the 100 oldest
+        XCTAssertEqual(rehydrated, 50, "Rehydration should cap at maxEventCount")
+
+        await dispatcher.flush()
+
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "All capped events should be drained")
+        XCTAssertEqual(recorder.callCount, 2, "50 events with batchSize=25 should take 2 API calls")
+        XCTAssertEqual(recorder.batchSizes, [25, 25])
+    }
+
+    func testProcessUntilEmptyDrainsAcrossBatchBoundary() async throws {
+        // Verifies the while-loop in processUntilEmpty continues
+        // when events exceed maxBatchSize without rehydration
+        let options = TestDataFactory.makeInitOptions()
+        let recorder = BatchRecordingNetworking()
+        let dispatcher = Dispatcher(
+            options: options,
+            http: recorder,
+            breaker: CircuitBreaker(),
+            queueCapacity: 2000,
+            config: Dispatcher.Config(initialMaxBatchSize: 3)
+        )
+
+        for i in 0..<7 {
+            await dispatcher.offer(makeTestEvent(messageId: "msg-\(i)"))
+        }
+
+        await dispatcher.flush()
+
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "All events should be drained across multiple batches")
+        XCTAssertEqual(recorder.callCount, 3, "7 events with batchSize=3 should take 3 API calls")
+        XCTAssertEqual(recorder.batchSizes, [3, 3, 1])
+    }
+
+    // MARK: - Auto-Flush Tests
+
     func testAutoFlushTriggersAtThreshold() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
@@ -430,6 +569,43 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(remaining, 0, "Auto-flush should drain queue at threshold")
         XCTAssertGreaterThanOrEqual(stub.callCount, 1, "At least one POST should have been made")
     }
+}
+
+// MARK: - BatchRecordingNetworking
+
+/// Records the number of events in each batch sent, for asserting multi-batch flush behavior.
+private final class BatchRecordingNetworking: Networking, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _batchSizes: [Int] = []
+    private var _callCount = 0
+
+    var callCount: Int { lock.withLock { _callCount } }
+    var batchSizes: [Int] { lock.withLock { _batchSizes } }
+
+    func postJSON(url: URL, body: Data, timeoutMs: Int, additionalHeaders: [String: String]?) async throws -> NetworkResponse {
+        // Decode the body to count events in the batch
+        let batchSize: Int
+        if let payload = try? JSONDecoder().decode(BatchPayload.self, from: body) {
+            batchSize = payload.batch.count
+        } else {
+            batchSize = 0
+        }
+
+        lock.withLock {
+            _callCount += 1
+            _batchSizes.append(batchSize)
+        }
+
+        return NetworkResponse(statusCode: 200, headers: [:], body: Data())
+    }
+
+    func parseRetryAfterMs(from headers: [String: String]) -> Int? { nil }
+
+    private struct BatchPayload: Decodable {
+        let batch: [AnyCodableElement]
+    }
+
+    private struct AnyCodableElement: Decodable {}
 }
 
 // MARK: - CallSequencer
