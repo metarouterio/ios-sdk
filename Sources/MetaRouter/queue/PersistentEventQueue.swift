@@ -45,7 +45,9 @@ public actor PersistentEventQueue {
     // MARK: - Memory-only operations (hot path)
 
     /// Enqueue an event to the in-memory buffer. No disk I/O.
-    public func enqueue(_ event: EnrichedEventPayload) async {
+    /// Returns the queue count after insertion (atomic with the enqueue).
+    @discardableResult
+    public func enqueue(_ event: EnrichedEventPayload) async -> Int {
         await memoryQueue.enqueue(event)
     }
 

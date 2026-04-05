@@ -14,12 +14,16 @@ public actor EventQueue<Event: Sendable> {
     public var count: Int { buffer.count }
 
     /// Enqueue an event; enforces capacity using configured overflow behavior
-    public func enqueue(_ event: Event) {
+    /// Enqueue an event; enforces capacity using configured overflow behavior.
+    /// Returns the queue count after insertion (atomic with the enqueue).
+    @discardableResult
+    public func enqueue(_ event: Event) -> Int {
         if buffer.count >= capacity {
             if !buffer.isEmpty { _ = buffer.removeFirst() }
             Logger.warn("Queue cap \(capacity) reached — dropped oldest event")
         }
         buffer.append(event)
+        return buffer.count
     }
 
     /// Drain up to max elements from the front (FIFO). Returns drained events.

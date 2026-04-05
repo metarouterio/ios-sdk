@@ -88,9 +88,7 @@ public actor Dispatcher {
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString)
 
-        await queue.enqueue(event)
-
-        let queueLength = await queue.count
+        let queueLength = await queue.enqueue(event)
         Logger.log(
             "Event enqueued, queue length: \(queueLength)",
             writeKey: options.writeKey,
@@ -304,17 +302,14 @@ public actor Dispatcher {
 
     private func scheduleRetry(afterMs: Int) async {
         if afterMs <= 0 {
-            await processUntilEmpty()
+            await flush()
             return
         }
-        // Replace (not cancel) the retry task — the old task is either done
-        // or is the current task calling this. Assigning a new Task to
-        // retryTimerTask lets the old reference drop without cancellation.
         retryTimerTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(afterMs) * 1_000_000)
             guard !Task.isCancelled else { return }
-            await self.processUntilEmpty()
+            await self.flush()
         }
     }
 }
