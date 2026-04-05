@@ -22,36 +22,53 @@ public enum Logger {
     
     /**
      * Logs a message to the console if debug logging is enabled.
+     * Uses @autoclosure so string interpolation at the call site is deferred until
+     * after the enabled check — avoids expensive work when logging is off.
+     */
+    public static func log(_ message: @autoclosure () -> String) {
+        lock.lock()
+        let isEnabled = enabled
+        lock.unlock()
+
+        guard isEnabled else { return }
+
+        print("[MetaRouter]", message())
+    }
+
+    /**
+     * Logs multiple items to the console if debug logging is enabled.
      */
     public static func log(_ items: Any...) {
         lock.lock()
         let isEnabled = enabled
         lock.unlock()
-        
+
         guard isEnabled else { return }
-        
+
         let message = items.map { "\($0)" }.joined(separator: " ")
         print("[MetaRouter]", message)
     }
     
     /**
      * Logs a contextual message with writeKey and host info if debug logging is enabled.
+     * Uses @autoclosure so string interpolation at the call site is deferred until
+     * after the enabled check — avoids expensive work (e.g. cleanDescription) when logging is off.
      */
-    public static func log(_ message: String, writeKey: String? = nil, host: String? = nil) {
+    public static func log(_ message: @autoclosure () -> String, writeKey: String? = nil, host: String? = nil) {
         lock.lock()
         let isEnabled = enabled
         lock.unlock()
-        
+
         guard isEnabled else { return }
-        
-        var contextualMessage = message
+
+        var contextualMessage = message()
         if let writeKey = writeKey {
             contextualMessage += ", writeKey=\(writeKey)"
         }
         if let host = host {
             contextualMessage += ", host=\(host)"
         }
-        
+
         print("[MetaRouter]", contextualMessage)
     }
     

@@ -19,6 +19,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 - [Compatibility](#-compatibility)
 - [Debugging](#debugging)
 - [Identity Persistence](#identity-persistence)
+- [Event Queue Persistence](#event-queue-persistence)
 - [Advertising ID (IDFA)](#advertising-id-idfa)
 - [Using the alias() Method](#using-the-alias-method)
 - [License](#license)
@@ -204,7 +205,7 @@ Calls to `track`, `identify`, etc. are **buffered in-memory** by the proxy and r
 
 **Proxy behavior (quick notes):**
 
-- Buffer is **in-memory only** (not persisted). Calls made before ready are lost if the process exits.
+- The proxy buffer is **in-memory only** (not persisted). Calls made before the client is ready are lost if the process exits. Once the client is initialized, events in the main queue are disk-backed (see [Event Queue Persistence](#event-queue-persistence)).
 - Ordering is preserved relative to other buffered calls; normal FIFO + batching applies after ready.
 - On fatal config errors (`401/403/404`), the client enters **disabled** state and drops subsequent calls.
 - `sentAt` is stamped when the batch is prepared for transmission (just before network send). If you need the original occurrence time, pass your own `timestamp` on each event.
@@ -251,6 +252,7 @@ await MetaRouter.Analytics.resetAndWait()
 - 🔄 **Reset Capability**: Easily reset analytics state for testing or logout scenarios
 - 🐛 **Debug Support**: Built-in debugging tools for troubleshooting
 - 💾 **Persistent Identity**: Anonymous ID and user identity stored in UserDefaults
+- 💿 **Disk-Backed Queue**: Events survive app termination and are rehydrated on next launch
 - 🔌 **Circuit Breaker**: Intelligent retry logic with exponential backoff
 - ⚡ **Batching**: Automatic event batching for network efficiency
 
@@ -583,8 +585,33 @@ All identity data is stored in **UserDefaults**, which provides:
 The SDK automatically handles app lifecycle events:
 
 - **App Foreground**: Starts periodic flush loop and immediately flushes any queued events
-- **App Background**: Flushes events, stops flush loop, and cancels any scheduled retries
+- **App Background**: Attempts a network flush first, then snapshots any remaining events to disk, stops flush loop, and cancels any scheduled retries
+- **App Termination**: Best-effort disk snapshot (not guaranteed — process may exit before completion)
 - **Identity Persistence**: Anonymous ID, user ID, group ID, and advertising ID are persisted across app launches
+
+### Event Queue Persistence
+
+Unsent events are automatically persisted to disk and recovered across app launches. This prevents event loss when the app is backgrounded, terminated, or encounters network issues.
+
+**How it works:**
+
+- Events are queued **in memory** during normal operation (no disk I/O on the hot path)
+- The in-memory queue is **snapshotted to disk** when:
+  - The app enters background (after attempting a network flush)
+  - The app is about to terminate (best-effort)
+  - The in-memory queue crosses a configurable flush threshold
+- On next launch, events are **rehydrated from disk** back into memory and sent normally
+- Events older than **7 days** are dropped during rehydration to prevent stale data from being sent after extended offline periods
+- The disk snapshot file is deleted after a successful rehydration to prevent stale reads
+
+**Storage details:**
+
+- Location: `~/Library/Application Support/metarouter/disk-queue/queue.v1.json`
+- Excluded from iCloud backup
+- Atomic writes (no partial corruption)
+- Resilient decoding: individual corrupt events are skipped rather than losing the entire snapshot
+
+**`sentAt` semantics:** `sentAt` is stamped when a batch is prepared for transmission (just before network send), not when the event was originally created. Events rehydrated from disk receive a fresh `sentAt` on their next send attempt. If you need the original occurrence time, rely on the `timestamp` field set at event creation.
 
 ## Using the alias() Method
 

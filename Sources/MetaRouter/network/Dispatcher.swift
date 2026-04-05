@@ -19,8 +19,11 @@ public actor Dispatcher {
         }
     }
 
+    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
+    private static let jsonEncoder = JSONEncoder()
+
     private let options: InitOptions
-    private let queue: EventQueue<EnrichedEventPayload>
+    private let queue: PersistentEventQueue
     private let http: Networking
     private let breaker: CircuitBreaker
     private var maxBatchSize: Int
@@ -32,6 +35,25 @@ public actor Dispatcher {
     private let config: Config
     private var tracingEnabled = false
 
+    /// Primary init accepting a PersistentEventQueue (used by AnalyticsClient).
+    public init(
+        options: InitOptions,
+        http: Networking = NetworkClient(),
+        breaker: CircuitBreaker = CircuitBreaker(),
+        persistentQueue: PersistentEventQueue,
+        config: Config = Config(),
+        onFatalConfigError: FatalConfigHandler? = nil
+    ) {
+        self.options = options
+        self.http = http
+        self.breaker = breaker
+        self.queue = persistentQueue
+        self.maxBatchSize = config.initialMaxBatchSize
+        self.config = config
+        self.onFatalConfigError = onFatalConfigError
+    }
+
+    /// Backward-compatible init (tests, simple usage). Creates an internal PersistentEventQueue.
     public init(
         options: InitOptions,
         http: Networking = NetworkClient(),
@@ -43,7 +65,11 @@ public actor Dispatcher {
         self.options = options
         self.http = http
         self.breaker = breaker
-        self.queue = EventQueue<EnrichedEventPayload>(capacity: queueCapacity)
+        self.queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("metarouter-noop-\(UUID().uuidString)")),
+            maxEventCount: queueCapacity
+        )
         self.maxBatchSize = config.initialMaxBatchSize
         self.config = config
         self.onFatalConfigError = onFatalConfigError
@@ -64,35 +90,57 @@ public actor Dispatcher {
             "Enqueuing event {\"messageId\": \"\(event.messageId)\", \"type\": \"\(event.type)\"}",
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString)
-        
-        await queue.enqueue(event)
-        
-        let queueLength = await queue.count
+
+        let queueLength = await queue.enqueue(event)
         Logger.log(
             "Event enqueued, queue length: \(queueLength)",
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString)
-        
+
+        // Check disk flush threshold
+        if await queue.needsFlushToDisk {
+            do {
+                try await queue.flushToDisk()
+                Logger.log("Auto disk flush triggered (threshold reached)")
+            } catch {
+                Logger.warn("Auto disk flush failed: \(error)")
+            }
+        }
+
         if queueLength >= config.autoFlushThreshold {
             await flush()
         }
     }
 
+    /// Flush current memory state to disk.
+    public func flushToDisk() async throws {
+        try await queue.flushToDisk()
+    }
+
+    /// Rehydrate events from disk. Returns the number of events loaded.
+    @discardableResult
+    public func rehydrate() async -> Int {
+        await queue.rehydrate()
+    }
+
     public func flush() async {
         guard !isFlushing else { return }
+        guard await queue.count > 0 else { return }
         isFlushing = true
-        defer { 
-            isFlushing = false
+        defer { isFlushing = false }
+        await processUntilEmpty()
+        if await queue.count == 0 {
             Logger.log(
                 "Flush completed successfully",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
         }
-        await processUntilEmpty()
     }
 
     public func startFlushLoop(intervalSeconds: Int = 10) {
-        stopFlushLoop()
+        // If already running, don't restart — avoids cancelling in-flight requests
+        if flushTimerTask != nil { return }
+
         let interval = max(1, intervalSeconds)
         
         Logger.log(
@@ -153,7 +201,7 @@ public actor Dispatcher {
             guard !batch.isEmpty else { return }
             
             // Add sentAt timestamp to all events in batch
-            let sentAt = ISO8601DateFormatter().string(from: Date())
+            let sentAt = Self.isoFormatter.string(from: Date())
             for i in 0..<batch.count {
                 batch[i].sentAt = sentAt
             }
@@ -161,10 +209,10 @@ public actor Dispatcher {
             let payload = ["batch": batch]
             let body: Data
             do {
-                body = try JSONEncoder().encode(payload)
+                body = try Self.jsonEncoder.encode(payload)
             } catch {
                 Logger.error("Failed to encode batch of \(batch.count) events: \(error)")
-                await handleNonRetryableDrop(count: batch.count)
+                // Events already drained from queue — nothing to drop or requeue
                 continue
             }
 
@@ -193,12 +241,9 @@ public actor Dispatcher {
                 
                 await handleResponse(resp, originalBatch: batch)
             } catch {
-                Logger.log(
-                    "API call failed: \(error.localizedDescription)",
-                    writeKey: options.writeKey,
-                    host: options.ingestionHost.absoluteString)
                 breaker.onFailure()
                 await queue.requeueToFront(batch)
+                Logger.warn("API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry")
                 await scheduleRetry(afterMs: breaker.beforeRequest())
                 return
             }
@@ -218,6 +263,7 @@ public actor Dispatcher {
             breaker.onFailure()
             await queue.requeueToFront(originalBatch)
             let delay = http.parseRetryAfterMs(from: resp.headers) ?? breaker.beforeRequest()
+            Logger.warn("Server error \(resp.statusCode), will retry \(originalBatch.count) event(s) in \(delay)ms")
             await scheduleRetry(afterMs: max(100, delay))
         case 429:
             breaker.onFailure()
@@ -225,6 +271,7 @@ public actor Dispatcher {
             let headerDelay = http.parseRetryAfterMs(from: resp.headers)
             let cbDelay = breaker.beforeRequest()
             let delay = max(1000, max(headerDelay ?? 0, cbDelay))
+            Logger.warn("Rate limited (429), will retry \(originalBatch.count) event(s) in \(delay)ms")
             await scheduleRetry(afterMs: delay)
         case 413:
             breaker.onNonRetryable()
@@ -252,21 +299,17 @@ public actor Dispatcher {
         }
     }
 
-    private func handleNonRetryableDrop(count: Int) async {
-        await queue.dropFront(count)
-    }
-
     private func scheduleRetry(afterMs: Int) async {
-        retryTimerTask?.cancel()
         if afterMs <= 0 {
-            // Immediate
-            await processUntilEmpty()
+            await flush()
             return
         }
+        retryTimerTask?.cancel()
         retryTimerTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(afterMs) * 1_000_000)
-            await self.processUntilEmpty()
+            guard !Task.isCancelled else { return }
+            await self.flush()
         }
     }
 }

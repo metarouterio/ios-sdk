@@ -29,6 +29,12 @@ public final class AppLifecycleObserver: @unchecked Sendable {
             name: UIApplication.didEnterBackgroundNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appWillTerminate),
+            name: UIApplication.willTerminateNotification,
+            object: nil
+        )
         #elseif canImport(AppKit)
         NotificationCenter.default.addObserver(
             self,
@@ -42,6 +48,12 @@ public final class AppLifecycleObserver: @unchecked Sendable {
             name: NSApplication.didResignActiveNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appWillTerminate),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
         #endif
     }
 
@@ -51,6 +63,16 @@ public final class AppLifecycleObserver: @unchecked Sendable {
 
     #if canImport(UIKit) || canImport(AppKit)
     @objc private func appDidBecomeActive() { onForeground() }
+
+    /// Best-effort flush on app termination. We cannot reliably await async work
+    /// because the process is about to exit. Task.detached gives maximum chance
+    /// of execution, but this may not complete on force-kill or OOM-kill.
+    @objc private func appWillTerminate() {
+        Task.detached { [onBackgroundAsync] in
+            await onBackgroundAsync()
+        }
+    }
+
     @MainActor @objc private func appDidEnterBackground() {
         #if canImport(UIKit)
         let endOnce = BackgroundTaskGuard()

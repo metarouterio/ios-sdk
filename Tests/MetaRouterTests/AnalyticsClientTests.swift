@@ -21,7 +21,6 @@ final class AnalyticsClientTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Initialization Tests
 
     func testClientInitialization() {
         XCTAssertNotNil(client)
@@ -34,10 +33,6 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertFalse(client1 === client2, "Each initialize call should create a new client")
     }
 
-
-    // TODO: Add tests for network calls
-
-    // MARK: - Track Tests
 
     func testTrackWithoutProperties() async {
         client.track("test_event", properties: nil)
@@ -82,7 +77,6 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertNotNil(info["queueLength"], "Queue should have received the event")
     }
 
-    // MARK: - Identity Tests
 
     func testIdentifyWithoutTraits() async {
         client.identify("user123", traits: nil)
@@ -133,7 +127,6 @@ final class AnalyticsClientTests: XCTestCase {
         }
     }
 
-    // MARK: - Group Tests
 
     func testGroupWithoutTraits() async {
         client.group("company123", traits: nil)
@@ -176,7 +169,6 @@ final class AnalyticsClientTests: XCTestCase {
         }
     }
 
-    // MARK: - Screen Tests
 
     func testScreenWithoutProperties() async {
         client.screen("Home Screen", properties: nil)
@@ -198,7 +190,6 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertNotNil(info["queueLength"], "Queue should have received the screen event")
     }
 
-    // MARK: - Page Tests
 
     func testPageWithoutProperties() async {
         client.page("Landing Page", properties: nil)
@@ -220,7 +211,6 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertNotNil(info["queueLength"], "Queue should have received the page event")
     }
 
-    // MARK: - Alias Tests
 
     func testAlias() async {
         client.alias("new_user_id")
@@ -230,7 +220,6 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertNotNil(info["queueLength"], "Queue should have received the alias event")
     }
 
-    // MARK: - Debug Logging Tests
 
     func testEnableDebugLogging() {
         client.enableDebugLogging()
@@ -278,7 +267,6 @@ final class AnalyticsClientTests: XCTestCase {
         }
     }
 
-    // MARK: - Utility Method Tests
 
     func testFlush() async {
         // Enqueue something first so flush has work to do
@@ -306,7 +294,6 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertNil(info["groupId"], "groupId should be cleared after reset")
     }
 
-    // MARK: - Thread Safety Tests
 
     func testConcurrentCalls() async {
         let expectation = expectation(description: "Concurrent calls completed")
@@ -325,7 +312,6 @@ final class AnalyticsClientTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 2.0)
     }
 
-    // MARK: - Error Handling Tests
 
     func testMethodsWithExtremeValues() async {
         // Test with very long strings
@@ -373,7 +359,6 @@ final class AnalyticsClientTests: XCTestCase {
         XCTAssertNotNil(info["queueLength"], "Queue should accept complex property payloads")
     }
 
-    // MARK: - Advertising ID Tests
 
     func testSetAdvertisingIdWithValidUUID() async {
         let validUUID = UUID().uuidString
@@ -533,7 +518,6 @@ final class AnalyticsClientTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 3.0)
     }
 
-    // MARK: - Tracing Tests
 
     func testSetTracingEnabled() async {
         client.setTracing(true)

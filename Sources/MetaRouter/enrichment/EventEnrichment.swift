@@ -3,6 +3,8 @@ import Foundation
 /// Service responsible for enriching events with context and metadata
 public final class EventEnrichmentService: Sendable {
 
+    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
+
     private let contextProvider: ContextProvider
     private let identityManager: IdentityManager
     private let writeKey: String
@@ -42,7 +44,7 @@ public final class EventEnrichmentService: Sendable {
         _ baseEvent: BaseEvent
     ) async -> EnrichedEventPayload {
         let identity = await identityManager.getIdentityInfo()
-        let timestamp = baseEvent.timestamp ?? ISO8601DateFormatter().string(from: Date())
+        let timestamp = baseEvent.timestamp ?? Self.isoFormatter.string(from: Date())
 
         let eventWithIdentity = EventWithIdentity(
             type: baseEvent.type,

@@ -23,7 +23,9 @@ public enum MetaRouter {
         Task {
             let real = AnalyticsClient.initialize(options: options)
             if await store.setIfNil(real) {
-                proxy.bind(real) 
+                proxy.bind(real)
+            } else {
+                Logger.warn("MetaRouter.Analytics.initialize() called more than once — subsequent calls are ignored. Use reset() first if you need to re-initialize.")
             }
         }
         return proxy
