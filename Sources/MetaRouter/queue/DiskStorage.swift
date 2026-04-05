@@ -34,9 +34,15 @@ public actor DiskStorage {
     }
 
     /// Write a snapshot to disk, fully overwriting any existing file.
+    /// If the snapshot contains no events, any existing file is deleted instead.
     /// Creates the directory if it does not exist.
     /// Uses atomic write to prevent partial-file corruption.
     public func write(_ snapshot: QueueSnapshot) throws {
+        guard !snapshot.events.isEmpty else {
+            delete()
+            return
+        }
+
         let fm = FileManager.default
 
         if !fm.fileExists(atPath: baseDirectory.path) {
