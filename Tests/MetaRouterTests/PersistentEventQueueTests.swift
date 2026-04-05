@@ -88,7 +88,7 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(snapshot?.events[0].messageId, "e2")
     }
 
-    func testFlushToDiskWithEmptyQueueWritesEmptySnapshot() async throws {
+    func testFlushToDiskWithEmptyQueueSkipsWrite() async throws {
         let queue = PersistentEventQueue(
             diskStorage: DiskStorage(baseDirectory: tempDir),
             maxEventCount: 2000,
@@ -99,8 +99,7 @@ final class PersistentEventQueueTests: XCTestCase {
 
         let diskStorage = DiskStorage(baseDirectory: tempDir)
         let snapshot = await diskStorage.read()
-        XCTAssertNotNil(snapshot)
-        XCTAssertEqual(snapshot?.events.count, 0)
+        XCTAssertNil(snapshot, "Empty queue should not write a snapshot to disk")
     }
 
 
