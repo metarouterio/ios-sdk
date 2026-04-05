@@ -439,7 +439,6 @@ final class IdentityManagerTests: XCTestCase {
         XCTAssertEqual(newUserId, "user-persistent")
     }
 
-    // MARK: - Advertising ID Tests
 
     func testSetAdvertisingId() async {
         await identityManager.initialize()
