@@ -24,6 +24,9 @@ public actor PersistentEventQueue {
 
     private let memoryQueue: EventQueue<EnrichedEventPayload>
     private let diskStorage: DiskStorage
+    /// Running estimate of serialized bytes in the queue. Updated incrementally
+    /// on enqueue/drain/requeue/clear to avoid re-encoding the entire queue on every offer().
+    private var estimatedBytes: Int = 0
 
     // MARK: - Init
 
@@ -48,27 +51,48 @@ public actor PersistentEventQueue {
     /// Returns the queue count after insertion (atomic with the enqueue).
     @discardableResult
     public func enqueue(_ event: EnrichedEventPayload) async -> Int {
-        await memoryQueue.enqueue(event)
+        let prevCount = await memoryQueue.count
+        let newCount = await memoryQueue.enqueue(event)
+        let eventSize = Self.estimateEventSize(event)
+        // If an overflow drop happened, approximate the dropped event as average size
+        if newCount <= prevCount, estimatedBytes > 0, prevCount > 0 {
+            estimatedBytes -= estimatedBytes / prevCount
+        }
+        estimatedBytes += eventSize
+        return newCount
     }
 
     /// Drain up to `max` events from the front of the in-memory buffer. No disk I/O.
     public func drain(max count: Int) async -> [EnrichedEventPayload] {
-        await memoryQueue.drain(max: count)
+        let events = await memoryQueue.drain(max: count)
+        for event in events {
+            estimatedBytes -= Self.estimateEventSize(event)
+        }
+        estimatedBytes = max(0, estimatedBytes)
+        return events
     }
 
     /// Requeue events at the front (used after retryable send failures).
     public func requeueToFront(_ events: [EnrichedEventPayload]) async {
         await memoryQueue.requeueToFront(events)
+        for event in events {
+            estimatedBytes += Self.estimateEventSize(event)
+        }
     }
 
     /// Drop current front batch without requeueing.
     public func dropFront(_ count: Int) async {
         await memoryQueue.dropFront(count)
+        // Conservative: we don't know exact sizes of dropped events, reset estimate
+        if await memoryQueue.count == 0 {
+            estimatedBytes = 0
+        }
     }
 
     /// Clear all events from memory AND delete the disk snapshot file.
     public func clear() async {
         await memoryQueue.clear()
+        estimatedBytes = 0
         await diskStorage.delete()
     }
 
@@ -80,15 +104,14 @@ public actor PersistentEventQueue {
     // MARK: - Flush threshold check
 
     /// Returns true if the in-memory buffer has reached the flush-to-disk threshold.
+    /// Uses a running byte estimate to avoid re-encoding the entire queue on every check.
     public var needsFlushToDisk: Bool {
         get async {
             let eventCount = await memoryQueue.count
             if eventCount >= flushThresholdCount {
                 return true
             }
-            let events = await peekAll()
-            let snapshot = QueueSnapshot(events: events)
-            return snapshot.estimatedSizeBytes >= flushThresholdBytes
+            return estimatedBytes >= flushThresholdBytes
         }
     }
 
@@ -134,6 +157,7 @@ public actor PersistentEventQueue {
 
         for event in events {
             await memoryQueue.enqueue(event)
+            estimatedBytes += Self.estimateEventSize(event)
         }
 
         // Delete disk file after successful load to prevent stale reads
@@ -152,5 +176,13 @@ public actor PersistentEventQueue {
             await memoryQueue.requeueToFront(all)
         }
         return all
+    }
+
+    private static let jsonEncoder = JSONEncoder()
+
+    /// Fast per-event size estimate. Encodes once per event (at enqueue time only),
+    /// not the entire queue on every threshold check.
+    private static func estimateEventSize(_ event: EnrichedEventPayload) -> Int {
+        (try? jsonEncoder.encode(event))?.count ?? 512
     }
 }

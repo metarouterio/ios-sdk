@@ -13,7 +13,6 @@ public actor EventQueue<Event: Sendable> {
 
     public var count: Int { buffer.count }
 
-    /// Enqueue an event; enforces capacity using configured overflow behavior
     /// Enqueue an event; enforces capacity using configured overflow behavior.
     /// Returns the queue count after insertion (atomic with the enqueue).
     @discardableResult

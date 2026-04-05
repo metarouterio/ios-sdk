@@ -19,6 +19,9 @@ public actor Dispatcher {
         }
     }
 
+    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
+    private static let jsonEncoder = JSONEncoder()
+
     private let options: InitOptions
     private let queue: PersistentEventQueue
     private let http: Networking
@@ -198,7 +201,7 @@ public actor Dispatcher {
             guard !batch.isEmpty else { return }
             
             // Add sentAt timestamp to all events in batch
-            let sentAt = ISO8601DateFormatter().string(from: Date())
+            let sentAt = Self.isoFormatter.string(from: Date())
             for i in 0..<batch.count {
                 batch[i].sentAt = sentAt
             }
@@ -206,10 +209,10 @@ public actor Dispatcher {
             let payload = ["batch": batch]
             let body: Data
             do {
-                body = try JSONEncoder().encode(payload)
+                body = try Self.jsonEncoder.encode(payload)
             } catch {
                 Logger.error("Failed to encode batch of \(batch.count) events: \(error)")
-                await handleNonRetryableDrop(count: batch.count)
+                // Events already drained from queue — nothing to drop or requeue
                 continue
             }
 
@@ -296,15 +299,12 @@ public actor Dispatcher {
         }
     }
 
-    private func handleNonRetryableDrop(count: Int) async {
-        await queue.dropFront(count)
-    }
-
     private func scheduleRetry(afterMs: Int) async {
         if afterMs <= 0 {
             await flush()
             return
         }
+        retryTimerTask?.cancel()
         retryTimerTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(afterMs) * 1_000_000)
