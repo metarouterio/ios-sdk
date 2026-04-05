@@ -49,7 +49,6 @@ public actor DiskStorage {
             try fm.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         }
 
-        // Mark directory as excluded from backup
         var dir = baseDirectory
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true

@@ -21,7 +21,6 @@ public struct QueueSnapshot: Sendable {
     }
 }
 
-// MARK: - Codable with resilient decoding
 
 extension QueueSnapshot: Codable {
     private enum CodingKeys: String, CodingKey {

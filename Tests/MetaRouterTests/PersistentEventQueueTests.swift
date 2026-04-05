@@ -13,7 +13,6 @@ final class PersistentEventQueueTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    // MARK: - enqueue is memory-only
 
     func testEnqueueWritesToMemoryOnly() async throws {
         let queue = PersistentEventQueue(
@@ -31,7 +30,6 @@ final class PersistentEventQueueTests: XCTestCase {
         ))
     }
 
-    // MARK: - drain is memory-only
 
     func testDrainReadsFromMemoryOnly() async throws {
         let queue = PersistentEventQueue(
@@ -51,7 +49,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(remaining, 1)
     }
 
-    // MARK: - flushToDisk writes current state
 
     func testFlushToDiskWritesCurrentMemoryState() async throws {
         let queue = PersistentEventQueue(
@@ -106,7 +103,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(snapshot?.events.count, 0)
     }
 
-    // MARK: - Rehydration
 
     func testRehydrateLoadsEventsFromDisk() async throws {
         let diskStorage = DiskStorage(baseDirectory: tempDir)
@@ -189,7 +185,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertFalse(fileExists, "Disk file should be deleted after rehydration")
     }
 
-    // MARK: - Capacity enforcement
 
     func testCapacityEnforcementDropsOldest() async throws {
         let queue = PersistentEventQueue(
@@ -211,7 +206,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(drained[2].messageId, "e4")
     }
 
-    // MARK: - Flush threshold
 
     func testFlushThresholdReachedByCount() async throws {
         let queue = PersistentEventQueue(
@@ -232,7 +226,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertTrue(needsFlush)
     }
 
-    // MARK: - requeueToFront
 
     func testRequeueToFront() async throws {
         let queue = PersistentEventQueue(
@@ -251,7 +244,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(drained.map(\.messageId), ["e1", "e2", "e3"])
     }
 
-    // MARK: - TTL (7-day expiry)
 
     func testRehydrateDropsEventsOlderThan7Days() async throws {
         let now = Date()
@@ -324,7 +316,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(count, 0)
     }
 
-    // MARK: - clear
 
     func testClear() async throws {
         let queue = PersistentEventQueue(
@@ -350,7 +341,6 @@ final class PersistentEventQueueTests: XCTestCase {
         ), "clear() must delete disk snapshot to prevent stale rehydration")
     }
 
-    // MARK: - Integration: Full Round-Trip
 
     func testFullRoundTrip_EnqueueFlushRehydrate() async throws {
         // Phase 1: Enqueue events and flush to disk
@@ -448,7 +438,6 @@ final class PersistentEventQueueTests: XCTestCase {
     }
 }
 
-// MARK: - Test Helper
 
 private func makeTestEvent(messageId: String = "mid", timestamp: String = "now") -> EnrichedEventPayload {
     let ctx = EventContext(

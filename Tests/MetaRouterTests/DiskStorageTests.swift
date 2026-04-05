@@ -111,7 +111,6 @@ final class DiskStorageTests: XCTestCase {
     }
 }
 
-// MARK: - Test Helper
 
 private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
     let ctx = EventContext(

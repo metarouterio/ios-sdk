@@ -1,7 +1,6 @@
 import XCTest
 @testable import MetaRouter
 
-// MARK: - Test Helpers
 
 private final class StatusHolder: @unchecked Sendable {
     private let lock = NSLock()
@@ -61,7 +60,6 @@ private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
     )
 }
 
-// MARK: - Existing Tests
 
 final class DispatcherTests: XCTestCase {
     func testFlushSuccessRemovesBatch() async throws {
@@ -151,7 +149,6 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(stub.lastHeaders?["Trace"], "true")
     }
 
-    // MARK: - HTTP Response Handling Tests
 
     func testFatalConfig403ClearsQueue() async {
         let options = TestDataFactory.makeInitOptions()
@@ -406,7 +403,6 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(snapshot?.events[0].messageId, "disk-test")
     }
 
-    // MARK: - Rehydration + Multi-Batch Flush Tests
 
     func testRehydratedEventsFlushInMultipleBatches() async throws {
         let tempDir = FileManager.default.temporaryDirectory
@@ -543,7 +539,6 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(recorder.batchSizes, [3, 3, 1])
     }
 
-    // MARK: - Auto-Flush Tests
 
     func testAutoFlushTriggersAtThreshold() async {
         let options = TestDataFactory.makeInitOptions()
@@ -571,7 +566,6 @@ final class DispatcherTests: XCTestCase {
     }
 }
 
-// MARK: - BatchRecordingNetworking
 
 /// Records the number of events in each batch sent, for asserting multi-batch flush behavior.
 private final class BatchRecordingNetworking: Networking, @unchecked Sendable {
@@ -608,7 +602,6 @@ private final class BatchRecordingNetworking: Networking, @unchecked Sendable {
     private struct AnyCodableElement: Decodable {}
 }
 
-// MARK: - CallSequencer
 
 /// Returns different responses for each successive call, cycling to the last response for overflow
 private final class CallSequencer: Networking, @unchecked Sendable {

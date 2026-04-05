@@ -10,7 +10,6 @@ import Foundation
 /// Capacity: single shared cap — count OR bytes, whichever first. Overflow: drop oldest.
 public actor PersistentEventQueue {
 
-    // MARK: - Configuration
 
     /// Events older than this are dropped during rehydration.
     static let eventTTL: TimeInterval = 7 * 24 * 60 * 60 // 7 days
@@ -20,15 +19,12 @@ public actor PersistentEventQueue {
     private let flushThresholdCount: Int
     private let flushThresholdBytes: Int
 
-    // MARK: - State
 
     private let memoryQueue: EventQueue<EnrichedEventPayload>
     private let diskStorage: DiskStorage
     /// Running estimate of serialized bytes in the queue. Updated incrementally
     /// on enqueue/drain/requeue/clear to avoid re-encoding the entire queue on every offer().
     private var estimatedBytes: Int = 0
-
-    // MARK: - Init
 
     public init(
         diskStorage: DiskStorage,
@@ -44,8 +40,6 @@ public actor PersistentEventQueue {
         self.flushThresholdBytes = max(1, flushThresholdBytes)
         self.memoryQueue = EventQueue<EnrichedEventPayload>(capacity: maxEventCount)
     }
-
-    // MARK: - Memory-only operations (hot path)
 
     /// Enqueue an event to the in-memory buffer. No disk I/O.
     /// Returns the queue count after insertion (atomic with the enqueue).
@@ -101,7 +95,6 @@ public actor PersistentEventQueue {
         get async { await memoryQueue.count }
     }
 
-    // MARK: - Flush threshold check
 
     /// Returns true if the in-memory buffer has reached the flush-to-disk threshold.
     /// Uses a running byte estimate to avoid re-encoding the entire queue on every check.
@@ -115,7 +108,6 @@ public actor PersistentEventQueue {
         }
     }
 
-    // MARK: - Disk operations (cold path)
 
     /// Flush current memory state to disk. Full overwrite.
     /// Called on: app background, app terminate (best-effort), explicit flush, threshold.
@@ -167,7 +159,6 @@ public actor PersistentEventQueue {
         return events.count
     }
 
-    // MARK: - Private helpers
 
     /// Peek at all events without removing them. Used for snapshotting.
     private func peekAll() async -> [EnrichedEventPayload] {
