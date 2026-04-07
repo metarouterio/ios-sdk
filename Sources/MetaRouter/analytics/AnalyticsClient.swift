@@ -30,10 +30,6 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private init(options: InitOptions, deps: AnalyticsDependencies = .production) {
         self.lifecycleState = .initializing
 
-        Logger.log("Starting analytics client initialization...",
-                   writeKey: options.writeKey,
-                   host: options.ingestionHost.absoluteString)
-
         self.options = options
         self.contextProvider = deps.contextProvider ?? DeviceContextProvider()
         self.identityManager = deps.identityManager ?? IdentityManager(
@@ -91,16 +87,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             }
         )
         
-        Logger.log("App state listener setup completed", 
-                   writeKey: options.writeKey, 
-                   host: options.ingestionHost.absoluteString)
-
         Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
-            Logger.log("IdentityManager initialized successfully",
-                       writeKey: self.options.writeKey,
-                       host: self.options.ingestionHost.absoluteString)
 
             // Rehydrate persisted events from disk
             let rehydratedCount = await self.dispatcher.rehydrate()
@@ -122,14 +111,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
             await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
             self.lifecycleState = .ready
-            Logger.log("Analytics client initialization completed successfully",
+            Logger.log("MetaRouter SDK initialized",
                        writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
         }
-        
-        Logger.log("Analytics client constructor completed, initialization in progress...", 
-                   writeKey: options.writeKey, 
-                   host: options.ingestionHost.absoluteString)
     }
 
     internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {

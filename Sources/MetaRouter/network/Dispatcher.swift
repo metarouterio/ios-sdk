@@ -142,12 +142,7 @@ public actor Dispatcher {
         if flushTimerTask != nil { return }
 
         let interval = max(1, intervalSeconds)
-        
-        Logger.log(
-            "Flush loop started with interval: \(interval) seconds",
-            writeKey: options.writeKey,
-            host: options.ingestionHost.absoluteString)
-        
+
         flushTimerTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
