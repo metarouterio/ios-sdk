@@ -243,7 +243,8 @@ public actor Dispatcher {
                         host: options.ingestionHost.absoluteString)
                 }
 
-                await handleResponse(resp, originalBatch: batch)
+                let shouldStop = await handleResponse(resp, originalBatch: batch)
+                if shouldStop { return }
             } catch {
                 consecutiveRetries += 1
                 breaker.onFailure()
@@ -256,7 +257,8 @@ public actor Dispatcher {
         }
     }
 
-    private func handleResponse(_ resp: NetworkResponse, originalBatch: [EnrichedEventPayload]) async {
+    /// Returns `true` if processUntilEmpty should stop (retryable failure scheduled a retry).
+    private func handleResponse(_ resp: NetworkResponse, originalBatch: [EnrichedEventPayload]) async -> Bool {
         switch resp.statusCode {
         case 200..<300:
             consecutiveRetries = 0
@@ -265,7 +267,7 @@ public actor Dispatcher {
             if maxBatchSize < config.initialMaxBatchSize {
                 maxBatchSize = min(maxBatchSize * 2, config.initialMaxBatchSize)
             }
-            return
+            return false
         case 500..<600, 408:
             consecutiveRetries += 1
             breaker.onFailure()
@@ -274,6 +276,7 @@ public actor Dispatcher {
             let delay = max(retryFloorMs(), serverDelay)
             Logger.warn("Server error \(resp.statusCode), will retry \(originalBatch.count) event(s) in \(delay)ms (circuit: \(breaker.getState()), retry #\(consecutiveRetries))")
             await scheduleRetry(afterMs: max(100, delay))
+            return true
         case 429:
             consecutiveRetries += 1
             breaker.onFailure()
@@ -283,6 +286,7 @@ public actor Dispatcher {
             let delay = max(retryFloorMs(), max(1000, max(headerDelay ?? 0, cbDelay)))
             Logger.warn("Rate limited (429), will retry \(originalBatch.count) event(s) in \(delay)ms (circuit: \(breaker.getState()), retry #\(consecutiveRetries))")
             await scheduleRetry(afterMs: delay)
+            return true
         case 413:
             breaker.onNonRetryable()
             if maxBatchSize > 1 {
@@ -294,18 +298,21 @@ public actor Dispatcher {
                 let ids = originalBatch.map { $0.messageId }.joined(separator: ",")
                 Logger.warn("Dropping oversize event(s) after 413 at batchSize=1; messageIds=\(ids)")
             }
+            return false
         case 401, 403, 404:
             // Fatal config error: disable client - responsibility of higher layer
             await queue.clear()
             // No breaker change per spec
             onFatalConfigError?(resp.statusCode)
+            return true
         case 400..<500:
             breaker.onNonRetryable()
             // Drop bad payload and continue
-            // Nothing to requeue
+            return false
         default:
             // Unknown: treat like non-retryable 4xx
             breaker.onNonRetryable()
+            return false
         }
     }
 
