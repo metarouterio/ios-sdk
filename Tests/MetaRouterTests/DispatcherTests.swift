@@ -540,6 +540,132 @@ final class DispatcherTests: XCTestCase {
     }
 
 
+    func testRetryFloorConfigDefaults() {
+        let config = Dispatcher.Config()
+        XCTAssertEqual(config.baseRetryDelayMs, 1000)
+        XCTAssertEqual(config.maxRetryDelayMs, 8000)
+    }
+
+    func testRetryFloorConfigCustomValues() {
+        let config = Dispatcher.Config(baseRetryDelayMs: 500, maxRetryDelayMs: 4000)
+        XCTAssertEqual(config.baseRetryDelayMs, 500)
+        XCTAssertEqual(config.maxRetryDelayMs, 4000)
+    }
+
+    func testRetryFloorPreventsImmediateRetryWhileCircuitClosed() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .error
+
+        // Default circuit breaker: threshold 3 — circuit stays closed after 1 failure
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100,
+            config: Dispatcher.Config(baseRetryDelayMs: 500, maxRetryDelayMs: 2000)
+        )
+
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush()
+
+        // Only 1 attempt — retry floor prevents immediate retry even though circuit is closed
+        XCTAssertEqual(stub.callCount, 1, "Should not immediately retry while circuit is closed")
+
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 1, "Event should be requeued for delayed retry")
+
+        // Confirm no retry fires within a short window (less than the 500ms floor)
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        XCTAssertEqual(stub.callCount, 1, "No retry should fire before the floor delay")
+    }
+
+    func testRetryFloorFiresAndRecovers() async {
+        let options = TestDataFactory.makeInitOptions()
+        let sequencer = CallSequencer(responses: [.error, .success])
+
+        let dispatcher = Dispatcher(
+            options: options, http: sequencer,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100,
+            config: Dispatcher.Config(baseRetryDelayMs: 100, maxRetryDelayMs: 1000)
+        )
+
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush()
+
+        XCTAssertEqual(sequencer.callCount, 1, "First attempt should fail")
+
+        // Wait for retry floor (100ms) + margin
+        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+
+        XCTAssertEqual(sequencer.callCount, 2, "Retry should have fired after floor delay")
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "Queue should be empty after successful retry")
+    }
+
+    func testRetryCounterResetsOnSuccess() async {
+        let options = TestDataFactory.makeInitOptions()
+        // Sequence: error → success (retry recovers), then error again on next flush
+        let sequencer = CallSequencer(responses: [.error, .success, .error, .success])
+
+        let dispatcher = Dispatcher(
+            options: options, http: sequencer,
+            breaker: CircuitBreaker(failureThreshold: 10), // high threshold to avoid circuit opening
+            queueCapacity: 100,
+            config: Dispatcher.Config(baseRetryDelayMs: 100, maxRetryDelayMs: 1000)
+        )
+
+        // First event: fails, then retries and succeeds
+        await dispatcher.offer(makeTestEvent(messageId: "msg-1"))
+        await dispatcher.flush()
+        XCTAssertEqual(sequencer.callCount, 1)
+
+        // Wait for retry
+        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+        XCTAssertEqual(sequencer.callCount, 2, "Retry should succeed")
+
+        let afterFirst = await dispatcher.getQueueLength()
+        XCTAssertEqual(afterFirst, 0, "Queue empty after recovery")
+
+        // Second event: should also fail then retry with base delay (not escalated)
+        await dispatcher.offer(makeTestEvent(messageId: "msg-2"))
+        await dispatcher.flush()
+        XCTAssertEqual(sequencer.callCount, 3, "Second event first attempt")
+
+        // If counter didn't reset, retry delay would be escalated (200ms+).
+        // With reset, it's back to base (100ms). Either way, wait enough for base delay.
+        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+        XCTAssertEqual(sequencer.callCount, 4, "Second retry should also fire at base delay")
+
+        let afterSecond = await dispatcher.getQueueLength()
+        XCTAssertEqual(afterSecond, 0, "Queue empty after second recovery")
+    }
+
+    func testServerErrorGetsRetryFloorWhileCircuitClosed() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .http(503)
+
+        // Default circuit breaker: stays closed after 1 failure
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100,
+            config: Dispatcher.Config(baseRetryDelayMs: 500, maxRetryDelayMs: 2000)
+        )
+
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush()
+
+        XCTAssertEqual(stub.callCount, 1, "Should not immediately retry 503 while circuit closed")
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 1, "Event should be requeued")
+
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        XCTAssertEqual(stub.callCount, 1, "No retry before floor delay")
+    }
+
+
     func testAutoFlushTriggersAtThreshold() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
