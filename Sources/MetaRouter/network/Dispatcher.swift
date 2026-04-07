@@ -8,14 +8,20 @@ public actor Dispatcher {
         public let timeoutMs: Int
         public let autoFlushThreshold: Int
         public let initialMaxBatchSize: Int
+        public let baseRetryDelayMs: Int
+        public let maxRetryDelayMs: Int
         public init(endpointPath: String = "/v1/batch",
                     timeoutMs: Int = 8000,
                     autoFlushThreshold: Int = 20,
-                    initialMaxBatchSize: Int = 100) {
+                    initialMaxBatchSize: Int = 100,
+                    baseRetryDelayMs: Int = 1000,
+                    maxRetryDelayMs: Int = 8000) {
             self.endpointPath = endpointPath
             self.timeoutMs = timeoutMs
             self.autoFlushThreshold = autoFlushThreshold
             self.initialMaxBatchSize = max(1, initialMaxBatchSize)
+            self.baseRetryDelayMs = max(0, baseRetryDelayMs)
+            self.maxRetryDelayMs = max(baseRetryDelayMs, maxRetryDelayMs)
         }
     }
 
@@ -34,6 +40,7 @@ public actor Dispatcher {
     private var isFlushing = false
     private let config: Config
     private var tracingEnabled = false
+    private var consecutiveRetries: Int = 0
 
     /// Primary init accepting a PersistentEventQueue (used by AnalyticsClient).
     public init(
@@ -188,6 +195,7 @@ public actor Dispatcher {
         while await queue.count > 0 {
             let waitMs = breaker.beforeRequest()
             if waitMs > 0 {
+                Logger.warn("Circuit breaker \(breaker.getState()), retrying in \(waitMs)ms (\(await queue.count) event(s) pending)")
                 await scheduleRetry(afterMs: waitMs)
                 return
             }
@@ -226,20 +234,23 @@ public actor Dispatcher {
 
             do {
                 let resp = try await http.postJSON(url: url, body: body, timeoutMs: config.timeoutMs, additionalHeaders: headers)
-                
+
                 if (200..<300).contains(resp.statusCode) {
+                    consecutiveRetries = 0
                     Logger.log(
                         "API call successful",
                         writeKey: options.writeKey,
                         host: options.ingestionHost.absoluteString)
                 }
-                
+
                 await handleResponse(resp, originalBatch: batch)
             } catch {
+                consecutiveRetries += 1
                 breaker.onFailure()
                 await queue.requeueToFront(batch)
-                Logger.warn("API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry")
-                await scheduleRetry(afterMs: breaker.beforeRequest())
+                let retryDelay = max(retryFloorMs(), breaker.beforeRequest())
+                Logger.warn("API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry in \(retryDelay)ms (circuit: \(breaker.getState()), retry #\(consecutiveRetries))")
+                await scheduleRetry(afterMs: retryDelay)
                 return
             }
         }
@@ -248,6 +259,7 @@ public actor Dispatcher {
     private func handleResponse(_ resp: NetworkResponse, originalBatch: [EnrichedEventPayload]) async {
         switch resp.statusCode {
         case 200..<300:
+            consecutiveRetries = 0
             breaker.onSuccess()
             // Gradually recover batch size after 413-induced reduction
             if maxBatchSize < config.initialMaxBatchSize {
@@ -255,18 +267,21 @@ public actor Dispatcher {
             }
             return
         case 500..<600, 408:
+            consecutiveRetries += 1
             breaker.onFailure()
             await queue.requeueToFront(originalBatch)
-            let delay = http.parseRetryAfterMs(from: resp.headers) ?? breaker.beforeRequest()
-            Logger.warn("Server error \(resp.statusCode), will retry \(originalBatch.count) event(s) in \(delay)ms")
+            let serverDelay = http.parseRetryAfterMs(from: resp.headers) ?? breaker.beforeRequest()
+            let delay = max(retryFloorMs(), serverDelay)
+            Logger.warn("Server error \(resp.statusCode), will retry \(originalBatch.count) event(s) in \(delay)ms (circuit: \(breaker.getState()), retry #\(consecutiveRetries))")
             await scheduleRetry(afterMs: max(100, delay))
         case 429:
+            consecutiveRetries += 1
             breaker.onFailure()
             await queue.requeueToFront(originalBatch)
             let headerDelay = http.parseRetryAfterMs(from: resp.headers)
             let cbDelay = breaker.beforeRequest()
-            let delay = max(1000, max(headerDelay ?? 0, cbDelay))
-            Logger.warn("Rate limited (429), will retry \(originalBatch.count) event(s) in \(delay)ms")
+            let delay = max(retryFloorMs(), max(1000, max(headerDelay ?? 0, cbDelay)))
+            Logger.warn("Rate limited (429), will retry \(originalBatch.count) event(s) in \(delay)ms (circuit: \(breaker.getState()), retry #\(consecutiveRetries))")
             await scheduleRetry(afterMs: delay)
         case 413:
             breaker.onNonRetryable()
@@ -292,6 +307,14 @@ public actor Dispatcher {
             // Unknown: treat like non-retryable 4xx
             breaker.onNonRetryable()
         }
+    }
+
+    /// Exponential backoff floor based on consecutive retries, independent of circuit breaker.
+    /// Ensures retries are never instant even while circuit is closed.
+    private func retryFloorMs() -> Int {
+        guard consecutiveRetries > 0 else { return 0 }
+        let exponent = min(consecutiveRetries - 1, 10)
+        return min(config.maxRetryDelayMs, config.baseRetryDelayMs * Int(pow(2.0, Double(exponent))))
     }
 
     private func scheduleRetry(afterMs: Int) async {
