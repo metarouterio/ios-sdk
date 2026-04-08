@@ -291,7 +291,6 @@ final class MockContextProvider: ContextProvider, @unchecked Sendable {
             device: DeviceContext(
                 manufacturer: "Apple",
                 model: "iPhone15,2",
-                name: "Test Device",
                 type: "ios"
             ),
             library: LibraryContext(
