@@ -105,7 +105,6 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
         return DeviceContext(
             manufacturer: "Apple",
             model: modelCode,
-            name: modelCode,
             type: type,
             advertisingId: currentAdvertisingId
         )
@@ -114,7 +113,6 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
         return DeviceContext(
             manufacturer: "Apple",
             model: hwModel,
-            name: hwModel,
             type: "macos",
             advertisingId: currentAdvertisingId
         )
@@ -122,7 +120,6 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
         return DeviceContext(
             manufacturer: "Apple",
             model: "unknown",
-            name: "unknown",
             type: "unknown",
             advertisingId: currentAdvertisingId
         )

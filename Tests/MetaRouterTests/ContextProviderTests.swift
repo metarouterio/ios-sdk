@@ -21,7 +21,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
+            manufacturer: "Apple", model: "iPhone15,2", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -52,7 +52,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
+            manufacturer: "Apple", model: "iPhone15,2", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -131,7 +131,6 @@ final class ContextProviderTests: XCTestCase {
 
         XCTAssertEqual(context.device.manufacturer, "Apple")
         XCTAssertFalse(context.device.model.isEmpty)
-        XCTAssertFalse(context.device.name.isEmpty)
         XCTAssertTrue(
             context.device.type == "ios" || context.device.type == "macos")
     }
@@ -243,7 +242,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
+            manufacturer: "Apple", model: "iPhone15,2", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -283,7 +282,7 @@ final class ContextProviderTests: XCTestCase {
         let app = AppContext(
             name: "TestApp", version: "1.0", build: "123", namespace: "com.test.app")
         let device = DeviceContext(
-            manufacturer: "Apple", model: "iPhone15,2", name: "Test Device", type: "ios")
+            manufacturer: "Apple", model: "iPhone15,2", type: "ios")
         let library = LibraryContext(name: "test-sdk", version: "1.0.0")
         let os = OSContext(name: "iOS", version: "17.0")
         let screen = ScreenContext(density: 3.0, width: 1179, height: 2556)
@@ -323,7 +322,6 @@ final class ContextProviderTests: XCTestCase {
         let device = DeviceContext(
             manufacturer: "Apple",
             model: "iPhone15,2",
-            name: "Test Device",
             type: "ios",
             advertisingId: "12345678-1234-1234-1234-123456789012"
         )
@@ -335,7 +333,6 @@ final class ContextProviderTests: XCTestCase {
         let device = DeviceContext(
             manufacturer: "Apple",
             model: "iPhone15,2",
-            name: "Test Device",
             type: "ios"
         )
 
@@ -381,7 +378,6 @@ final class ContextProviderTests: XCTestCase {
         let device = DeviceContext(
             manufacturer: "Apple",
             model: "iPhone15,2",
-            name: "Test Device",
             type: "ios",
             advertisingId: "TEST-IDFA-UUID"
         )
@@ -395,7 +391,6 @@ final class ContextProviderTests: XCTestCase {
 
         XCTAssertEqual(device.manufacturer, decoded.manufacturer)
         XCTAssertEqual(device.model, decoded.model)
-        XCTAssertEqual(device.name, decoded.name)
         XCTAssertEqual(device.type, decoded.type)
         XCTAssertEqual(device.advertisingId, decoded.advertisingId)
     }
@@ -404,7 +399,6 @@ final class ContextProviderTests: XCTestCase {
         let device = DeviceContext(
             manufacturer: "Apple",
             model: "iPhone15,2",
-            name: "Test Device",
             type: "ios"
         )
 
@@ -417,7 +411,6 @@ final class ContextProviderTests: XCTestCase {
 
         XCTAssertEqual(device.manufacturer, decoded.manufacturer)
         XCTAssertEqual(device.model, decoded.model)
-        XCTAssertEqual(device.name, decoded.name)
         XCTAssertEqual(device.type, decoded.type)
         XCTAssertNil(decoded.advertisingId)
     }
