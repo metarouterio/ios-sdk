@@ -11,6 +11,7 @@ internal struct AnalyticsDependencies: Sendable {
     var dispatcherConfig: Dispatcher.Config?
     var dispatcher: Dispatcher?
     var persistentQueue: PersistentEventQueue?
+    var networkMonitor: NetworkReachability?
 
     static let production = AnalyticsDependencies()
 }
@@ -23,6 +24,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private let identityManager: IdentityManager
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
+    private let networkMonitor: NetworkReachability?
     private var lifecycle: AppLifecycleObserver?
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
@@ -54,7 +56,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             persistentQueue: persistentQueue,
             config: deps.dispatcherConfig ?? Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
-        
+
+        let monitor = deps.networkMonitor ?? NetworkMonitor()
+        self.networkMonitor = monitor
+
         // Enable debug logging if requested
         if options.debug {
             Logger.setDebugLogging(true)
@@ -87,6 +92,21 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             }
         )
         
+        // Wire network monitor: set initial state and subscribe to changes
+        Task { [weak self] in
+            guard let self else { return }
+            let initialOffline = monitor.currentStatus == .disconnected
+            if initialOffline {
+                await self.dispatcher.setOffline(true)
+            }
+            monitor.onStatusChange { [weak self] status in
+                guard let self else { return }
+                Task {
+                    await self.dispatcher.setOffline(status == .disconnected)
+                }
+            }
+        }
+
         Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
@@ -306,6 +326,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         let userId = await identityManager.getUserId()
         let groupId = await identityManager.getGroupId()
         
+        let networkStatus = networkMonitor?.currentStatus ?? .connected
+
         var info: [String: CodableValue] = [
             "lifecycle": .string(lifecycleState.rawValue),
             "queueLength": .int(queueLength),
@@ -316,7 +338,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             "proxy": .bool(false),
             "flushInFlight": .bool(flushInFlight),
             "circuitState": .string(String(describing: circuitState)),
-            "circuitRemainingMs": .int(circuitRemainingMs)
+            "circuitRemainingMs": .int(circuitRemainingMs),
+            "networkStatus": .string(networkStatus.rawValue)
         ]
         
         // Add optional identity fields
@@ -343,6 +366,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task { [weak self] in
             guard let self else { return }
             self.lifecycleState = .resetting
+            self.networkMonitor?.stop()
             await self.identityManager.reset()
 
             // Clear advertisingId from DeviceContextProvider

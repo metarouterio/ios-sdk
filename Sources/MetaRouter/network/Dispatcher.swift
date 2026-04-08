@@ -41,6 +41,7 @@ public actor Dispatcher {
     private let config: Config
     private var tracingEnabled = false
     private var consecutiveRetries: Int = 0
+    private var isOffline = false
 
     /// Primary init accepting a PersistentEventQueue (used by AnalyticsClient).
     public init(
@@ -89,6 +90,32 @@ public actor Dispatcher {
     public func setTracing(_ enabled: Bool) {
         self.tracingEnabled = enabled
         Logger.log("Tracing \(enabled ? "enabled" : "disabled")")
+    }
+
+    /// Update offline state. Idempotent — only acts on actual transitions.
+    public func setOffline(_ offline: Bool) async {
+        if !isOffline && offline {
+            // Going offline: stop retrying (no point while offline)
+            isOffline = true
+            retryTimerTask?.cancel()
+            retryTimerTask = nil
+            Logger.log("Dispatcher paused — device is offline")
+        } else if isOffline && !offline {
+            // Coming back online: reset stale backoff and flush immediately
+            isOffline = false
+            breaker.reset()
+            consecutiveRetries = 0
+            Logger.log("Dispatcher resumed — device is online, triggering flush")
+            await flush()
+        }
+    }
+
+    public func getIsOffline() -> Bool {
+        return isOffline
+    }
+
+    public func resetCircuitBreaker() {
+        breaker.reset()
     }
 
 
@@ -193,6 +220,11 @@ public actor Dispatcher {
 
     private func processUntilEmpty() async {
         while await queue.count > 0 {
+            guard !isOffline else {
+                Logger.log("Offline — pausing HTTP attempts, \(await queue.count) event(s) queued")
+                return
+            }
+
             let waitMs = breaker.beforeRequest()
             if waitMs > 0 {
                 Logger.warn("Circuit breaker \(breaker.getState()), retrying in \(waitMs)ms (\(await queue.count) event(s) pending)")
