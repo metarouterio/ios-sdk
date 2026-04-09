@@ -1,7 +1,7 @@
 # MetaRouter iOS SDK
 
 [![Swift Package Manager](https://img.shields.io/badge/SPM-compatible-brightgreen.svg)](https://swift.org/package-manager/)
-[![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS-lightgrey.svg)](https://github.com/metarouter/ios-sdk)
+[![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS-lightgrey.svg)](https://github.com/metarouterio/ios-sdk)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster.
@@ -31,7 +31,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 Add the following dependency to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/metarouter/ios-sdk.git", from: "1.0.0")
+.package(url: "https://github.com/metarouterio/ios-sdk.git", from: "1.3.1")
 ```
 
 Or add it via Xcode: **File → Add Package Dependencies → Enter repository URL**
