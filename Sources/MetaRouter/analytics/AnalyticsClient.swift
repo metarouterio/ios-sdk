@@ -366,7 +366,6 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task { [weak self] in
             guard let self else { return }
             self.lifecycleState = .resetting
-            self.networkMonitor?.stop()
             await self.identityManager.reset()
 
             // Clear advertisingId from DeviceContextProvider

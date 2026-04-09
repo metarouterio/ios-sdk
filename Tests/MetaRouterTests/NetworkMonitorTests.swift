@@ -26,10 +26,12 @@ final class StubNetworkMonitor: NetworkReachability, @unchecked Sendable {
 
     /// Simulate a network transition from tests.
     func simulate(_ newStatus: NetworkStatus) {
+        var callback: (@Sendable (NetworkStatus) -> Void)?
         lock.withLock {
             _status = newStatus
-            handler?(newStatus)
+            callback = handler
         }
+        callback?(newStatus)
     }
 }
 
