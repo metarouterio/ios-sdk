@@ -38,6 +38,7 @@ public actor Dispatcher {
     private var flushTimerTask: Task<Void, Never>? = nil
     private var retryTimerTask: Task<Void, Never>? = nil
     private var isFlushing = false
+    private var isOffline = false
     private let config: Config
     private var tracingEnabled = false
     private var consecutiveRetries: Int = 0
@@ -86,6 +87,14 @@ public actor Dispatcher {
         self.onFatalConfigError = handler
     }
 
+    public func setOffline(_ offline: Bool) {
+        self.isOffline = offline
+    }
+
+    public func resetCircuitBreaker() {
+        breaker.onSuccess()
+    }
+
     public func setTracing(_ enabled: Bool) {
         self.tracingEnabled = enabled
         Logger.log("Tracing \(enabled ? "enabled" : "disabled")")
@@ -132,6 +141,7 @@ public actor Dispatcher {
 
     public func flush() async {
         guard !isFlushing else { return }
+        guard !isOffline else { return }
         guard await queue.count > 0 else { return }
         isFlushing = true
         defer { isFlushing = false }

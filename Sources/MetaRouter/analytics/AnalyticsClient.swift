@@ -11,6 +11,7 @@ internal struct AnalyticsDependencies: Sendable {
     var dispatcherConfig: Dispatcher.Config?
     var dispatcher: Dispatcher?
     var persistentQueue: PersistentEventQueue?
+    var networkMonitor: NetworkReachability?
 
     static let production = AnalyticsDependencies()
 }
@@ -23,6 +24,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private let identityManager: IdentityManager
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
+    private let networkMonitor: NetworkReachability
     private var lifecycle: AppLifecycleObserver?
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
@@ -55,6 +57,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             config: deps.dispatcherConfig ?? Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
         
+        let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
+        let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
+        self.networkMonitor = monitor
+
         // Enable debug logging if requested
         if options.debug {
             Logger.setDebugLogging(true)
@@ -67,6 +73,20 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 self?.disabled = true
                 self?.lifecycleState = .disabled
             })
+        }
+
+        monitor.onStatusChange { [weak self] status in
+            guard let self else { return }
+            Task { [weak self] in
+                guard let self else { return }
+                if status == .disconnected {
+                    await self.dispatcher.setOffline(true)
+                } else {
+                    await self.dispatcher.resetCircuitBreaker()
+                    await self.dispatcher.setOffline(false)
+                    await self.dispatcher.flush()
+                }
+            }
         }
 
         self.lifecycle = AppLifecycleObserver(
@@ -349,6 +369,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             if let deviceProvider = self.contextProvider as? DeviceContextProvider {
                 await deviceProvider.setAdvertisingId(nil)
             }
+
+            // Stop network monitoring
+            self.networkMonitor.stop()
 
             await self.dispatcher.stopFlushLoop()
             await self.dispatcher.cancelScheduledRetry()
