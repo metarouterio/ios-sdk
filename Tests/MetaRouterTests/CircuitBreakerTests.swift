@@ -33,7 +33,6 @@ final class CircuitBreakerTests: XCTestCase {
         XCTAssertEqual(cb.beforeRequest(), 0)
     }
 
-    // MARK: - reset() tests
 
     func testResetMovesFromOpenToClosed() {
         let cb = CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, maxCooldownMs: 120_000, jitterRatio: 0.0)

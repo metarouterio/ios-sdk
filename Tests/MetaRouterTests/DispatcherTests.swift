@@ -691,7 +691,6 @@ final class DispatcherTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(stub.callCount, 1, "At least one POST should have been made")
     }
 
-    // MARK: - Offline/Online Tests
 
     func testEventsEnqueueWhileOfflineNoHttpAttempts() async {
         let options = TestDataFactory.makeInitOptions()

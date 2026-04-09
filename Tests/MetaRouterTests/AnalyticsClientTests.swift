@@ -564,8 +564,6 @@ final class AnalyticsClientTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 2.0)
     }
 
-    // MARK: - Network Status Tests
-
     func testGetDebugInfoIncludesNetworkStatus() async {
         let stubMonitor = StubNetworkMonitor(status: .connected)
         let deps = AnalyticsDependencies(networkMonitor: stubMonitor)

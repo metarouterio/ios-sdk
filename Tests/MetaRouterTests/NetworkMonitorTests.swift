@@ -1,8 +1,6 @@
 import XCTest
 @testable import MetaRouter
 
-// MARK: - StubNetworkMonitor (test double)
-
 final class StubNetworkMonitor: NetworkReachability, @unchecked Sendable {
     private let lock = NSLock()
     private var _status: NetworkStatus
@@ -35,8 +33,6 @@ final class StubNetworkMonitor: NetworkReachability, @unchecked Sendable {
     }
 }
 
-// MARK: - Thread-safe test helpers
-
 private final class SendableCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var _value = 0
@@ -50,8 +46,6 @@ private final class SendableStatusRecorder: @unchecked Sendable {
     var statuses: [NetworkStatus] { lock.withLock { _statuses } }
     func append(_ status: NetworkStatus) { lock.withLock { _statuses.append(status) } }
 }
-
-// MARK: - NetworkMonitor Tests
 
 final class NetworkMonitorTests: XCTestCase {
     func testNetworkMonitorInitializesWithStatus() {
@@ -69,8 +63,6 @@ final class NetworkMonitorTests: XCTestCase {
         // After stop, monitor should not crash and handler should be cleared
         XCTAssertTrue(true, "stop() should complete without crash")
     }
-
-    // MARK: - StubNetworkMonitor Tests
 
     func testStubInitializesWithDefaultConnected() {
         let stub = StubNetworkMonitor()
