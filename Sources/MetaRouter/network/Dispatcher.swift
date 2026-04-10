@@ -42,6 +42,7 @@ public actor Dispatcher {
     private var tracingEnabled = false
     private var consecutiveRetries: Int = 0
     private var isOffline = false
+    private var isDraining = false
 
     /// Primary init accepting a PersistentEventQueue (used by AnalyticsClient).
     public init(
@@ -93,20 +94,30 @@ public actor Dispatcher {
     }
 
     /// Update offline state. Idempotent — only acts on actual transitions.
+    /// When going offline, enables overflow buffering on the queue.
+    /// When coming online, disables overflow, resets circuit breaker, flushes memory queue,
+    /// and starts draining overflow from disk to network in the background.
     public func setOffline(_ offline: Bool) async {
         if !isOffline && offline {
             // Going offline: stop retrying (no point while offline)
             isOffline = true
             retryTimerTask?.cancel()
             retryTimerTask = nil
+            await queue.setOfflineOverflowEnabled(true)
             Logger.log("Dispatcher paused — device is offline")
         } else if isOffline && !offline {
             // Coming back online: reset stale backoff and flush immediately
             isOffline = false
+            await queue.setOfflineOverflowEnabled(false)
             breaker.reset()
             consecutiveRetries = 0
             Logger.log("Dispatcher resumed — device is online, triggering flush")
-            await flush()
+            // Two independent flush paths:
+            await flush() // (1) memory queue → network
+            // (2) disk overflow → network directly (background)
+            Task { [weak self] in
+                await self?.drainOverflowToNetwork()
+            }
         }
     }
 
@@ -212,6 +223,68 @@ public actor Dispatcher {
         return isFlushing
     }
 
+    /// Send a batch of events directly to the network, bypassing the memory queue.
+    /// Used by overflow drain to flush disk events without loading into memory.
+    /// Returns true on 2xx success, false on any failure.
+    public func sendBatchDirect(_ events: [EnrichedEventPayload]) async -> Bool {
+        guard !events.isEmpty else { return true }
+
+        var batch = events
+        let sentAt = Self.isoFormatter.string(from: Date())
+        for i in 0..<batch.count {
+            batch[i].sentAt = sentAt
+        }
+
+        let payload = ["batch": batch]
+        let body: Data
+        do {
+            body = try Self.jsonEncoder.encode(payload)
+        } catch {
+            Logger.error("Failed to encode overflow batch: \(error)")
+            return false
+        }
+
+        let url = options.ingestionHost.appendingPathComponent(config.endpointPath)
+
+        do {
+            let resp = try await http.postJSON(url: url, body: body, timeoutMs: config.timeoutMs, additionalHeaders: nil)
+            if (200..<300).contains(resp.statusCode) {
+                breaker.onSuccess()
+                return true
+            } else {
+                Logger.warn("Overflow batch send failed with status \(resp.statusCode)")
+                return false
+            }
+        } catch {
+            Logger.warn("Overflow batch send failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Drain overflow events from disk directly to network in batches.
+    /// Called on offline→online transition as an independent flush pipeline.
+    /// Does NOT load events into the memory queue.
+    public func drainOverflowToNetwork() async {
+        guard !isDraining else { return }
+        isDraining = true
+        defer { isDraining = false }
+
+        await queue.flushOverflowBufferToDisk()
+
+        while !isOffline {
+            let batch = await queue.readOverflowBatch(max: 100)
+            guard !batch.isEmpty else { break }
+
+            let success = await sendBatchDirect(batch)
+            if success {
+                await queue.removeOverflowBatch(count: batch.count)
+                Logger.log("Drained \(batch.count) overflow events from disk to network")
+            } else {
+                Logger.warn("Overflow drain stopped — will retry on next online transition")
+                break
+            }
+        }
+    }
 
     private func processUntilEmpty() async {
         while await queue.count > 0 {

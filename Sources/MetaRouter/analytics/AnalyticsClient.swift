@@ -44,9 +44,15 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             writeKey: options.writeKey
         )
 
+        let mainDiskStorage = DiskStorage()
         let persistentQueue = deps.persistentQueue ?? PersistentEventQueue(
-            diskStorage: DiskStorage(),
-            maxEventCount: options.maxQueueEvents
+            diskStorage: mainDiskStorage,
+            maxEventCount: options.maxQueueEvents,
+            overflowDiskStorage: DiskStorage(
+                baseDirectory: mainDiskStorage.baseDirectory,
+                fileName: "overflow.v1.json"
+            ),
+            maxOfflineDiskEvents: options.maxOfflineDiskEvents
         )
 
         self.dispatcher = deps.dispatcher ?? Dispatcher(
@@ -136,6 +142,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             Logger.log("MetaRouter SDK initialized",
                        writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
+
+            // Drain any overflow from a previous offline session
+            if monitor.currentStatus == .connected {
+                await self.dispatcher.drainOverflowToNetwork()
+            }
         }
     }
 

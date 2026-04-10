@@ -847,6 +847,221 @@ final class DispatcherTests: XCTestCase {
         offline = await dispatcher.getIsOffline()
         XCTAssertFalse(offline)
     }
+
+
+    // MARK: - Offline Overflow Drain Tests
+
+    func testOverflowDrainSendsDirectlyToNetwork() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DrainDispatcherTest-\(UUID().uuidString)")
+        let overflowDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DrainOverflowTest-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: tempDir)
+            try? FileManager.default.removeItem(at: overflowDir)
+        }
+
+        // Seed overflow disk with events
+        let overflowDisk = DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json")
+        let overflowEvents = (0..<5).map { makeTestEvent(messageId: "overflow-\($0)") }
+        try await overflowDisk.write(QueueSnapshot(events: overflowEvents))
+
+        let recorder = BatchRecordingNetworking()
+        let persistentQueue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 100,
+            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
+            maxOfflineDiskEvents: 10000
+        )
+        let dispatcher = Dispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: recorder,
+            breaker: CircuitBreaker(),
+            persistentQueue: persistentQueue
+        )
+
+        // Also add a memory queue event
+        await dispatcher.offer(makeTestEvent(messageId: "memory-0"))
+
+        // Drain overflow
+        await dispatcher.drainOverflowToNetwork()
+
+        // Overflow should have been sent (1 batch of 5)
+        XCTAssertGreaterThanOrEqual(recorder.callCount, 1, "Overflow events should be sent to network")
+
+        // Memory queue event should NOT have been touched by drain
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 1, "Memory queue should be unaffected by overflow drain")
+
+        // Overflow disk should be cleaned up
+        let overflowRemaining = await persistentQueue.readOverflowBatch(max: 100)
+        XCTAssertEqual(overflowRemaining.count, 0, "Overflow disk should be empty after drain")
+    }
+
+    func testOverflowDrainStopsOnNetworkFailure() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DrainFailTest-\(UUID().uuidString)")
+        let overflowDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DrainFailOverflow-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: tempDir)
+            try? FileManager.default.removeItem(at: overflowDir)
+        }
+
+        // Seed overflow disk with events
+        let overflowDisk = DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json")
+        let overflowEvents = (0..<5).map { makeTestEvent(messageId: "overflow-\($0)") }
+        try await overflowDisk.write(QueueSnapshot(events: overflowEvents))
+
+        let stub = StubNetworking()
+        stub.mode = .http(500)  // All requests fail
+
+        let persistentQueue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 100,
+            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
+            maxOfflineDiskEvents: 10000
+        )
+        let dispatcher = Dispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: stub,
+            breaker: CircuitBreaker(failureThreshold: 10),
+            persistentQueue: persistentQueue
+        )
+
+        await dispatcher.drainOverflowToNetwork()
+
+        // Should have attempted once and stopped
+        XCTAssertEqual(stub.callCount, 1, "Should stop draining after first failure")
+
+        // Events should still be on disk
+        let remaining = await persistentQueue.readOverflowBatch(max: 100)
+        XCTAssertEqual(remaining.count, 5, "All overflow events should remain on disk after failure")
+    }
+
+    func testOfflineToOnlineTriggersOverflowDrain() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OnlineDrainTest-\(UUID().uuidString)")
+        let overflowDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OnlineDrainOverflow-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: tempDir)
+            try? FileManager.default.removeItem(at: overflowDir)
+        }
+
+        let recorder = BatchRecordingNetworking()
+        let persistentQueue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 3,
+            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
+            maxOfflineDiskEvents: 10000
+        )
+        let dispatcher = Dispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: recorder,
+            breaker: CircuitBreaker(),
+            persistentQueue: persistentQueue
+        )
+
+        // Go offline and overflow events
+        await dispatcher.setOffline(true)
+        for i in 0..<6 {
+            await dispatcher.offer(makeTestEvent(messageId: "e\(i)"))
+        }
+
+        // Memory should have 3, overflow should have 3
+        let memCount = await dispatcher.getQueueLength()
+        XCTAssertEqual(memCount, 3)
+
+        // Come back online — triggers flush + drain
+        await dispatcher.setOffline(false)
+
+        // Give Tasks time to complete
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        // Both memory queue AND overflow should be drained
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "Memory queue should be empty after reconnect")
+
+        let overflowRemaining = await persistentQueue.readOverflowBatch(max: 100)
+        XCTAssertEqual(overflowRemaining.count, 0, "Overflow disk should be empty after reconnect")
+
+        // HTTP calls should have been made
+        XCTAssertGreaterThanOrEqual(recorder.callCount, 1, "Events should have been sent to network")
+    }
+
+    func testOverflowEventsDoNotEnterMemoryQueue() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NoRehydrateTest-\(UUID().uuidString)")
+        let overflowDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NoRehydrateOverflow-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: tempDir)
+            try? FileManager.default.removeItem(at: overflowDir)
+        }
+
+        // Seed overflow disk with 200 events
+        let overflowDisk = DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json")
+        let overflowEvents = (0..<200).map { makeTestEvent(messageId: "overflow-\($0)") }
+        try await overflowDisk.write(QueueSnapshot(events: overflowEvents))
+
+        let recorder = BatchRecordingNetworking()
+        let persistentQueue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 50, // memory cap is only 50
+            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
+            maxOfflineDiskEvents: 10000
+        )
+        let dispatcher = Dispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: recorder,
+            breaker: CircuitBreaker(),
+            persistentQueue: persistentQueue
+        )
+
+        // Drain overflow
+        await dispatcher.drainOverflowToNetwork()
+
+        // Memory queue should still be empty — overflow goes direct to network
+        let memCount = await dispatcher.getQueueLength()
+        XCTAssertEqual(memCount, 0, "Overflow events should not load into memory queue")
+
+        // All 200 events should have been sent via HTTP (2 batches of 100)
+        XCTAssertEqual(recorder.callCount, 2, "200 events should be sent in 2 batches of 100")
+
+        // Overflow disk should be cleaned up
+        let overflowRemaining = await persistentQueue.readOverflowBatch(max: 1000)
+        XCTAssertEqual(overflowRemaining.count, 0)
+    }
+
+    func testSendBatchDirectReturnsFalseOnError() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .error
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        let result = await dispatcher.sendBatchDirect([makeTestEvent()])
+        XCTAssertFalse(result, "sendBatchDirect should return false on network error")
+    }
+
+    func testSendBatchDirectReturnsTrueOnSuccess() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .success
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        let result = await dispatcher.sendBatchDirect([makeTestEvent()])
+        XCTAssertTrue(result, "sendBatchDirect should return true on 200")
+        XCTAssertEqual(stub.callCount, 1)
+    }
 }
 
 

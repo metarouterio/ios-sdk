@@ -11,29 +11,29 @@ import Foundation
 /// Writes use atomic file replacement to avoid partial-write corruption.
 public actor DiskStorage {
     private static let directoryName = "metarouter/disk-queue"
-    private static let fileName = "queue.v1.json"
+    private static let defaultFileName = "queue.v1.json"
 
     private static let jsonEncoder = JSONEncoder()
     private static let jsonDecoder = JSONDecoder()
 
-    private let baseDirectory: URL
+    nonisolated public let baseDirectory: URL
     private let filePath: URL
 
-    /// Initialize with an explicit base directory (for testing).
-    public init(baseDirectory: URL) {
+    /// Initialize with an explicit base directory and optional custom filename (for testing).
+    public init(baseDirectory: URL, fileName: String = "queue.v1.json") {
         self.baseDirectory = baseDirectory
-        self.filePath = baseDirectory.appendingPathComponent(Self.fileName)
+        self.filePath = baseDirectory.appendingPathComponent(fileName)
     }
 
     /// Initialize with the platform-default Application Support directory.
-    public init() {
+    public init(fileName: String = "queue.v1.json") {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first!
         let dir = appSupport.appendingPathComponent(Self.directoryName)
         self.baseDirectory = dir
-        self.filePath = dir.appendingPathComponent(Self.fileName)
+        self.filePath = dir.appendingPathComponent(fileName)
     }
 
     /// Write a snapshot to disk, fully overwriting any existing file.
