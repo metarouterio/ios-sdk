@@ -57,7 +57,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             config: deps.dispatcherConfig ?? Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
 
-        let monitor = deps.networkMonitor ?? NetworkMonitor()
+        let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
+        let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
+        
         self.networkMonitor = monitor
 
         // Enable debug logging if requested
@@ -372,6 +374,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             if let deviceProvider = self.contextProvider as? DeviceContextProvider {
                 await deviceProvider.setAdvertisingId(nil)
             }
+
+            // Stop network monitoring and cancel pending debounce
+            self.networkMonitor?.stop()
 
             await self.dispatcher.stopFlushLoop()
             await self.dispatcher.cancelScheduledRetry()
