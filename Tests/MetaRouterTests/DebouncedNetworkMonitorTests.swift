@@ -1,8 +1,7 @@
 import XCTest
 @testable import MetaRouter
 
-
-// MARK: - Helpers
+// helper 
 
 private final class StatusRecorder: @unchecked Sendable {
     private let lock = NSLock()
@@ -11,8 +10,6 @@ private final class StatusRecorder: @unchecked Sendable {
     func append(_ status: NetworkStatus) { lock.withLock { _statuses.append(status) } }
 }
 
-
-// MARK: - Unit Tests
 
 final class DebouncedNetworkMonitorTests: XCTestCase {
 
@@ -137,7 +134,7 @@ final class DebouncedNetworkMonitorTests: XCTestCase {
         XCTAssertEqual(debouncedDisconnected.currentStatus, .disconnected)
     }
 
-    // MARK: - Integration: rapid flapping produces single flush
+    // Integration: rapid flapping produces single flush
 
     func testRapidFlappingProducesSingleFlushThroughDispatcher() async {
         let stub = StubNetworkMonitor(status: .connected)
@@ -187,7 +184,7 @@ final class DebouncedNetworkMonitorTests: XCTestCase {
 }
 
 
-// MARK: - Integration Test Helpers
+// Integration Test Helpers
 
 private final class FlushCounter: @unchecked Sendable {
     private let lock = NSLock()
