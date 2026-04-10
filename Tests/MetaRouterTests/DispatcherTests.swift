@@ -690,6 +690,163 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(remaining, 0, "Auto-flush should drain queue at threshold")
         XCTAssertGreaterThanOrEqual(stub.callCount, 1, "At least one POST should have been made")
     }
+
+
+    func testEventsEnqueueWhileOfflineNoHttpAttempts() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .success
+
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        await dispatcher.setOffline(true)
+
+        for i in 0..<5 {
+            await dispatcher.offer(makeTestEvent(messageId: "offline-\(i)"))
+        }
+
+        await dispatcher.flush()
+
+        XCTAssertEqual(stub.callCount, 0, "No HTTP attempts should be made while offline")
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 5, "All events should remain queued while offline")
+    }
+
+    func testOfflineToOnlineTriggersFlush() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .success
+
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        await dispatcher.setOffline(true)
+
+        for i in 0..<3 {
+            await dispatcher.offer(makeTestEvent(messageId: "queued-\(i)"))
+        }
+
+        // Come back online — should trigger immediate flush
+        await dispatcher.setOffline(false)
+
+        // Give flush a moment to complete
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "Events should flush on offline -> online transition")
+        XCTAssertGreaterThanOrEqual(stub.callCount, 1, "At least one HTTP request should have been made")
+    }
+
+    func testCircuitBreakerResetsOnOfflineToOnline() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .http(500)
+
+        let breaker = CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, jitterRatio: 0.0)
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: breaker,
+            queueCapacity: 100
+        )
+
+        // Trip the circuit breaker
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush()
+        XCTAssertEqual(breaker.getState(), .open, "Circuit should be open after 500 error")
+
+        // Switch stub to success so the flush on reconnect doesn't re-trip the breaker
+        stub.mode = .success
+
+        // Go offline then online — should reset circuit breaker
+        await dispatcher.setOffline(true)
+        await dispatcher.setOffline(false)
+
+        // Give the flush a moment to complete
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(breaker.getState(), .closed, "Circuit breaker should reset on offline -> online")
+    }
+
+    func testCircuitBreakerDoesNotResetWhileStillConnectedButFailing() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .http(500)
+
+        let breaker = CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, jitterRatio: 0.0)
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: breaker,
+            queueCapacity: 100
+        )
+
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush()
+        XCTAssertEqual(breaker.getState(), .open, "Circuit should be open after failure")
+
+        // Without going offline/online, circuit should stay open
+        await dispatcher.flush()
+        XCTAssertEqual(breaker.getState(), .open, "Circuit should remain open without offline->online transition")
+    }
+
+    func testSetOfflineIsIdempotent() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .success
+
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        await dispatcher.offer(makeTestEvent())
+
+        // Multiple offline calls should not cause issues
+        await dispatcher.setOffline(true)
+        await dispatcher.setOffline(true)
+        await dispatcher.setOffline(true)
+
+        var offline = await dispatcher.getIsOffline()
+        XCTAssertTrue(offline)
+        XCTAssertEqual(stub.callCount, 0, "No HTTP attempts while offline")
+
+        // Multiple online calls — only first should trigger flush
+        await dispatcher.setOffline(false)
+        await dispatcher.setOffline(false)
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        offline = await dispatcher.getIsOffline()
+        XCTAssertFalse(offline)
+    }
+
+    func testGetIsOfflineReflectsState() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        var offline = await dispatcher.getIsOffline()
+        XCTAssertFalse(offline, "Should start online")
+
+        await dispatcher.setOffline(true)
+        offline = await dispatcher.getIsOffline()
+        XCTAssertTrue(offline)
+
+        await dispatcher.setOffline(false)
+        offline = await dispatcher.getIsOffline()
+        XCTAssertFalse(offline)
+    }
 }
 
 

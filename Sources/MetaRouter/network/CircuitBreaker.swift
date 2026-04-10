@@ -115,7 +115,17 @@ public final class CircuitBreaker: @unchecked Sendable {
         return max(0, base + delta)
     }
 
-    
+    /// Force-reset to closed state. Used on offline -> online transition
+    /// to clear stale backoff from the offline period.
+    public func reset() {
+        lock.lock(); defer { lock.unlock() }
+        state = .closed
+        consecutiveFailures = 0
+        openCount = 0
+        openUntil = .distantPast
+        halfOpenInFlight = 0
+    }
+
     /// Get the current circuit breaker state
     public func getState() -> CircuitState {
         lock.lock(); defer { lock.unlock() }

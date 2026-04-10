@@ -563,4 +563,44 @@ final class AnalyticsClientTests: XCTestCase {
 
         await fulfillment(of: [expectation], timeout: 2.0)
     }
+
+    func testGetDebugInfoIncludesNetworkStatus() async {
+        let stubMonitor = StubNetworkMonitor(status: .connected)
+        let deps = AnalyticsDependencies(networkMonitor: stubMonitor)
+        let networkClient = AnalyticsClient.initialize(options: options, deps: deps)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let info = await networkClient.getDebugInfo()
+        if case .string(let networkStatus) = info["networkStatus"] {
+            XCTAssertEqual(networkStatus, "connected")
+        } else {
+            XCTFail("Expected networkStatus to be a string in debug info")
+        }
+    }
+
+    func testGetDebugInfoReflectsDisconnectedStatus() async {
+        let stubMonitor = StubNetworkMonitor(status: .disconnected)
+        let deps = AnalyticsDependencies(networkMonitor: stubMonitor)
+        let networkClient = AnalyticsClient.initialize(options: options, deps: deps)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let info = await networkClient.getDebugInfo()
+        if case .string(let networkStatus) = info["networkStatus"] {
+            XCTAssertEqual(networkStatus, "disconnected")
+        } else {
+            XCTFail("Expected networkStatus to be 'disconnected' in debug info")
+        }
+    }
+
+    func testSDKFunctionsNormallyWithNilNetworkMonitor() async {
+        // When no networkMonitor is provided, it defaults to real NetworkMonitor.
+        // Here we verify the client works with standard init (no DI).
+        let normalClient = AnalyticsClient.initialize(options: options)
+        normalClient.track("test_event")
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let info = await normalClient.getDebugInfo()
+        XCTAssertNotNil(info["networkStatus"], "networkStatus should be present in debug info")
+        XCTAssertNotNil(info["queueLength"], "Queue should be functional")
+    }
 }
