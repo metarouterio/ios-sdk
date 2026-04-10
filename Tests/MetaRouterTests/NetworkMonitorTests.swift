@@ -23,11 +23,13 @@ final class StubNetworkMonitor: NetworkReachability, @unchecked Sendable {
     }
 
     /// Simulate a network transition from tests.
+    /// Mirrors production behavior: only fires handler when status actually changes.
     func simulate(_ newStatus: NetworkStatus) {
         var callback: (@Sendable (NetworkStatus) -> Void)?
         lock.withLock {
+            let oldStatus = _status
             _status = newStatus
-            callback = handler
+            callback = oldStatus != newStatus ? handler : nil
         }
         callback?(newStatus)
     }
@@ -88,14 +90,14 @@ final class NetworkMonitorTests: XCTestCase {
         XCTAssertEqual(stub.currentStatus, .disconnected)
     }
 
-    func testStubSimulateConnectedToConnectedStillFires() {
+    func testStubSimulateSameStatusDoesNotFire() {
         let stub = StubNetworkMonitor(status: .connected)
         let counter = SendableCounter()
 
         stub.onStatusChange { _ in counter.increment() }
         stub.simulate(.connected)
 
-        XCTAssertEqual(counter.value, 1)
+        XCTAssertEqual(counter.value, 0, "Handler should not fire when status unchanged")
         XCTAssertEqual(stub.currentStatus, .connected)
     }
 
