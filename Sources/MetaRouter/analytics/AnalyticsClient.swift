@@ -59,6 +59,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
         let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
         let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
+        
         self.networkMonitor = monitor
 
         // Enable debug logging if requested

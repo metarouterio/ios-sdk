@@ -115,7 +115,7 @@ final class DiskStorageTests: XCTestCase {
 private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
     let ctx = EventContext(
         app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
-        device: DeviceContext(manufacturer: "a", model: "m", name: "n", type: "t"),
+        device: DeviceContext(manufacturer: "a", model: "m", type: "t"),
         library: LibraryContext(name: "l", version: "1"),
         os: OSContext(name: "iOS", version: "1"),
         screen: ScreenContext(density: 2.0, width: 1, height: 1),

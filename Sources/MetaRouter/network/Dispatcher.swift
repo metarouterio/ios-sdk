@@ -114,11 +114,6 @@ public actor Dispatcher {
         return isOffline
     }
 
-    public func resetCircuitBreaker() {
-        breaker.reset()
-    }
-
-
     public func offer(_ event: EnrichedEventPayload) async {
         Logger.log(
             "Enqueuing event {\"messageId\": \"\(event.messageId)\", \"type\": \"\(event.type)\"}",
