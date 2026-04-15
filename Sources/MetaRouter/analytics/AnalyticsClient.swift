@@ -387,6 +387,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             await self.dispatcher.stopFlushLoop()
             await self.dispatcher.cancelScheduledRetry()
             await self.dispatcher.clearAll()
+            self.initTask = nil
             self.disabled = false
             self.lifecycleState = .idle
         }
