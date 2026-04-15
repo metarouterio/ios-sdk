@@ -222,6 +222,7 @@ The analytics client provides the following methods:
 - `alias(_ newUserId: String)`: Connect anonymous users to known user IDs. See [Using the alias() Method](#using-the-alias-method) for details
 - `setAdvertisingId(_ advertisingId: String?)`: Set the advertising identifier (IDFA) for ad tracking. See [Advertising ID](#advertising-id-idfa) section for usage and compliance requirements
 - `clearAdvertisingId()`: Clear the advertising identifier from storage and context. Useful for GDPR/CCPA compliance when users opt out of ad tracking
+- `getAnonymousId() async -> String`: Retrieve the device's anonymous ID. Awaits initialization internally so the returned value is always valid — never nil or empty
 - `flush()`: Flush events immediately
 - `reset()`: Reset analytics state and clear all stored data (includes clearing advertising ID)
 - `enableDebugLogging()`: Enable debug logging
