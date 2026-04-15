@@ -602,6 +602,15 @@ final class MetaRouterIntegrationTests: XCTestCase {
         XCTAssertTrue(true, "Multiple clearAdvertisingId calls should be handled safely")
     }
 
+    func testGetAnonymousIdThroughPublicInterface() async {
+        let options = TestDataFactory.makeInitOptions()
+        let client: AnalyticsInterface = await MetaRouter.Analytics.initializeAndWait(with: options)
+
+        let anonymousId = await client.getAnonymousId()
+        XCTAssertNotNil(anonymousId, "Anonymous ID should be available after initialization")
+        XCTAssertFalse(anonymousId!.isEmpty, "Anonymous ID should not be empty")
+    }
+
     func testGDPRComplianceWorkflow() async {
         let options = TestDataFactory.makeInitOptions()
         let client = await MetaRouter.Analytics.initializeAndWait(with: options)

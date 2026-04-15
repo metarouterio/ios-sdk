@@ -391,6 +391,20 @@ final class AnalyticsProxyTests: XCTestCase {
         XCTAssertEqual(mockClient2.callCount, 1)
     }
     
+    func testGetAnonymousIdWhenNotBoundReturnsNil() async {
+        let anonymousId = await proxy.getAnonymousId()
+        XCTAssertNil(anonymousId, "Anonymous ID should be nil when proxy is not bound")
+    }
+
+    func testGetAnonymousIdWhenBoundDelegatesToRealClient() async {
+        mockClient.anonymousIdToReturn = "anon-123"
+        await proxy._bindAndReplay(mockClient)
+
+        let anonymousId = await proxy.getAnonymousId()
+        XCTAssertEqual(anonymousId, "anon-123", "Should return the value from the bound client")
+        XCTAssertTrue(mockClient.calls.contains(.getAnonymousId), "Should have called getAnonymousId on the mock")
+    }
+
     func testCallsWithNilValues() async {
         proxy.bind(mockClient)
         

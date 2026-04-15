@@ -83,6 +83,10 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         Task { await state.enqueue(.enableDebugLogging) }
     }
 
+    public func getAnonymousId() async -> String? {
+        return await state.getAnonymousId()
+    }
+
     public func getDebugInfo() async -> [String: CodableValue] {
         return await state.getDebugInfo()
     }
@@ -161,6 +165,13 @@ private actor ProxyState {
             "writeKey": .string(maskedKey),
             "ingestionHost": .string(host),
         ]
+    }
+
+    func getAnonymousId() async -> String? {
+        if let client = real {
+            return await client.getAnonymousId()
+        }
+        return nil
     }
 
     func getDebugInfo() async -> [String: CodableValue] {

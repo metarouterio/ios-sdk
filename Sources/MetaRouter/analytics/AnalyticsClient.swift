@@ -313,6 +313,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             host: options.ingestionHost.absoluteString)
     }
 
+    public func getAnonymousId() async -> String? {
+        return await identityManager.getAnonymousId()
+    }
+
     public func getDebugInfo() async -> [String: CodableValue] {
         // Mask writeKey to show only last 4 characters
         let maskedKey = options.writeKey.count > 4 
