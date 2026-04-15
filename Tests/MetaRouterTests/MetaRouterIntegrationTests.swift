@@ -607,8 +607,7 @@ final class MetaRouterIntegrationTests: XCTestCase {
         let client: AnalyticsInterface = await MetaRouter.Analytics.initializeAndWait(with: options)
 
         let anonymousId = await client.getAnonymousId()
-        XCTAssertNotNil(anonymousId, "Anonymous ID should be available after initialization")
-        XCTAssertFalse(anonymousId!.isEmpty, "Anonymous ID should not be empty")
+        XCTAssertFalse(anonymousId.isEmpty, "Anonymous ID should not be empty")
     }
 
     func testGDPRComplianceWorkflow() async {

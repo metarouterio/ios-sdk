@@ -28,6 +28,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var lifecycle: AppLifecycleObserver?
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
+    private var initTask: Task<Void, Never>?
 
     private init(options: InitOptions, deps: AnalyticsDependencies = .production) {
         self.lifecycleState = .initializing
@@ -109,7 +110,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             }
         }
 
-        Task { [weak self] in
+        self.initTask = Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
 
@@ -313,8 +314,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             host: options.ingestionHost.absoluteString)
     }
 
-    public func getAnonymousId() async -> String? {
-        return await identityManager.getAnonymousId()
+    public func getAnonymousId() async -> String {
+        await initTask?.value
+        return await identityManager.getAnonymousId() ?? UUID().uuidString.lowercased()
     }
 
     public func getDebugInfo() async -> [String: CodableValue] {

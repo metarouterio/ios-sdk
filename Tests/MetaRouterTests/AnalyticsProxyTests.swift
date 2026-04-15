@@ -391,17 +391,28 @@ final class AnalyticsProxyTests: XCTestCase {
         XCTAssertEqual(mockClient2.callCount, 1)
     }
     
-    func testGetAnonymousIdWhenNotBoundReturnsNil() async {
-        let anonymousId = await proxy.getAnonymousId()
-        XCTAssertNil(anonymousId, "Anonymous ID should be nil when proxy is not bound")
+    func testGetAnonymousIdAwaitsBindingThenDelegates() async {
+        mockClient.anonymousIdToReturn = "anon-123"
+
+        // Start getAnonymousId before binding — it should suspend until bound
+        let proxy = self.proxy!
+        let resultTask = Task { await proxy.getAnonymousId() }
+
+        // Bind after a short delay so the await above is already waiting
+        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        await proxy._bindAndReplay(mockClient)
+
+        let result = await resultTask.value
+        XCTAssertEqual(result, "anon-123", "Should return the value from the bound client")
+        XCTAssertTrue(mockClient.calls.contains(.getAnonymousId), "Should have called getAnonymousId on the mock")
     }
 
-    func testGetAnonymousIdWhenBoundDelegatesToRealClient() async {
-        mockClient.anonymousIdToReturn = "anon-123"
+    func testGetAnonymousIdWhenAlreadyBoundDelegatesImmediately() async {
+        mockClient.anonymousIdToReturn = "anon-456"
         await proxy._bindAndReplay(mockClient)
 
         let anonymousId = await proxy.getAnonymousId()
-        XCTAssertEqual(anonymousId, "anon-123", "Should return the value from the bound client")
+        XCTAssertEqual(anonymousId, "anon-456", "Should return the value from the bound client")
         XCTAssertTrue(mockClient.calls.contains(.getAnonymousId), "Should have called getAnonymousId on the mock")
     }
 

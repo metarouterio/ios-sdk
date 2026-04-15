@@ -565,12 +565,8 @@ final class AnalyticsClientTests: XCTestCase {
     }
 
     func testGetAnonymousIdReturnsValueAfterInitialization() async {
-        // Wait for the client to finish initialization
-        try? await Task.sleep(nanoseconds: 500_000_000)
-
         let anonymousId = await client.getAnonymousId()
-        XCTAssertNotNil(anonymousId, "Anonymous ID should be non-nil after initialization")
-        XCTAssertFalse(anonymousId!.isEmpty, "Anonymous ID should not be empty")
+        XCTAssertFalse(anonymousId.isEmpty, "Anonymous ID should not be empty")
     }
 
     func testGetAnonymousIdMatchesIdentityManager() async {
@@ -592,9 +588,6 @@ final class AnalyticsClientTests: XCTestCase {
         deps.identityManager = identityManager
         let testClient = AnalyticsClient.initialize(options: options, deps: deps)
 
-        // Wait for initialization
-        try? await Task.sleep(nanoseconds: 500_000_000)
-
         let clientAnonymousId = await testClient.getAnonymousId()
         let managerAnonymousId = await identityManager.getAnonymousId()
         XCTAssertEqual(clientAnonymousId, managerAnonymousId,
@@ -604,13 +597,9 @@ final class AnalyticsClientTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
-    func testGetAnonymousIdReturnsNilAfterReset() async {
-        // Wait for initialization to complete
-        try? await Task.sleep(nanoseconds: 500_000_000)
-
-        // Verify we have an anonymous ID before reset
+    func testGetAnonymousIdReturnsNewValueAfterReset() async {
         let preResetId = await client.getAnonymousId()
-        XCTAssertNotNil(preResetId, "Should have anonymous ID before reset")
+        XCTAssertFalse(preResetId.isEmpty, "Should have anonymous ID before reset")
 
         // Reset the client
         client.reset()
@@ -619,7 +608,8 @@ final class AnalyticsClientTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 500_000_000)
 
         let postResetId = await client.getAnonymousId()
-        XCTAssertNil(postResetId, "Anonymous ID should be nil after reset")
+        XCTAssertFalse(postResetId.isEmpty, "Anonymous ID should still be available after reset")
+        XCTAssertNotEqual(preResetId, postResetId, "Anonymous ID should change after reset")
     }
 
     func testGetDebugInfoIncludesNetworkStatus() async {

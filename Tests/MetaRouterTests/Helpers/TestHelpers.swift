@@ -64,7 +64,7 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         _calls.append(call)
     }
 
-    var anonymousIdToReturn: String?
+    var anonymousIdToReturn: String = "mock-anonymous-id"
 
     // AnalyticsInterface Implementation
 
@@ -126,7 +126,7 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.enableDebugLogging)
     }
 
-    func getAnonymousId() async -> String? {
+    func getAnonymousId() async -> String {
         recordCall(.getAnonymousId)
         return anonymousIdToReturn
     }

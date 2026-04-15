@@ -83,7 +83,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         Task { await state.enqueue(.enableDebugLogging) }
     }
 
-    public func getAnonymousId() async -> String? {
+    public func getAnonymousId() async -> String {
         return await state.getAnonymousId()
     }
 
@@ -135,17 +135,30 @@ private actor ProxyState {
     private var queue: [Call] = []
     private let cap = 20
     private var bootstrapDebugInfo: [String: CodableValue] = [:]
+    private var bindContinuations: [CheckedContinuation<AnalyticsInterface, Never>] = []
 
     func bind(_ client: AnalyticsInterface) {
         real = client
         // Replay queued calls
         for call in queue { forward(call) }
         queue.removeAll()
+        // Resume any callers waiting for binding
+        for continuation in bindContinuations {
+            continuation.resume(returning: client)
+        }
+        bindContinuations.removeAll()
     }
 
     func unbind() {
         real = nil
         queue.removeAll()
+    }
+
+    private func awaitClient() async -> AnalyticsInterface {
+        if let client = real { return client }
+        return await withCheckedContinuation { continuation in
+            bindContinuations.append(continuation)
+        }
     }
 
     func enqueue(_ call: Call) {
@@ -167,11 +180,9 @@ private actor ProxyState {
         ]
     }
 
-    func getAnonymousId() async -> String? {
-        if let client = real {
-            return await client.getAnonymousId()
-        }
-        return nil
+    func getAnonymousId() async -> String {
+        let client = await awaitClient()
+        return await client.getAnonymousId()
     }
 
     func getDebugInfo() async -> [String: CodableValue] {
