@@ -60,11 +60,15 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
             }
         } else {
             // Online: debounce — wait for stability before firing
+            Logger.log("Debounced network: raw online signal received (current=\(oldStatus.rawValue)), starting \(debounceNs / 1_000_000_000)s debounce")
             debounceTask?.cancel()
             let interval = debounceNs
             debounceTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: interval)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else {
+                    Logger.log("Debounced network: online debounce cancelled (flapping?)")
+                    return
+                }
                 self?.commitOnline()
             }
             lock.unlock()

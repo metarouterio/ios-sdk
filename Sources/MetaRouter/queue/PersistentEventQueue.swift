@@ -134,8 +134,11 @@ public actor PersistentEventQueue {
 
     /// Flush current memory state to disk. Full overwrite.
     /// Called on: app background, app terminate (best-effort), explicit flush, threshold.
+    /// No-op if the memory queue is empty (avoids misleading "deleted" log when events
+    /// have already been flushed to overflow disk).
     public func flushToDisk() async throws {
         let events = await peekAll()
+        guard !events.isEmpty else { return }
         let snapshot = QueueSnapshot(events: events)
         try await diskStorage.write(snapshot)
     }

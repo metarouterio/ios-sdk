@@ -39,6 +39,7 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             let newStatus: NetworkStatus = path.status == .satisfied ? .connected : .disconnected
+            Logger.log("NWPathMonitor update: status=\(path.status), interfaces=\(path.availableInterfaces.map(\.type)), expensive=\(path.isExpensive), constrained=\(path.isConstrained) → \(newStatus.rawValue)")
             self.lock.lock()
             let oldStatus = self._currentStatus
             self._currentStatus = newStatus
