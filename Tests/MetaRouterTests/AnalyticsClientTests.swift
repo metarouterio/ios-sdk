@@ -564,6 +564,54 @@ final class AnalyticsClientTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 2.0)
     }
 
+    func testGetAnonymousIdReturnsValueAfterInitialization() async {
+        let anonymousId = await client.getAnonymousId()
+        XCTAssertFalse(anonymousId.isEmpty, "Anonymous ID should not be empty")
+    }
+
+    func testGetAnonymousIdMatchesIdentityManager() async {
+        // Create a dedicated UserDefaults suite with a pre-seeded anonymous ID
+        let suiteName = "com.metarouter.test.getAnonymousId.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let knownId = UUID().uuidString
+        defaults.set(knownId, forKey: IdentityStorageKey.anonymousId.rawValue)
+
+        let storage = IdentityStorage(userDefaults: defaults)
+        let identityManager = IdentityManager(
+            storage: storage,
+            writeKey: "test-write-key",
+            host: "https://test.metarouter.com"
+        )
+        await identityManager.initialize()
+
+        var deps = AnalyticsDependencies()
+        deps.identityManager = identityManager
+        let testClient = AnalyticsClient.initialize(options: options, deps: deps)
+
+        let clientAnonymousId = await testClient.getAnonymousId()
+        let managerAnonymousId = await identityManager.getAnonymousId()
+        XCTAssertEqual(clientAnonymousId, managerAnonymousId,
+                       "Client getAnonymousId should return the same value as IdentityManager")
+        XCTAssertEqual(clientAnonymousId, knownId)
+
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    func testGetAnonymousIdReturnsNewValueAfterReset() async {
+        let preResetId = await client.getAnonymousId()
+        XCTAssertFalse(preResetId.isEmpty, "Should have anonymous ID before reset")
+
+        // Reset the client
+        client.reset()
+
+        // Wait for reset to propagate
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        let postResetId = await client.getAnonymousId()
+        XCTAssertFalse(postResetId.isEmpty, "Anonymous ID should still be available after reset")
+        XCTAssertNotEqual(preResetId, postResetId, "Anonymous ID should change after reset")
+    }
+
     func testGetDebugInfoIncludesNetworkStatus() async {
         let stubMonitor = StubNetworkMonitor(status: .connected)
         let deps = AnalyticsDependencies(networkMonitor: stubMonitor)

@@ -28,6 +28,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var lifecycle: AppLifecycleObserver?
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
+    private var initTask: Task<Void, Never>?
 
     private init(options: InitOptions, deps: AnalyticsDependencies = .production) {
         self.lifecycleState = .initializing
@@ -128,7 +129,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             }
         }
 
-        Task { [weak self] in
+        self.initTask = Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
 
@@ -338,6 +339,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             host: options.ingestionHost.absoluteString)
     }
 
+    public func getAnonymousId() async -> String {
+        await initTask?.value
+        return await identityManager.getOrCreateAnonymousId()
+    }
+
     public func getDebugInfo() async -> [String: CodableValue] {
         // Mask writeKey to show only last 4 characters
         let maskedKey = options.writeKey.count > 4 
@@ -406,6 +412,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             await self.dispatcher.stopFlushLoop()
             await self.dispatcher.cancelScheduledRetry()
             await self.dispatcher.clearAll()
+            self.initTask = nil
             self.disabled = false
             self.lifecycleState = .idle
         }

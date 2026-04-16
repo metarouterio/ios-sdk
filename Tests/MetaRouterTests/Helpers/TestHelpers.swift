@@ -64,6 +64,8 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         _calls.append(call)
     }
 
+    var anonymousIdToReturn: String = "mock-anonymous-id"
+
     // AnalyticsInterface Implementation
 
     func track(_ event: String, properties: [String: Any]?) {
@@ -124,6 +126,11 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.enableDebugLogging)
     }
 
+    func getAnonymousId() async -> String {
+        recordCall(.getAnonymousId)
+        return anonymousIdToReturn
+    }
+
     func getDebugInfo() async -> [String: CodableValue] {
         recordCall(.getDebugInfo)
         return ["mock": "debug-info"]
@@ -160,6 +167,7 @@ enum AnalyticsCall: Equatable {
     case page(name: String, properties: [String: CodableValue]?)
     case alias(newUserId: String)
     case enableDebugLogging
+    case getAnonymousId
     case getDebugInfo
 
     case flush
