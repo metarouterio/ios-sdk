@@ -15,6 +15,15 @@ public protocol NetworkReachability: AnyObject, Sendable {
     func onStatusChange(_ handler: @escaping @Sendable (NetworkStatus) -> Void)
     /// Tear down monitoring.
     func stop()
+    /// Force-check the underlying path and fire callback if status drifted.
+    /// Fallback for cases where the event-driven handler misses a transition
+    /// (known simulator quirk with NWPathMonitor on WiFi reconnect).
+    func reconcile()
+}
+
+extension NetworkReachability {
+    /// Default no-op for stubs/tests.
+    public func reconcile() {}
 }
 
 /// Persistent NWPathMonitor wrapper that publishes connectivity state.
@@ -67,5 +76,24 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
         self.monitor = nil
         lock.unlock()
         mon?.cancel()
+    }
+
+    /// Force-check NWPathMonitor.currentPath and fire callback if status drifted.
+    /// Catches transitions that pathUpdateHandler missed (known simulator quirk).
+    public func reconcile() {
+        guard let monitor = self.monitor else { return }
+        let path = monitor.currentPath
+        let newStatus: NetworkStatus = path.status == .satisfied ? .connected : .disconnected
+
+        lock.lock()
+        let oldStatus = _currentStatus
+        _currentStatus = newStatus
+        let callback = handler
+        lock.unlock()
+
+        if oldStatus != newStatus {
+            Logger.log("Network status reconciled: \(oldStatus.rawValue) -> \(newStatus.rawValue) (pathUpdateHandler missed this transition)")
+            callback?(newStatus)
+        }
     }
 }

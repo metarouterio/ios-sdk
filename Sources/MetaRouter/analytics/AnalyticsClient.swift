@@ -44,15 +44,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             writeKey: options.writeKey
         )
 
-        let mainDiskStorage = DiskStorage()
+        let diskStore = DiskStorage()
         let persistentQueue = deps.persistentQueue ?? PersistentEventQueue(
-            diskStorage: mainDiskStorage,
+            diskStore: diskStore,
             maxEventCount: options.maxQueueEvents,
-            overflowDiskStorage: DiskStorage(
-                baseDirectory: mainDiskStorage.baseDirectory,
-                fileName: "overflow.v1.json"
-            ),
-            maxOfflineDiskEvents: options.maxOfflineDiskEvents
+            maxDiskEvents: options.maxDiskEvents
         )
 
         self.dispatcher = deps.dispatcher ?? Dispatcher(
@@ -80,10 +76,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 self?.disabled = true
                 self?.lifecycleState = .disabled
             })
-            // Wire onFlushComplete to trigger overflow drain when online
+            // Wire onFlushComplete to trigger disk drain when online
             await self.dispatcher.setFlushCompleteHandler({ [weak self] in
                 guard let self else { return }
-                await self.dispatcher.drainOverflowToNetwork()
+                await self.dispatcher.drainDiskStoreToNetwork()
             })
         }
 
@@ -99,7 +95,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             onBackgroundAsync: { [weak self] in
                 guard let self else { return }
                 await self.dispatcher.flush()
-                try? await self.dispatcher.flushToDisk()
+                await self.dispatcher.flushToDisk()
                 await self.dispatcher.stopFlushLoop()
                 await self.dispatcher.cancelScheduledRetry()
             }
@@ -120,14 +116,27 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             }
         }
 
+        // Periodic network reconciliation — only active while the dispatcher thinks
+        // we're offline. Catches transitions that NWPathMonitor's pathUpdateHandler
+        // misses (known issue on simulator, rare edge cases on device).
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10s
+                guard let self else { return }
+                guard await self.dispatcher.getIsOffline() else { continue }
+                monitor.reconcile()
+            }
+        }
+
         Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
 
-            // Rehydrate persisted events from disk
-            let rehydratedCount = await self.dispatcher.rehydrate()
-            if rehydratedCount > 0 {
-                Logger.log("Rehydrated \(rehydratedCount) events from disk",
+            // Check disk for persisted events (cheap existence check, no parse).
+            // Actual drain happens below once we confirm we're online.
+            let hasPersisted = await self.dispatcher.checkForPersistedEvents()
+            if hasPersisted {
+                Logger.log("Persisted events detected on disk — will drain once online",
                            writeKey: self.options.writeKey,
                            host: self.options.ingestionHost.absoluteString)
             }
@@ -148,9 +157,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                        writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
 
-            // Drain any overflow from a previous offline session
+            // Drain any persisted events from a previous session
             if monitor.currentStatus == .connected {
-                await self.dispatcher.drainOverflowToNetwork()
+                await self.dispatcher.drainDiskStoreToNetwork()
             }
         }
     }

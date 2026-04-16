@@ -42,6 +42,13 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
         inner.stop()
     }
 
+    /// Delegate reconciliation to the inner monitor.
+    /// If the inner monitor detects a drifted status, its callback flows through
+    /// our handleRawStatusChange which applies the normal debounce logic.
+    public func reconcile() {
+        inner.reconcile()
+    }
+
     private func handleRawStatusChange(_ rawStatus: NetworkStatus) {
         lock.lock()
         let oldStatus = _currentStatus

@@ -99,7 +99,7 @@ public actor Dispatcher {
         self.http = http
         self.breaker = breaker
         self.queue = PersistentEventQueue(
-            diskStorage: DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
+            diskStore: DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
                 .appendingPathComponent("metarouter-noop-\(UUID().uuidString)")),
             maxEventCount: queueCapacity
         )
@@ -140,9 +140,9 @@ public actor Dispatcher {
             Logger.log("Dispatcher resumed — device is online, triggering flush")
             // Two independent flush paths:
             await flush() // (1) memory queue → network
-            // (2) disk overflow → network directly (background)
+            // (2) disk store → network directly (background)
             Task { [weak self] in
-                await self?.drainOverflowToNetwork()
+                await self?.drainDiskStoreToNetwork()
             }
         }
     }
@@ -165,11 +165,9 @@ public actor Dispatcher {
 
         // Check disk flush threshold
         if await queue.needsFlushToDisk {
-            do {
-                try await queue.flushToDisk()
+            let flushed = await queue.flushMemoryToDisk()
+            if flushed {
                 Logger.log("Auto disk flush triggered (threshold reached)")
-            } catch {
-                Logger.warn("Auto disk flush failed: \(error)")
             }
         }
 
@@ -178,15 +176,16 @@ public actor Dispatcher {
         }
     }
 
-    /// Flush current memory state to disk.
-    public func flushToDisk() async throws {
-        try await queue.flushToDisk()
+    /// Flush current memory state to disk (append + clear memory).
+    public func flushToDisk() async {
+        await queue.flushMemoryToDisk()
     }
 
-    /// Rehydrate events from disk. Returns the number of events loaded.
+    /// Cheap boot-time check — does the disk store have anything to drain?
+    /// Does not parse the file.
     @discardableResult
-    public func rehydrate() async -> Int {
-        await queue.rehydrate()
+    public func checkForPersistedEvents() async -> Bool {
+        await queue.checkForPersistedEvents()
     }
 
     public func flush() async {
@@ -290,77 +289,112 @@ public actor Dispatcher {
         }
     }
 
-    /// Drain overflow events from disk directly to network in batches.
+    /// Drain events from the disk store directly to network in batches.
     /// Called on offline→online transition, after successful flush, or at startup.
     /// Does NOT load events into the memory queue.
     ///
+    /// Algorithm (O(n) — one read, one delete, iterate in memory):
+    /// 1. Acquire the disk lock so mid-drain memory flushes don't clobber our writes.
+    /// 2. Read the entire disk file once and delete it.
+    /// 3. Iterate batches in memory; checkpoint remaining every 10 successful batches.
+    /// 4. On failure / server error / offline-transition, write remainder back to disk.
+    ///
     /// Response handling per category:
-    /// - SUCCESS: remove batch, restore batch size, continue
+    /// - SUCCESS: drop batch, restore batch size, continue
     /// - PAYLOAD_TOO_LARGE (413): halve batch size, retry. Drop at batchSize=1
-    /// - SERVER_ERROR / RATE_LIMITED (5xx/408/429): stop, retry on next online transition
-    /// - FATAL_CONFIG (401/403/404): delete overflow store entirely
+    /// - SERVER_ERROR / RATE_LIMITED (5xx/408/429): persist remainder, stop
+    /// - FATAL_CONFIG (401/403/404): delete disk store entirely, fire fatal handler
     /// - CLIENT_ERROR (other 4xx): drop batch, continue
-    /// - Network failure (nil): stop, retry on next online transition
-    public func drainOverflowToNetwork() async {
+    /// - Network failure (nil): persist remainder, stop
+    public func drainDiskStoreToNetwork() async {
         guard !isDraining else { return }
         isDraining = true
         defer { isDraining = false }
 
-        var drainBatchSize = config.initialMaxBatchSize
+        guard await queue.hasDiskData else { return }
+        guard !isOffline else {
+            Logger.log("Drain skipped — device is offline")
+            return
+        }
 
-        drainLoop: while !isOffline {
-            let batch = await queue.readOverflowBatch(max: drainBatchSize)
-            guard !batch.isEmpty else { break drainLoop }
+        await queue.acquireDiskLock()
+        defer { Task { await queue.releaseDiskLock() } }
+
+        let all = await queue.readAllFromDiskAndDelete()
+        guard !all.isEmpty else { return }
+
+        var remaining = all
+        var drainBatchSize = config.initialMaxBatchSize
+        var batchesSinceCheckpoint = 0
+        let checkpointEvery = 10
+        Logger.log("Disk store drain started — \(remaining.count) event(s)")
+
+        while !remaining.isEmpty && !isOffline {
+            let take = min(drainBatchSize, remaining.count)
+            let batch = Array(remaining.prefix(take))
 
             guard let resp = await sendBatchDirect(batch) else {
-                Logger.warn("Overflow drain stopped (network failure) — will retry on next online transition")
-                break drainLoop
+                Logger.warn("Disk drain stopped (network failure) — persisting \(remaining.count) event(s) back to disk")
+                await queue.writeDiskStore(remaining)
+                return
             }
 
-            let category = ResponseCategory.from(resp.statusCode)
-            switch category {
+            switch ResponseCategory.from(resp.statusCode) {
             case .success:
-                await queue.removeOverflowBatch(count: batch.count)
-                Logger.log("Drained \(batch.count) overflow events from disk to network")
-                // Gradually recover batch size after 413-induced reduction
+                remaining.removeFirst(take)
                 if drainBatchSize < config.initialMaxBatchSize {
                     drainBatchSize = min(drainBatchSize * 2, config.initialMaxBatchSize)
+                }
+                batchesSinceCheckpoint += 1
+                if batchesSinceCheckpoint >= checkpointEvery && !remaining.isEmpty {
+                    await queue.writeDiskStore(remaining)
+                    batchesSinceCheckpoint = 0
+                    Logger.log("Disk drain checkpoint — \(remaining.count) event(s) remaining")
                 }
 
             case .payloadTooLarge:
                 if drainBatchSize > 1 {
                     drainBatchSize = max(1, drainBatchSize / 2)
-                    Logger.warn("Overflow drain 413 — halving batch size to \(drainBatchSize)")
+                    Logger.warn("Disk drain 413 — halving batch size to \(drainBatchSize)")
                 } else {
-                    // Drop at batchSize=1 — single event is too large
                     let ids = batch.map { $0.messageId }.joined(separator: ",")
-                    Logger.warn("Overflow drain dropping oversize event(s) at batchSize=1; messageIds=\(ids)")
-                    await queue.removeOverflowBatch(count: batch.count)
+                    Logger.warn("Disk drain dropping oversize event(s) at batchSize=1; messageIds=\(ids)")
+                    remaining.removeFirst(take)
                 }
 
             case .serverError, .rateLimited:
-                Logger.warn("Overflow drain stopped (\(resp.statusCode)) — will retry on next online transition")
-                break drainLoop
+                Logger.warn("Disk drain stopped (\(resp.statusCode)) — persisting \(remaining.count) event(s) back to disk")
+                await queue.writeDiskStore(remaining)
+                return
 
             case .fatalConfig:
-                Logger.error("Overflow drain fatal config error (\(resp.statusCode)) — deleting overflow store")
-                await queue.deleteOverflowDisk()
+                Logger.error("Disk drain fatal config error (\(resp.statusCode)) — deleting disk store")
+                await queue.deleteDiskStore()
                 onFatalConfigError?(resp.statusCode)
                 return
 
             case .clientError:
                 let ids = batch.map { $0.messageId }.joined(separator: ",")
-                Logger.warn("Overflow drain dropping bad batch (\(resp.statusCode)); messageIds=\(ids)")
-                await queue.removeOverflowBatch(count: batch.count)
+                Logger.warn("Disk drain dropping bad batch (\(resp.statusCode)); messageIds=\(ids)")
+                remaining.removeFirst(take)
             }
+        }
+
+        // Persist final state. If remaining is empty, this deletes any stale checkpoint
+        // from an earlier iteration. If non-empty, it's the offline-mid-drain remainder.
+        await queue.writeDiskStore(remaining)
+        if remaining.isEmpty {
+            Logger.log("Disk store drain complete")
+        } else {
+            Logger.log("Disk drain paused (offline mid-drain) — persisted \(remaining.count) event(s)")
         }
     }
 
     private func processUntilEmpty() async {
         while await queue.count > 0 {
             guard !isOffline else {
-                Logger.log("Offline — flushing \(await queue.count) event(s) to overflow disk")
-                await queue.flushToOverflowDisk()
+                Logger.log("Offline — flushing \(await queue.count) event(s) to disk")
+                await queue.flushMemoryToDisk()
                 return
             }
 
