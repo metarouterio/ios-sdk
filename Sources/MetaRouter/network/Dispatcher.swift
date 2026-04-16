@@ -1,8 +1,31 @@
 import Foundation
 
+/// Shared classification of HTTP status codes used by both the dispatcher and the overflow drain.
+public enum ResponseCategory: Sendable {
+    case success
+    case serverError
+    case rateLimited
+    case payloadTooLarge
+    case fatalConfig
+    case clientError
+
+    public static func from(_ statusCode: Int) -> ResponseCategory {
+        switch statusCode {
+        case 200..<300: return .success
+        case 500..<600, 408: return .serverError
+        case 429: return .rateLimited
+        case 413: return .payloadTooLarge
+        case 401, 403, 404: return .fatalConfig
+        case 400..<500: return .clientError
+        default: return .clientError
+        }
+    }
+}
+
 /// Event dispatcher that batches, posts, and applies retry logic per networkBehavior spec
 public actor Dispatcher {
     public typealias FatalConfigHandler = @Sendable (_ status: Int) -> Void
+    public typealias FlushCompleteHandler = @Sendable () async -> Void
     public struct Config: Sendable {
         public let endpointPath: String
         public let timeoutMs: Int
@@ -34,6 +57,7 @@ public actor Dispatcher {
     private let breaker: CircuitBreaker
     private var maxBatchSize: Int
     private var onFatalConfigError: FatalConfigHandler?
+    private var onFlushComplete: FlushCompleteHandler?
 
     private var flushTimerTask: Task<Void, Never>? = nil
     private var retryTimerTask: Task<Void, Never>? = nil
@@ -88,14 +112,18 @@ public actor Dispatcher {
         self.onFatalConfigError = handler
     }
 
+    public func setFlushCompleteHandler(_ handler: FlushCompleteHandler?) {
+        self.onFlushComplete = handler
+    }
+
     public func setTracing(_ enabled: Bool) {
         self.tracingEnabled = enabled
         Logger.log("Tracing \(enabled ? "enabled" : "disabled")")
     }
 
     /// Update offline state. Idempotent — only acts on actual transitions.
-    /// When going offline, enables overflow buffering on the queue.
-    /// When coming online, disables overflow, resets circuit breaker, flushes memory queue,
+    /// When going offline, stops retrying (no point while offline).
+    /// When coming online, resets circuit breaker, flushes memory queue,
     /// and starts draining overflow from disk to network in the background.
     public func setOffline(_ offline: Bool) async {
         if !isOffline && offline {
@@ -103,12 +131,10 @@ public actor Dispatcher {
             isOffline = true
             retryTimerTask?.cancel()
             retryTimerTask = nil
-            await queue.setOfflineOverflowEnabled(true)
             Logger.log("Dispatcher paused — device is offline")
         } else if isOffline && !offline {
             // Coming back online: reset stale backoff and flush immediately
             isOffline = false
-            await queue.setOfflineOverflowEnabled(false)
             breaker.reset()
             consecutiveRetries = 0
             Logger.log("Dispatcher resumed — device is online, triggering flush")
@@ -174,6 +200,10 @@ public actor Dispatcher {
                 "Flush completed successfully",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
+            // Fire onFlushComplete only when online — triggers overflow drain
+            if !isOffline, let handler = onFlushComplete {
+                await handler()
+            }
         }
     }
 
@@ -225,9 +255,9 @@ public actor Dispatcher {
 
     /// Send a batch of events directly to the network, bypassing the memory queue.
     /// Used by overflow drain to flush disk events without loading into memory.
-    /// Returns true on 2xx success, false on any failure.
-    public func sendBatchDirect(_ events: [EnrichedEventPayload]) async -> Bool {
-        guard !events.isEmpty else { return true }
+    /// Returns the NetworkResponse on success/HTTP error, nil on network/encoding failure.
+    public func sendBatchDirect(_ events: [EnrichedEventPayload]) async -> NetworkResponse? {
+        guard !events.isEmpty else { return NetworkResponse(statusCode: 200, headers: [:], body: Data()) }
 
         var batch = events
         let sentAt = Self.isoFormatter.string(from: Date())
@@ -241,7 +271,7 @@ public actor Dispatcher {
             body = try Self.jsonEncoder.encode(payload)
         } catch {
             Logger.error("Failed to encode overflow batch: \(error)")
-            return false
+            return nil
         }
 
         let url = options.ingestionHost.appendingPathComponent(config.endpointPath)
@@ -250,38 +280,78 @@ public actor Dispatcher {
             let resp = try await http.postJSON(url: url, body: body, timeoutMs: config.timeoutMs, additionalHeaders: nil)
             if (200..<300).contains(resp.statusCode) {
                 breaker.onSuccess()
-                return true
             } else {
                 Logger.warn("Overflow batch send failed with status \(resp.statusCode)")
-                return false
             }
+            return resp
         } catch {
             Logger.warn("Overflow batch send failed: \(error.localizedDescription)")
-            return false
+            return nil
         }
     }
 
     /// Drain overflow events from disk directly to network in batches.
-    /// Called on offline→online transition as an independent flush pipeline.
+    /// Called on offline→online transition, after successful flush, or at startup.
     /// Does NOT load events into the memory queue.
+    ///
+    /// Response handling per category:
+    /// - SUCCESS: remove batch, restore batch size, continue
+    /// - PAYLOAD_TOO_LARGE (413): halve batch size, retry. Drop at batchSize=1
+    /// - SERVER_ERROR / RATE_LIMITED (5xx/408/429): stop, retry on next online transition
+    /// - FATAL_CONFIG (401/403/404): delete overflow store entirely
+    /// - CLIENT_ERROR (other 4xx): drop batch, continue
+    /// - Network failure (nil): stop, retry on next online transition
     public func drainOverflowToNetwork() async {
         guard !isDraining else { return }
         isDraining = true
         defer { isDraining = false }
 
-        await queue.flushOverflowBufferToDisk()
+        var drainBatchSize = config.initialMaxBatchSize
 
-        while !isOffline {
-            let batch = await queue.readOverflowBatch(max: 100)
-            guard !batch.isEmpty else { break }
+        drainLoop: while !isOffline {
+            let batch = await queue.readOverflowBatch(max: drainBatchSize)
+            guard !batch.isEmpty else { break drainLoop }
 
-            let success = await sendBatchDirect(batch)
-            if success {
+            guard let resp = await sendBatchDirect(batch) else {
+                Logger.warn("Overflow drain stopped (network failure) — will retry on next online transition")
+                break drainLoop
+            }
+
+            let category = ResponseCategory.from(resp.statusCode)
+            switch category {
+            case .success:
                 await queue.removeOverflowBatch(count: batch.count)
                 Logger.log("Drained \(batch.count) overflow events from disk to network")
-            } else {
-                Logger.warn("Overflow drain stopped — will retry on next online transition")
-                break
+                // Gradually recover batch size after 413-induced reduction
+                if drainBatchSize < config.initialMaxBatchSize {
+                    drainBatchSize = min(drainBatchSize * 2, config.initialMaxBatchSize)
+                }
+
+            case .payloadTooLarge:
+                if drainBatchSize > 1 {
+                    drainBatchSize = max(1, drainBatchSize / 2)
+                    Logger.warn("Overflow drain 413 — halving batch size to \(drainBatchSize)")
+                } else {
+                    // Drop at batchSize=1 — single event is too large
+                    let ids = batch.map { $0.messageId }.joined(separator: ",")
+                    Logger.warn("Overflow drain dropping oversize event(s) at batchSize=1; messageIds=\(ids)")
+                    await queue.removeOverflowBatch(count: batch.count)
+                }
+
+            case .serverError, .rateLimited:
+                Logger.warn("Overflow drain stopped (\(resp.statusCode)) — will retry on next online transition")
+                break drainLoop
+
+            case .fatalConfig:
+                Logger.error("Overflow drain fatal config error (\(resp.statusCode)) — deleting overflow store")
+                await queue.deleteOverflowDisk()
+                onFatalConfigError?(resp.statusCode)
+                return
+
+            case .clientError:
+                let ids = batch.map { $0.messageId }.joined(separator: ",")
+                Logger.warn("Overflow drain dropping bad batch (\(resp.statusCode)); messageIds=\(ids)")
+                await queue.removeOverflowBatch(count: batch.count)
             }
         }
     }
@@ -289,7 +359,8 @@ public actor Dispatcher {
     private func processUntilEmpty() async {
         while await queue.count > 0 {
             guard !isOffline else {
-                Logger.log("Offline — pausing HTTP attempts, \(await queue.count) event(s) queued")
+                Logger.log("Offline — flushing \(await queue.count) event(s) to overflow disk")
+                await queue.flushToOverflowDisk()
                 return
             }
 

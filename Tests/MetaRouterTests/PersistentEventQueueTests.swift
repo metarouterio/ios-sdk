@@ -438,7 +438,7 @@ final class PersistentEventQueueTests: XCTestCase {
 
     // MARK: - Offline Overflow Tests
 
-    func testOverflowBuffersToDiskinsteadOfDropping() async throws {
+    func testOverflowFlushesEntireQueueToDisk() async throws {
         let overflowDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("OverflowTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: overflowDir) }
@@ -450,32 +450,28 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 1000
         )
 
-        await queue.setOfflineOverflowEnabled(true)
-
         // Fill to capacity
         await queue.enqueue(makeTestEvent(messageId: "e1"))
         await queue.enqueue(makeTestEvent(messageId: "e2"))
         await queue.enqueue(makeTestEvent(messageId: "e3"))
 
-        // This enqueue should evict e1 to overflow buffer, not drop it
+        // This enqueue triggers full queue flush to disk, then e4 is the only event in memory
         await queue.enqueue(makeTestEvent(messageId: "e4"))
-        await queue.enqueue(makeTestEvent(messageId: "e5"))
 
-        // Memory queue should have newest 3
+        // Memory queue should have just the new event
         let memCount = await queue.count
-        XCTAssertEqual(memCount, 3)
+        XCTAssertEqual(memCount, 1)
         let drained = await queue.drain(max: 10)
-        XCTAssertEqual(drained.map(\.messageId), ["e3", "e4", "e5"])
+        XCTAssertEqual(drained.map(\.messageId), ["e4"])
 
-        // Overflow buffer should have evicted events (flush to check)
-        await queue.flushOverflowBufferToDisk()
+        // Overflow disk should have the full flushed queue
         let overflowBatch = await queue.readOverflowBatch(max: 10)
-        XCTAssertEqual(overflowBatch.map(\.messageId), ["e1", "e2"])
+        XCTAssertEqual(overflowBatch.map(\.messageId), ["e1", "e2", "e3"])
     }
 
-    func testOverflowDisabledDropsAsUsual() async throws {
+    func testOverflowAlwaysFlushesRegardlessOfOnlineState() async throws {
         let overflowDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OverflowDisabledTest-\(UUID().uuidString)")
+            .appendingPathComponent("OverflowAlwaysTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: overflowDir) }
 
         let queue = PersistentEventQueue(
@@ -485,17 +481,18 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 1000
         )
 
-        // Overflow NOT enabled — events should be dropped as usual
+        // No setOfflineOverflowEnabled call needed — overflow is always active
+        // when overflowDiskStorage exists and queue hits capacity
         await queue.enqueue(makeTestEvent(messageId: "e1"))
         await queue.enqueue(makeTestEvent(messageId: "e2"))
         await queue.enqueue(makeTestEvent(messageId: "e3"))
         await queue.enqueue(makeTestEvent(messageId: "e4"))
 
         let memCount = await queue.count
-        XCTAssertEqual(memCount, 3)
+        XCTAssertEqual(memCount, 1)
 
-        let overflowCount = await queue.overflowCount()
-        XCTAssertEqual(overflowCount, 0, "No overflow events should exist when overflow is disabled")
+        let overflowBatch = await queue.readOverflowBatch(max: 10)
+        XCTAssertEqual(overflowBatch.count, 3, "Overflow should always flush to disk when storage exists")
     }
 
     func testOverflowDiskCapDropsOldest() async throws {
@@ -510,28 +507,28 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 5
         )
 
-        await queue.setOfflineOverflowEnabled(true)
-
-        // Fill memory, then overflow 8 events (exceeds cap of 5)
+        // Fill memory, then trigger multiple flushes (exceeds cap of 5)
+        // Each time the queue hits 3, it flushes all 3 to disk
         for i in 0..<11 {
             await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
         }
 
-        // Memory has 3 newest: e8, e9, e10
+        // Memory has the events after the last flush
+        // With capacity 3: flushes at e3 (writes e0,e1,e2), at e6 (writes e3,e4,e5), at e9 (writes e6,e7,e8)
+        // Memory has: e9, e10
         let memDrained = await queue.drain(max: 10)
-        XCTAssertEqual(memDrained.map(\.messageId), ["e8", "e9", "e10"])
+        XCTAssertEqual(memDrained.map(\.messageId), ["e9", "e10"])
 
         // Overflow disk should have exactly 5 (cap), with oldest dropped
-        await queue.flushOverflowBufferToDisk()
         let overflowBatch = await queue.readOverflowBatch(max: 100)
         XCTAssertEqual(overflowBatch.count, 5)
-        // Should have e3..e7 (oldest e0..e2 dropped by disk cap)
-        XCTAssertEqual(overflowBatch.map(\.messageId), ["e3", "e4", "e5", "e6", "e7"])
+        // Should have e4..e8 (oldest e0..e3 dropped by disk cap)
+        XCTAssertEqual(overflowBatch.map(\.messageId), ["e4", "e5", "e6", "e7", "e8"])
     }
 
-    func testOverflowBatchedWriteNotPerEvent() async throws {
+    func testOverflowWritesToDiskImmediately() async throws {
         let overflowDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OverflowBatchTest-\(UUID().uuidString)")
+            .appendingPathComponent("OverflowImmediateTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: overflowDir) }
 
         let queue = PersistentEventQueue(
@@ -541,53 +538,46 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 10000
         )
 
-        await queue.setOfflineOverflowEnabled(true)
-
-        // Fill memory and overflow 50 events (below batch threshold of 100)
-        for i in 0..<53 {
+        // Fill to capacity and trigger overflow
+        for i in 0..<4 {
             await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
         }
 
-        // The overflow file should NOT exist yet since buffer hasn't hit threshold
-        let overflowPath = overflowDir.appendingPathComponent("overflow.v1.json")
-        let fileExistsBeforeFlush = FileManager.default.fileExists(atPath: overflowPath.path)
-        XCTAssertFalse(fileExistsBeforeFlush,
-            "Buffer should batch writes, not write per event (50 events < 100 batch threshold)")
-
-        // Explicitly flush buffer to disk
-        await queue.flushOverflowBufferToDisk()
-        let overflowBatch = await queue.readOverflowBatch(max: 100)
-        XCTAssertEqual(overflowBatch.count, 50, "All 50 overflow events should be on disk after flush")
-    }
-
-    func testOverflowAutoFlushesAtBatchThreshold() async throws {
-        let overflowDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OverflowAutoFlush-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: overflowDir) }
-
-        let queue = PersistentEventQueue(
-            diskStorage: DiskStorage(baseDirectory: tempDir),
-            maxEventCount: 3,
-            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
-            maxOfflineDiskEvents: 10000
-        )
-
-        await queue.setOfflineOverflowEnabled(true)
-
-        // Overflow 103 events (100 = batch threshold, should auto-flush first 100)
-        for i in 0..<106 {
-            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
-        }
-
-        // After 103 overflows, the first 100 should have auto-flushed to disk
+        // Overflow file should exist immediately (no buffering)
         let overflowPath = overflowDir.appendingPathComponent("overflow.v1.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: overflowPath.path),
-            "Overflow should auto-flush to disk at batch threshold")
+            "Overflow should write to disk immediately on capacity hit, no buffering")
 
-        // Flush remaining buffer and verify total
-        await queue.flushOverflowBufferToDisk()
-        let total = await queue.readOverflowBatch(max: 10000)
-        XCTAssertEqual(total.count, 103, "All overflow events should be persisted after flush")
+        let overflowBatch = await queue.readOverflowBatch(max: 100)
+        XCTAssertEqual(overflowBatch.count, 3, "All 3 flushed events should be on disk")
+    }
+
+    func testMultipleOverflowFlushesAccumulate() async throws {
+        let overflowDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OverflowAccumulateTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: overflowDir) }
+
+        let queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 3,
+            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
+            maxOfflineDiskEvents: 10000
+        )
+
+        // Trigger multiple overflows: 7 events with capacity 3
+        // Flush at e3 (writes e0,e1,e2), flush at e6 (writes e3,e4,e5)
+        for i in 0..<7 {
+            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+
+        // Memory should have e6
+        let memCount = await queue.count
+        XCTAssertEqual(memCount, 1)
+
+        // Overflow disk should have accumulated events from both flushes
+        let overflowBatch = await queue.readOverflowBatch(max: 100)
+        XCTAssertEqual(overflowBatch.count, 6)
+        XCTAssertEqual(overflowBatch.map(\.messageId), ["e0", "e1", "e2", "e3", "e4", "e5"])
     }
 
     func testDrainReadsThenRemovesBatches() async throws {
@@ -641,13 +631,10 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 1000
         )
 
-        await queue.setOfflineOverflowEnabled(true)
-
-        // Fill and overflow
+        // Fill and trigger overflow flush to disk
         for i in 0..<6 {
             await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
         }
-        await queue.flushOverflowBufferToDisk()
 
         let overflowPath = overflowDir.appendingPathComponent("overflow.v1.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: overflowPath.path))
@@ -658,34 +645,6 @@ final class PersistentEventQueueTests: XCTestCase {
             "clear() must delete overflow disk file")
         let count = await queue.count
         XCTAssertEqual(count, 0)
-    }
-
-    func testFlushToDiskAlsoFlushesOverflowBuffer() async throws {
-        let overflowDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("FlushBothTest-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: overflowDir) }
-
-        let queue = PersistentEventQueue(
-            diskStorage: DiskStorage(baseDirectory: tempDir),
-            maxEventCount: 3,
-            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
-            maxOfflineDiskEvents: 1000
-        )
-
-        await queue.setOfflineOverflowEnabled(true)
-
-        // Fill and overflow (but below batch threshold, so buffer not yet written)
-        for i in 0..<6 {
-            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
-        }
-
-        // flushToDisk should persist both memory queue and overflow buffer
-        try await queue.flushToDisk()
-
-        // Verify overflow was persisted
-        let overflowDisk = DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json")
-        let snapshot = await overflowDisk.read()
-        XCTAssertEqual(snapshot?.events.count, 3, "Overflow buffer should be flushed by flushToDisk")
     }
 
     func testAppKillWhileOfflineThenRelaunchOnline() async throws {
@@ -701,7 +660,6 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 1000
         )
 
-        await queue1.setOfflineOverflowEnabled(true)
         for i in 0..<8 {
             await queue1.enqueue(makeTestEvent(messageId: "session1-\(i)"))
         }
@@ -716,13 +674,15 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 1000
         )
 
-        // Rehydrate memory queue
+        // Rehydrate memory queue — with capacity 3, after 8 events:
+        // flushes at e3 (writes e0,e1,e2), at e6 (writes e3,e4,e5)
+        // memory has e6, e7 at time of flushToDisk
         let rehydrated = await queue2.rehydrate()
-        XCTAssertEqual(rehydrated, 3, "Memory queue should rehydrate from main disk")
+        XCTAssertEqual(rehydrated, 2, "Memory queue should rehydrate from main disk")
 
         // Overflow should still be on disk from previous session
         let overflowBatch = await queue2.readOverflowBatch(max: 100)
-        XCTAssertEqual(overflowBatch.count, 5, "Overflow events should persist across app restart")
+        XCTAssertEqual(overflowBatch.count, 6, "Overflow events should persist across app restart")
         XCTAssertEqual(overflowBatch.first?.messageId, "session1-0")
     }
 
@@ -734,9 +694,6 @@ final class PersistentEventQueueTests: XCTestCase {
             maxOfflineDiskEvents: 1000
         )
 
-        // setOfflineOverflowEnabled is a no-op when storage is nil
-        await queue.setOfflineOverflowEnabled(true)
-
         // Events beyond capacity should just be dropped (existing behavior)
         for i in 0..<5 {
             await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
@@ -745,8 +702,43 @@ final class PersistentEventQueueTests: XCTestCase {
         let count = await queue.count
         XCTAssertEqual(count, 3)
 
-        let overflowCount = await queue.overflowCount()
-        XCTAssertEqual(overflowCount, 0, "No overflow should exist without overflow storage")
+        // No overflow disk → flushToOverflowDisk is a no-op
+        let flushed = await queue.flushToOverflowDisk()
+        XCTAssertFalse(flushed, "No overflow should exist without overflow storage")
+    }
+
+    func testFlushToOverflowDiskDrainsMemoryQueue() async throws {
+        let overflowDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ExplicitFlushTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: overflowDir) }
+
+        let queue = PersistentEventQueue(
+            diskStorage: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 100,
+            overflowDiskStorage: DiskStorage(baseDirectory: overflowDir, fileName: "overflow.v1.json"),
+            maxOfflineDiskEvents: 10000
+        )
+
+        // Enqueue events (below capacity, so no automatic flush)
+        for i in 0..<5 {
+            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+
+        let memBefore = await queue.count
+        XCTAssertEqual(memBefore, 5)
+
+        // Explicitly flush to overflow disk (e.g., when dispatcher detects offline)
+        let flushed = await queue.flushToOverflowDisk()
+        XCTAssertTrue(flushed)
+
+        // Memory should be empty
+        let memAfter = await queue.count
+        XCTAssertEqual(memAfter, 0)
+
+        // Overflow disk should have all events
+        let overflowBatch = await queue.readOverflowBatch(max: 10)
+        XCTAssertEqual(overflowBatch.count, 5)
+        XCTAssertEqual(overflowBatch.map(\.messageId), ["e0", "e1", "e2", "e3", "e4"])
     }
 }
 

@@ -80,6 +80,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 self?.disabled = true
                 self?.lifecycleState = .disabled
             })
+            // Wire onFlushComplete to trigger overflow drain when online
+            await self.dispatcher.setFlushCompleteHandler({ [weak self] in
+                guard let self else { return }
+                await self.dispatcher.drainOverflowToNetwork()
+            })
         }
 
         self.lifecycle = AppLifecycleObserver(

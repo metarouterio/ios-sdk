@@ -1034,7 +1034,7 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(overflowRemaining.count, 0)
     }
 
-    func testSendBatchDirectReturnsFalseOnError() async {
+    func testSendBatchDirectReturnsNilOnError() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
         stub.mode = .error
@@ -1045,10 +1045,10 @@ final class DispatcherTests: XCTestCase {
         )
 
         let result = await dispatcher.sendBatchDirect([makeTestEvent()])
-        XCTAssertFalse(result, "sendBatchDirect should return false on network error")
+        XCTAssertNil(result, "sendBatchDirect should return nil on network error")
     }
 
-    func testSendBatchDirectReturnsTrueOnSuccess() async {
+    func testSendBatchDirectReturnsResponseOnSuccess() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
         stub.mode = .success
@@ -1059,8 +1059,24 @@ final class DispatcherTests: XCTestCase {
         )
 
         let result = await dispatcher.sendBatchDirect([makeTestEvent()])
-        XCTAssertTrue(result, "sendBatchDirect should return true on 200")
+        XCTAssertNotNil(result, "sendBatchDirect should return response on 200")
+        XCTAssertEqual(result?.statusCode, 200)
         XCTAssertEqual(stub.callCount, 1)
+    }
+
+    func testSendBatchDirectReturnsResponseOnHttpError() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .http(500)
+        let dispatcher = Dispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        let result = await dispatcher.sendBatchDirect([makeTestEvent()])
+        XCTAssertNotNil(result, "sendBatchDirect should return response on HTTP error")
+        XCTAssertEqual(result?.statusCode, 500)
     }
 }
 

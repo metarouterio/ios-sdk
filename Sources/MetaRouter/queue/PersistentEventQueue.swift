@@ -30,9 +30,6 @@ public actor PersistentEventQueue {
     // Offline overflow support
     private let overflowDiskStorage: DiskStorage?
     private let maxOfflineDiskEvents: Int
-    private var offlineOverflowEnabled = false
-    private var overflowBuffer: [EnrichedEventPayload] = []
-    private static let overflowBatchThreshold = 100
 
     public init(
         diskStorage: DiskStorage,
@@ -53,28 +50,25 @@ public actor PersistentEventQueue {
         self.maxOfflineDiskEvents = max(0, maxOfflineDiskEvents)
     }
 
-    /// Enqueue an event to the in-memory buffer. No disk I/O.
-    /// When offline overflow is enabled and the queue is at capacity, the oldest event
-    /// is redirected to the overflow buffer (for batched disk write) instead of being dropped.
+    /// Enqueue an event to the in-memory buffer.
+    /// When the queue is at capacity and overflow disk storage exists, the entire memory queue
+    /// is flushed to overflow disk before inserting the new event. This happens regardless of
+    /// online/offline state — capacity overflow always goes to disk, never drops.
     /// Returns the queue count after insertion (atomic with the enqueue).
     @discardableResult
     public func enqueue(_ event: EnrichedEventPayload) async -> Int {
-        // When offline overflow is enabled, intercept the overflow before EventQueue drops it
-        if offlineOverflowEnabled, overflowDiskStorage != nil {
+        // When at capacity and overflow disk exists, flush entire queue to disk
+        if overflowDiskStorage != nil {
             let currentCount = await memoryQueue.count
             if currentCount >= maxEventCount {
-                let evicted = await memoryQueue.drain(max: 1)
-                for e in evicted {
-                    estimatedBytes -= Self.estimateEventSize(e)
-                    await bufferOverflowEvent(e)
-                }
+                await flushToOverflowDisk()
             }
         }
 
         let prevCount = await memoryQueue.count
         let newCount = await memoryQueue.enqueue(event)
         let eventSize = Self.estimateEventSize(event)
-        // If an overflow drop happened (no overflow enabled), approximate the dropped event as average size
+        // If a drop happened (no overflow storage configured), approximate the dropped event as average size
         if newCount <= prevCount, estimatedBytes > 0, prevCount > 0 {
             estimatedBytes -= estimatedBytes / prevCount
         }
@@ -114,7 +108,6 @@ public actor PersistentEventQueue {
         await memoryQueue.clear()
         estimatedBytes = 0
         await diskStorage.delete()
-        overflowBuffer.removeAll()
         if let overflowDisk = overflowDiskStorage {
             await overflowDisk.delete()
         }
@@ -141,13 +134,10 @@ public actor PersistentEventQueue {
 
     /// Flush current memory state to disk. Full overwrite.
     /// Called on: app background, app terminate (best-effort), explicit flush, threshold.
-    /// Also flushes the overflow buffer to its separate disk file.
     public func flushToDisk() async throws {
         let events = await peekAll()
         let snapshot = QueueSnapshot(events: events)
         try await diskStorage.write(snapshot)
-        // Also persist any buffered overflow events
-        await flushOverflowBufferToDisk()
     }
 
     /// Rehydrate events from disk into memory.
@@ -195,32 +185,18 @@ public actor PersistentEventQueue {
 
     // MARK: - Offline Overflow
 
-    /// Enable or disable offline overflow mode.
-    /// When enabled, events evicted from the memory queue are buffered for disk write
-    /// instead of being dropped. No-op if no overflow disk storage was configured.
-    public func setOfflineOverflowEnabled(_ enabled: Bool) {
-        guard overflowDiskStorage != nil else { return }
-        offlineOverflowEnabled = enabled
-    }
-
-    /// Buffer an evicted event for batched disk write.
-    private func bufferOverflowEvent(_ event: EnrichedEventPayload) async {
-        overflowBuffer.append(event)
-        if overflowBuffer.count >= Self.overflowBatchThreshold {
-            await flushOverflowBufferToDisk()
-        }
-    }
-
-    /// Flush the in-memory overflow buffer to the overflow disk store.
+    /// Flush the entire memory queue to the overflow disk store and reset memory to 0.
     /// Merges with existing disk contents and enforces maxOfflineDiskEvents cap.
-    /// Called when buffer reaches batch threshold, on app backgrounding, or before drain.
-    public func flushOverflowBufferToDisk() async {
-        guard let overflowDisk = overflowDiskStorage, !overflowBuffer.isEmpty else { return }
-        let batch = overflowBuffer
-        overflowBuffer.removeAll()
+    /// Called when memory queue hits capacity (automatic) or by the dispatcher when offline.
+    @discardableResult
+    public func flushToOverflowDisk() async -> Bool {
+        guard let overflowDisk = overflowDiskStorage else { return false }
+        let events = await memoryQueue.drain(max: Int.max)
+        guard !events.isEmpty else { return false }
+        estimatedBytes = 0
 
         let existing = await overflowDisk.read()
-        var combined = (existing?.events ?? []) + batch
+        var combined = (existing?.events ?? []) + events
         if combined.count > maxOfflineDiskEvents {
             let dropCount = combined.count - maxOfflineDiskEvents
             combined = Array(combined.dropFirst(dropCount))
@@ -228,19 +204,23 @@ public actor PersistentEventQueue {
         }
         do {
             try await overflowDisk.write(QueueSnapshot(events: combined))
-            Logger.log("Overflow buffer flushed to disk: \(batch.count) events, \(combined.count) total on disk")
+            Logger.log("Memory queue flushed to overflow disk: \(events.count) events, \(combined.count) total on disk")
+            return true
         } catch {
-            Logger.warn("Failed to flush overflow buffer to disk: \(error)")
-            // Re-buffer events that failed to persist
-            overflowBuffer.insert(contentsOf: batch, at: 0)
+            Logger.warn("Failed to flush memory queue to overflow disk: \(error)")
+            // Re-enqueue events that failed to persist
+            await memoryQueue.requeueToFront(events)
+            for event in events {
+                estimatedBytes += Self.estimateEventSize(event)
+            }
+            return false
         }
     }
 
-    /// Read a batch of overflow events from disk. Flushes buffer first.
+    /// Read a batch of overflow events from disk.
     /// Returns empty array if no overflow disk storage is configured or no events exist.
     public func readOverflowBatch(max count: Int) async -> [EnrichedEventPayload] {
         guard let overflowDisk = overflowDiskStorage else { return [] }
-        await flushOverflowBufferToDisk()
         guard let snapshot = await overflowDisk.read() else { return [] }
         let events = snapshot.events
         guard !events.isEmpty else { return [] }
@@ -264,12 +244,10 @@ public actor PersistentEventQueue {
         }
     }
 
-    /// Number of events currently in the overflow buffer + disk.
-    public func overflowCount() async -> Int {
-        let bufferCount = overflowBuffer.count
-        guard let overflowDisk = overflowDiskStorage else { return bufferCount }
-        let diskCount = await overflowDisk.read()?.events.count ?? 0
-        return bufferCount + diskCount
+    /// Delete the overflow disk store entirely.
+    public func deleteOverflowDisk() async {
+        guard let overflowDisk = overflowDiskStorage else { return }
+        await overflowDisk.delete()
     }
 
     // MARK: - Private Helpers
