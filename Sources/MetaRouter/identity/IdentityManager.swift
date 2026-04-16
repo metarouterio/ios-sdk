@@ -24,17 +24,8 @@ public actor IdentityManager {
     /// Initializes the manager by loading or generating an anonymous ID.
     /// Should be called before using other methods.
     public func initialize() async {
-        // Load anonymous ID or generate a new one
-        if let storedAnonId = storage.get(.anonymousId) {
-            self.anonymousId = storedAnonId
-            Logger.log("Loaded stored anonymous ID: \(storedAnonId)", writeKey: writeKey, host: host)
-        } else {
-            let newId = UUID().uuidString.lowercased()
-            storage.set(.anonymousId, value: newId)
-            self.anonymousId = newId
-            Logger.log("Generated and stored new anonymous ID: \(newId)", writeKey: writeKey, host: host)
-        }
-        
+        getOrCreateAnonymousId()
+
         // Load userId, groupId, and advertisingId if they exist
         self.userId = storage.get(.userId)
         self.groupId = storage.get(.groupId)
@@ -53,6 +44,26 @@ public actor IdentityManager {
     /// Retrieves the current anonymous ID.
     public func getAnonymousId() -> String? {
         return anonymousId
+    }
+
+    /// Returns the current anonymous ID, generating and persisting one if missing.
+    /// Safe to call before `initialize()` or after `reset()` — guarantees a stable,
+    /// persisted ID across subsequent calls.
+    @discardableResult
+    public func getOrCreateAnonymousId() -> String {
+        if let existing = anonymousId {
+            return existing
+        }
+        if let stored = storage.get(.anonymousId) {
+            self.anonymousId = stored
+            Logger.log("Loaded stored anonymous ID: \(stored)", writeKey: writeKey, host: host)
+            return stored
+        }
+        let newId = UUID().uuidString.lowercased()
+        storage.set(.anonymousId, value: newId)
+        self.anonymousId = newId
+        Logger.log("Generated and stored new anonymous ID: \(newId)", writeKey: writeKey, host: host)
+        return newId
     }
     
     /// Sets the user ID for the current session.

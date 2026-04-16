@@ -99,8 +99,11 @@ final class DebouncedNetworkMonitorTests: XCTestCase {
         XCTAssertEqual(recorder.statuses, [.disconnected])
 
         stub.simulate(.connected)
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertEqual(recorder.statuses, [.disconnected, .connected])
+        let onlineFired = await TestUtilities.waitFor(timeout: 3.0) {
+            recorder.statuses == [.disconnected, .connected]
+        }
+        XCTAssertTrue(onlineFired,
+            "Expected debounced online transition to fire; got \(recorder.statuses)")
 
         stub.simulate(.disconnected)
         XCTAssertEqual(recorder.statuses, [.disconnected, .connected, .disconnected])
