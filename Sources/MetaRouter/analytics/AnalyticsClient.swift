@@ -316,7 +316,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func getAnonymousId() async -> String {
         await initTask?.value
-        return await identityManager.getAnonymousId() ?? UUID().uuidString.lowercased()
+        return await identityManager.getOrCreateAnonymousId()
     }
 
     public func getDebugInfo() async -> [String: CodableValue] {
