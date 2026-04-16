@@ -616,7 +616,13 @@ Unsent events are automatically persisted to disk and recovered across app launc
 **Disk cap (`maxDiskEvents`):**
 
 - Default `10000`. When the cap is exceeded, the oldest events on disk are dropped first (FIFO).
-- Set `maxDiskEvents: 0` to **disable disk persistence entirely**. The SDK then runs as a purely in-memory pipeline — no background flush to disk, no overflow writes, and no recovery across app launches. Memory-queue eviction (`maxQueueEvents` cap) drops the oldest events when the queue is full.
+- Negative values are rejected.
+- Set `maxDiskEvents: 0` to **disable disk persistence entirely**. The SDK then runs as a purely in-memory pipeline:
+  - No background flush to disk (events in memory at app-background or app-kill are **lost**)
+  - No overflow writes while offline (memory cap is the only buffer)
+  - No recovery across app launches
+  - `maxQueueEvents` still applies — when the in-memory queue is full, the oldest event is dropped to make room (ring buffer)
+  - On retry-after-failure, requeued events are inserted at the front; if that overflows the cap, the **newest** entries are dropped from the back so the retry events survive
 - Disabling persistence is appropriate for apps that never want events to survive a process restart (e.g. strict privacy requirements or short-lived sessions). In all other cases, the default is recommended.
 
 **`sentAt` semantics:** `sentAt` is stamped when a batch is prepared for transmission (just before network send), not when the event was originally created. Events rehydrated from disk receive a fresh `sentAt` on their next send attempt. If you need the original occurrence time, rely on the `timestamp` field set at event creation.

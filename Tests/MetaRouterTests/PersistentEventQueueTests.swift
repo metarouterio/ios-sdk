@@ -345,6 +345,40 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertFalse(has)
     }
 
+    func testRequeueToFrontDropsNewestWhenMaxDiskEventsZero() async throws {
+        let queue = makeQueue(maxEventCount: 3, maxDiskEvents: 0)
+
+        // Fill memory: e1, e2, e3
+        await queue.enqueue(makeTestEvent(messageId: "e1"))
+        await queue.enqueue(makeTestEvent(messageId: "e2"))
+        await queue.enqueue(makeTestEvent(messageId: "e3"))
+
+        // Simulate a retry: drain (sends a batch), it fails, requeue to front
+        let batch = await queue.drain(max: 2)
+        XCTAssertEqual(batch.map(\.messageId), ["e1", "e2"])
+
+        // Memory now: [e3]. Requeue [e1, e2] to front.
+        await queue.requeueToFront([makeTestEvent(messageId: "e1"), makeTestEvent(messageId: "e2")])
+
+        // Memory should be [e1, e2, e3] — fits, no eviction
+        var contents = await queue.drain(max: 10)
+        XCTAssertEqual(contents.map(\.messageId), ["e1", "e2", "e3"])
+
+        // Now harder case: cap=2, fill with [a, b], requeue [r1, r2] — r1/r2 must survive,
+        // newest (b) must be dropped, NOT oldest (a) → drop-from-back semantics
+        let q2 = makeQueue(maxEventCount: 2, maxDiskEvents: 0)
+        await q2.enqueue(makeTestEvent(messageId: "a"))
+        await q2.enqueue(makeTestEvent(messageId: "b"))
+        await q2.requeueToFront([makeTestEvent(messageId: "r1"), makeTestEvent(messageId: "r2")])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: diskFilePath.path),
+                       "no disk file should be written in 0-mode")
+
+        contents = await q2.drain(max: 10)
+        XCTAssertEqual(contents.map(\.messageId), ["r1", "r2"],
+                       "requeued events must survive; newest entries (a, b) get dropped from the back")
+    }
+
     // MARK: - Cross-session persistence
 
     func testPersistsAcrossInstances() async throws {
