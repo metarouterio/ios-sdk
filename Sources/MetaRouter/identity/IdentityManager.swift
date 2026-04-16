@@ -24,7 +24,7 @@ public actor IdentityManager {
     /// Initializes the manager by loading or generating an anonymous ID.
     /// Should be called before using other methods.
     public func initialize() async {
-        _ = getOrCreateAnonymousId()
+        getOrCreateAnonymousId()
 
         // Load userId, groupId, and advertisingId if they exist
         self.userId = storage.get(.userId)
@@ -49,6 +49,7 @@ public actor IdentityManager {
     /// Returns the current anonymous ID, generating and persisting one if missing.
     /// Safe to call before `initialize()` or after `reset()` — guarantees a stable,
     /// persisted ID across subsequent calls.
+    @discardableResult
     public func getOrCreateAnonymousId() -> String {
         if let existing = anonymousId {
             return existing
