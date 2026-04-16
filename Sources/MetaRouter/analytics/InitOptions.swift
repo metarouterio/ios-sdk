@@ -28,6 +28,10 @@ public struct InitOptions: Sendable {
         self.debug = debug
         self.maxQueueEvents = max(1, maxQueueEvents)
         self.maxDiskEvents = max(0, maxDiskEvents)
+
+        if self.maxDiskEvents > 0 && self.maxDiskEvents < self.maxQueueEvents {
+            Logger.warn("maxDiskEvents (\(self.maxDiskEvents)) is less than maxQueueEvents (\(self.maxQueueEvents)) — memory can hold more events than disk can preserve; events may be dropped during background flush")
+        }
     }
 }
 

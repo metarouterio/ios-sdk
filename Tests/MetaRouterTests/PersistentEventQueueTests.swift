@@ -303,6 +303,48 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertTrue(needsFlush)
     }
 
+    // MARK: - Disk persistence disabled (maxDiskEvents = 0)
+
+    func testFlushMemoryToDiskIsNoOpWhenMaxDiskEventsZero() async throws {
+        let queue = makeQueue(maxDiskEvents: 0)
+        await queue.enqueue(makeTestEvent(messageId: "e1"))
+        await queue.enqueue(makeTestEvent(messageId: "e2"))
+
+        let flushed = await queue.flushMemoryToDisk()
+        XCTAssertFalse(flushed, "flush should report no-op when persistence is disabled")
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: diskFilePath.path),
+                       "No disk file should be written when maxDiskEvents == 0")
+
+        let memCount = await queue.count
+        XCTAssertEqual(memCount, 2, "Events should remain in memory when persistence is disabled")
+    }
+
+    func testEnqueueAtCapacityDropsOldestWhenMaxDiskEventsZero() async throws {
+        let queue = makeQueue(maxEventCount: 3, maxDiskEvents: 0)
+
+        for i in 1...5 {
+            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: diskFilePath.path),
+                       "Nothing should ever hit disk when persistence is disabled")
+
+        let drained = await queue.drain(max: 10)
+        XCTAssertEqual(drained.map(\.messageId), ["e3", "e4", "e5"],
+                       "Memory queue should drop oldest (ring buffer) when persistence disabled")
+    }
+
+    func testWriteDiskStoreIsNoOpWhenMaxDiskEventsZero() async throws {
+        let queue = makeQueue(maxDiskEvents: 0)
+        await queue.writeDiskStore([makeTestEvent(messageId: "e1")])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: diskFilePath.path),
+                       "writeDiskStore should no-op when persistence is disabled")
+        let has = await queue.hasDiskData
+        XCTAssertFalse(has)
+    }
+
     // MARK: - Cross-session persistence
 
     func testPersistsAcrossInstances() async throws {

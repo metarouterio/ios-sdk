@@ -173,8 +173,10 @@ public actor PersistentEventQueue {
     /// and enforcing `maxDiskEvents`. Memory is cleared after a successful write.
     /// Acquires the disk lock — serializes against an in-flight drain.
     /// Returns `true` if at least one event was persisted.
+    /// No-op when `maxDiskEvents == 0` (persistence disabled — memory-only pipeline).
     @discardableResult
     public func flushMemoryToDisk() async -> Bool {
+        guard maxDiskEvents > 0 else { return false }
         await diskLock.lock()
         let result = await flushMemoryToDiskInternal()
         await diskLock.unlock()
@@ -201,7 +203,9 @@ public actor PersistentEventQueue {
     /// Full overwrite of the disk store with the given events.
     /// Used by drain for checkpoints and "write remainder on failure."
     /// Caller MUST hold the disk lock.
+    /// No-op when `maxDiskEvents == 0` (persistence disabled — memory-only pipeline).
     public func writeDiskStore(_ events: [EnrichedEventPayload]) async {
+        guard maxDiskEvents > 0 else { return }
         guard !events.isEmpty else {
             await diskStore.delete()
             _hasDiskData = false
