@@ -46,7 +46,7 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
             self.lock.unlock()
 
             if oldStatus != newStatus {
-                Logger.log("Network status changed: \(oldStatus.rawValue) -> \(newStatus.rawValue)")
+                Logger.log("Network status changed: \(oldStatus.rawValue) -> \(newStatus.rawValue) (interfaces=\(path.availableInterfaces.map(\.type)), expensive=\(path.isExpensive), constrained=\(path.isConstrained))")
                 callback?(newStatus)
             }
         }
@@ -67,4 +67,5 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
         lock.unlock()
         mon?.cancel()
     }
+
 }

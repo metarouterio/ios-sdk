@@ -1,6 +1,6 @@
 import Foundation
 
-/// Handles reading, writing, and deleting the queue snapshot file on disk.
+/// Handles reading, writing, and deleting the single event disk store.
 /// All operations are actor-isolated for thread safety.
 ///
 /// Storage location:
@@ -16,7 +16,7 @@ public actor DiskStorage {
     private static let jsonEncoder = JSONEncoder()
     private static let jsonDecoder = JSONDecoder()
 
-    private let baseDirectory: URL
+    nonisolated public let baseDirectory: URL
     private let filePath: URL
 
     /// Initialize with an explicit base directory (for testing).
@@ -36,6 +36,12 @@ public actor DiskStorage {
         self.filePath = dir.appendingPathComponent(Self.fileName)
     }
 
+    /// Cheap file-existence check. Does not parse the file contents.
+    /// Used on boot to initialize the `hasDiskData` flag without a full read.
+    public func exists() -> Bool {
+        FileManager.default.fileExists(atPath: filePath.path)
+    }
+
     /// Write a snapshot to disk, fully overwriting any existing file.
     /// If the snapshot contains no events, any existing file is deleted instead.
     /// Creates the directory if it does not exist.
@@ -46,21 +52,37 @@ public actor DiskStorage {
             return
         }
 
-        let fm = FileManager.default
-
-        if !fm.fileExists(atPath: baseDirectory.path) {
-            try fm.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
-        }
-
-        var dir = baseDirectory
-        var resourceValues = URLResourceValues()
-        resourceValues.isExcludedFromBackup = true
-        try dir.setResourceValues(resourceValues)
-
+        try ensureDirectory()
         let data = try Self.jsonEncoder.encode(snapshot)
         try data.write(to: filePath, options: .atomic)
-
         Logger.log("Queue snapshot written to disk: \(snapshot.events.count) events, \(data.count) bytes")
+    }
+
+    /// Append events to the existing on-disk store, merging with prior contents.
+    /// Enforces `maxEvents` cap by dropping the oldest events first. Atomic write.
+    /// Used by: capacity overflow, background flush, offline push-back, threshold flush, requeue-at-cap.
+    /// Returns the final on-disk event count.
+    @discardableResult
+    public func append(_ events: [EnrichedEventPayload], maxEvents: Int) throws -> Int {
+        guard !events.isEmpty else {
+            let existing = read()?.events.count ?? 0
+            return existing
+        }
+
+        let existing = read()?.events ?? []
+        var combined = existing + events
+        if maxEvents > 0 && combined.count > maxEvents {
+            let dropCount = combined.count - maxEvents
+            combined = Array(combined.dropFirst(dropCount))
+            Logger.warn("Disk store cap reached — dropped \(dropCount) oldest events")
+        }
+
+        try ensureDirectory()
+        let snapshot = QueueSnapshot(events: combined)
+        let data = try Self.jsonEncoder.encode(snapshot)
+        try data.write(to: filePath, options: .atomic)
+        Logger.log("Disk store append: +\(events.count) events, \(combined.count) total on disk")
+        return combined.count
     }
 
     /// Read the snapshot from disk. Returns nil if no file exists.
@@ -87,5 +109,16 @@ public actor DiskStorage {
     public func delete() {
         try? FileManager.default.removeItem(at: filePath)
         Logger.log("Queue snapshot deleted from disk")
+    }
+
+    private func ensureDirectory() throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: baseDirectory.path) {
+            try fm.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        }
+        var dir = baseDirectory
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try dir.setResourceValues(resourceValues)
     }
 }

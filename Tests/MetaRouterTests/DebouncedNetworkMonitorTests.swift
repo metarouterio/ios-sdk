@@ -146,11 +146,14 @@ final class DebouncedNetworkMonitorTests: XCTestCase {
         let flushCounter = FlushCounter()
         let options = TestDataFactory.makeInitOptions()
         let networking = CountingNetworking(counter: flushCounter)
+        let diskStore = DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("metarouter-test-\(UUID().uuidString)"))
+        let persistentQueue = PersistentEventQueue(diskStore: diskStore, maxEventCount: 100)
         let dispatcher = Dispatcher(
             options: options,
             http: networking,
             breaker: CircuitBreaker(),
-            queueCapacity: 100
+            persistentQueue: persistentQueue
         )
 
         await dispatcher.offer(makeTestEvent())

@@ -55,7 +55,6 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
             lock.unlock()
 
             if oldStatus != .disconnected {
-                Logger.log("Debounced network: immediate offline transition")
                 callback?(.disconnected)
             }
         } else {
@@ -79,7 +78,6 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
         lock.unlock()
 
         if oldStatus != .connected {
-            Logger.log("Debounced network: online transition confirmed after debounce")
             callback?(.connected)
         }
     }

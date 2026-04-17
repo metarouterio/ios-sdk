@@ -45,9 +45,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             writeKey: options.writeKey
         )
 
+        let diskStore = DiskStorage()
         let persistentQueue = deps.persistentQueue ?? PersistentEventQueue(
-            diskStorage: DiskStorage(),
-            maxEventCount: options.maxQueueEvents
+            diskStore: diskStore,
+            maxEventCount: options.maxQueueEvents,
+            maxDiskEvents: options.maxDiskEvents
         )
 
         self.dispatcher = deps.dispatcher ?? Dispatcher(
@@ -75,6 +77,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 self?.disabled = true
                 self?.lifecycleState = .disabled
             })
+            // Wire onFlushComplete to trigger disk drain when online
+            await self.dispatcher.setFlushCompleteHandler({ [weak self] in
+                guard let self else { return }
+                await self.dispatcher.drainDiskStoreToNetwork()
+            })
         }
 
         self.lifecycle = AppLifecycleObserver(
@@ -89,7 +96,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             onBackgroundAsync: { [weak self] in
                 guard let self else { return }
                 await self.dispatcher.flush()
-                try? await self.dispatcher.flushToDisk()
+                await self.dispatcher.flushToDisk()
                 await self.dispatcher.stopFlushLoop()
                 await self.dispatcher.cancelScheduledRetry()
             }
@@ -114,10 +121,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             guard let self else { return }
             await self.identityManager.initialize()
 
-            // Rehydrate persisted events from disk
-            let rehydratedCount = await self.dispatcher.rehydrate()
-            if rehydratedCount > 0 {
-                Logger.log("Rehydrated \(rehydratedCount) events from disk",
+            // Check disk for persisted events (cheap existence check, no parse).
+            // Actual drain happens below once we confirm we're online.
+            let hasPersisted = await self.dispatcher.checkForPersistedEvents()
+            if hasPersisted {
+                Logger.log("Persisted events detected on disk — will drain once online",
                            writeKey: self.options.writeKey,
                            host: self.options.ingestionHost.absoluteString)
             }
@@ -137,6 +145,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             Logger.log("MetaRouter SDK initialized",
                        writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
+
+            // Drain any persisted events from a previous session
+            if monitor.currentStatus == .connected {
+                await self.dispatcher.drainDiskStoreToNetwork()
+            }
         }
     }
 

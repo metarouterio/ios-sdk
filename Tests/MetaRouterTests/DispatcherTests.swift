@@ -41,6 +41,36 @@ private final class StubNetworking: Networking, @unchecked Sendable {
     }
 }
 
+/// Builds a `Dispatcher` backed by a throwaway temp-dir disk store for tests.
+/// Accepts either `queueCapacity:` (helper builds the queue) or `persistentQueue:` (caller builds it).
+private func makeDispatcher(
+    options: InitOptions,
+    http: Networking = NetworkClient(),
+    breaker: CircuitBreaker = CircuitBreaker(),
+    queueCapacity: Int? = nil,
+    persistentQueue: PersistentEventQueue? = nil,
+    config: Dispatcher.Config = Dispatcher.Config(),
+    onFatalConfigError: Dispatcher.FatalConfigHandler? = nil
+) -> Dispatcher {
+    let queue: PersistentEventQueue
+    if let pq = persistentQueue {
+        queue = pq
+    } else {
+        let cap = queueCapacity ?? 2000
+        let diskStore = DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("metarouter-test-\(UUID().uuidString)"))
+        queue = PersistentEventQueue(diskStore: diskStore, maxEventCount: cap)
+    }
+    return Dispatcher(
+        options: options,
+        http: http,
+        breaker: breaker,
+        persistentQueue: queue,
+        config: config,
+        onFatalConfigError: onFatalConfigError
+    )
+}
+
 /// Creates a minimal enriched event for testing
 private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
     let ctx = EventContext(
@@ -65,7 +95,7 @@ final class DispatcherTests: XCTestCase {
     func testFlushSuccessRemovesBatch() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.offer(makeTestEvent())
         await dispatcher.flush()
@@ -79,7 +109,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(401)
         let statusHolder = StatusHolder()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 10, onFatalConfigError: { status in statusHolder.value = status })
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 10, onFatalConfigError: { status in statusHolder.value = status })
 
         await dispatcher.offer(makeTestEvent())
         await dispatcher.flush()
@@ -90,7 +120,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingDisabledByDefault() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.offer(makeTestEvent())
         await dispatcher.flush()
@@ -101,7 +131,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingEnabledAddsHeader() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.setTracing(true)
         await dispatcher.offer(makeTestEvent())
@@ -114,7 +144,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingCanBeDisabled() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.setTracing(true)
         await dispatcher.offer(makeTestEvent())
@@ -135,7 +165,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingPersistsAcrossMultipleFlushes() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.setTracing(true)
 
@@ -155,7 +185,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(403)
         let statusHolder = StatusHolder()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub, breaker: CircuitBreaker(),
             queueCapacity: 10,
             onFatalConfigError: { status in statusHolder.value = status }
@@ -174,7 +204,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(404)
         let statusHolder = StatusHolder()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub, breaker: CircuitBreaker(),
             queueCapacity: 10,
             onFatalConfigError: { status in statusHolder.value = status }
@@ -193,7 +223,7 @@ final class DispatcherTests: XCTestCase {
 
         // First call returns 413, then subsequent calls succeed
         let sequencer = CallSequencer(responses: [.http(413), .success])
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(failureThreshold: 10), // high threshold so breaker doesn't trip
             queueCapacity: 100,
@@ -219,7 +249,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(500)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000), // trip immediately, long cooldown
             queueCapacity: 100
@@ -238,7 +268,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .httpWithHeaders(429, ["Retry-After": "2"])
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000),
             queueCapacity: 100
@@ -257,7 +287,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(408)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000),
             queueCapacity: 100
@@ -275,7 +305,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(400)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -293,7 +323,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(422)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -311,7 +341,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .error
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000),
             queueCapacity: 100
@@ -329,7 +359,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -350,7 +380,7 @@ final class DispatcherTests: XCTestCase {
 
         // Sequence: 413 → 200 → 200 → 200 (batch size: 4 → 2 → 4 on recovery)
         let sequencer = CallSequencer(responses: [.http(413), .success, .success, .success, .success])
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(failureThreshold: 10),
             queueCapacity: 100,
@@ -376,142 +406,103 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(remaining, 0, "All events should drain after batch size recovery")
     }
 
-    func testFlushToDiskDelegatesToQueue() async throws {
+    func testFlushToDiskDelegatesToQueue() async {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("DispatcherDiskTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options,
             http: stub,
             breaker: CircuitBreaker(),
             persistentQueue: PersistentEventQueue(
-                diskStorage: DiskStorage(baseDirectory: tempDir),
+                diskStore: DiskStorage(baseDirectory: tempDir),
                 maxEventCount: 100
             )
         )
 
         await dispatcher.offer(makeTestEvent(messageId: "disk-test"))
-        try await dispatcher.flushToDisk()
+        await dispatcher.flushToDisk()
 
-        let diskStorage = DiskStorage(baseDirectory: tempDir)
-        let snapshot = await diskStorage.read()
+        let diskStore = DiskStorage(baseDirectory: tempDir)
+        let snapshot = await diskStore.read()
         XCTAssertEqual(snapshot?.events.count, 1)
         XCTAssertEqual(snapshot?.events[0].messageId, "disk-test")
     }
 
 
-    func testRehydratedEventsFlushInMultipleBatches() async throws {
+    func testDiskDrainSendsInBatchesOfInitialMaxBatchSize() async throws {
         let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RehydrationBatchTest-\(UUID().uuidString)")
+            .appendingPathComponent("DrainBatchTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        // Seed disk with 250 events
-        let diskStorage = DiskStorage(baseDirectory: tempDir)
-        let events = (0..<250).map { makeTestEvent(messageId: "rehydrated-\($0)") }
-        let snapshot = QueueSnapshot(events: events)
-        try await diskStorage.write(snapshot)
+        // Seed disk with 250 events; drain should send them in 3 batches (100, 100, 50)
+        let diskStore = DiskStorage(baseDirectory: tempDir)
+        let events = (0..<250).map { makeTestEvent(messageId: "persisted-\($0)") }
+        try await diskStore.write(QueueSnapshot(events: events))
 
         let recorder = BatchRecordingNetworking()
-        let dispatcher = Dispatcher(
+        let queue = PersistentEventQueue(
+            diskStore: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000
+        )
+        _ = await queue.checkForPersistedEvents()
+
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: recorder,
             breaker: CircuitBreaker(),
-            persistentQueue: PersistentEventQueue(
-                diskStorage: DiskStorage(baseDirectory: tempDir),
-                maxEventCount: 2000
-            ),
+            persistentQueue: queue,
             config: Dispatcher.Config(initialMaxBatchSize: 100)
         )
 
-        let rehydrated = await dispatcher.rehydrate()
-        XCTAssertEqual(rehydrated, 250)
+        await dispatcher.drainDiskStoreToNetwork()
 
-        await dispatcher.flush()
-
-        let remaining = await dispatcher.getQueueLength()
-        XCTAssertEqual(remaining, 0, "All rehydrated events should be drained")
+        let memCount = await dispatcher.getQueueLength()
+        XCTAssertEqual(memCount, 0, "Drain must not load events into memory")
         XCTAssertEqual(recorder.callCount, 3, "250 events with batchSize=100 should take 3 API calls")
-
-        let batchSizes = recorder.batchSizes
-        XCTAssertEqual(batchSizes, [100, 100, 50], "Batches should be 100, 100, 50")
+        XCTAssertEqual(recorder.batchSizes, [100, 100, 50])
     }
 
-    func testRehydratedEventsPlusNewEventsAllDrainInSingleFlush() async throws {
+    func testDiskDrainDoesNotInterfereWithNewMemoryEvents() async throws {
         let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RehydrationPlusNewTest-\(UUID().uuidString)")
+            .appendingPathComponent("DrainPlusNewTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        // Seed disk with 5 events
-        let diskStorage = DiskStorage(baseDirectory: tempDir)
-        let diskEvents = (0..<5).map { makeTestEvent(messageId: "rehydrated-\($0)") }
-        try await diskStorage.write(QueueSnapshot(events: diskEvents))
+        // Seed 5 events on disk
+        let diskStore = DiskStorage(baseDirectory: tempDir)
+        let diskEvents = (0..<5).map { makeTestEvent(messageId: "disk-\($0)") }
+        try await diskStore.write(QueueSnapshot(events: diskEvents))
 
         let recorder = BatchRecordingNetworking()
-        let dispatcher = Dispatcher(
+        let queue = PersistentEventQueue(
+            diskStore: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 2000
+        )
+        _ = await queue.checkForPersistedEvents()
+
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: recorder,
             breaker: CircuitBreaker(),
-            persistentQueue: PersistentEventQueue(
-                diskStorage: DiskStorage(baseDirectory: tempDir),
-                maxEventCount: 2000
-            ),
-            config: Dispatcher.Config(initialMaxBatchSize: 100)
+            persistentQueue: queue,
+            config: Dispatcher.Config(autoFlushThreshold: 1000, initialMaxBatchSize: 100)
         )
 
-        let rehydrated = await dispatcher.rehydrate()
-        XCTAssertEqual(rehydrated, 5)
-
-        // Add new events after rehydration (before flush)
+        // Add 3 events to memory, then drain disk — memory events should stay put
         for i in 0..<3 {
-            await dispatcher.offer(makeTestEvent(messageId: "new-\(i)"))
+            await dispatcher.offer(makeTestEvent(messageId: "mem-\(i)"))
         }
 
-        await dispatcher.flush()
+        await dispatcher.drainDiskStoreToNetwork()
 
-        let remaining = await dispatcher.getQueueLength()
-        XCTAssertEqual(remaining, 0, "All events (rehydrated + new) should be drained")
-        XCTAssertEqual(recorder.callCount, 1, "8 events should fit in a single batch")
-
-        let batchSizes = recorder.batchSizes
-        XCTAssertEqual(batchSizes, [8], "All 8 events should be in one batch")
-    }
-
-    func testRehydrationOverCapacityDropsOldestAndFlushesRemainder() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RehydrationOverCapTest-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-
-        // Seed disk with 150 events, but queue capacity is only 50
-        let diskStorage = DiskStorage(baseDirectory: tempDir)
-        let events = (0..<150).map { makeTestEvent(messageId: "evt-\($0)") }
-        try await diskStorage.write(QueueSnapshot(events: events))
-
-        let recorder = BatchRecordingNetworking()
-        let dispatcher = Dispatcher(
-            options: TestDataFactory.makeInitOptions(),
-            http: recorder,
-            breaker: CircuitBreaker(),
-            persistentQueue: PersistentEventQueue(
-                diskStorage: DiskStorage(baseDirectory: tempDir),
-                maxEventCount: 50
-            ),
-            config: Dispatcher.Config(initialMaxBatchSize: 25)
-        )
-
-        let rehydrated = await dispatcher.rehydrate()
-        // Should cap at 50, dropping the 100 oldest
-        XCTAssertEqual(rehydrated, 50, "Rehydration should cap at maxEventCount")
-
-        await dispatcher.flush()
-
-        let remaining = await dispatcher.getQueueLength()
-        XCTAssertEqual(remaining, 0, "All capped events should be drained")
-        XCTAssertEqual(recorder.callCount, 2, "50 events with batchSize=25 should take 2 API calls")
-        XCTAssertEqual(recorder.batchSizes, [25, 25])
+        // Disk events sent via drain; memory events still queued for the regular flush
+        XCTAssertEqual(recorder.callCount, 1, "Disk drain sends 5 events in one batch")
+        XCTAssertEqual(recorder.batchSizes, [5])
+        let memCount = await dispatcher.getQueueLength()
+        XCTAssertEqual(memCount, 3, "Memory queue untouched by drain")
     }
 
     func testProcessUntilEmptyDrainsAcrossBatchBoundary() async throws {
@@ -519,7 +510,7 @@ final class DispatcherTests: XCTestCase {
         // when events exceed maxBatchSize without rehydration
         let options = TestDataFactory.makeInitOptions()
         let recorder = BatchRecordingNetworking()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options,
             http: recorder,
             breaker: CircuitBreaker(),
@@ -558,7 +549,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .error
 
         // Default circuit breaker: threshold 3 — circuit stays closed after 1 failure
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -583,7 +574,7 @@ final class DispatcherTests: XCTestCase {
         let options = TestDataFactory.makeInitOptions()
         let sequencer = CallSequencer(responses: [.error, .success])
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -608,7 +599,7 @@ final class DispatcherTests: XCTestCase {
         // Sequence: error → success (retry recovers), then error again on next flush
         let sequencer = CallSequencer(responses: [.error, .success, .error, .success])
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(failureThreshold: 10), // high threshold to avoid circuit opening
             queueCapacity: 100,
@@ -647,7 +638,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .http(503)
 
         // Default circuit breaker: stays closed after 1 failure
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -671,7 +662,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -693,14 +684,22 @@ final class DispatcherTests: XCTestCase {
 
 
     func testEventsEnqueueWhileOfflineNoHttpAttempts() async {
-        let options = TestDataFactory.makeInitOptions()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OfflineEnqueueTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
-            options: options, http: stub,
+        let queue = PersistentEventQueue(
+            diskStore: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 100
+        )
+        let dispatcher = makeDispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: stub,
             breaker: CircuitBreaker(),
-            queueCapacity: 100
+            persistentQueue: queue
         )
 
         await dispatcher.setOffline(true)
@@ -712,8 +711,11 @@ final class DispatcherTests: XCTestCase {
         await dispatcher.flush()
 
         XCTAssertEqual(stub.callCount, 0, "No HTTP attempts should be made while offline")
-        let remaining = await dispatcher.getQueueLength()
-        XCTAssertEqual(remaining, 5, "All events should remain queued while offline")
+
+        // Offline flush moves memory to disk — no events lost.
+        let memCount = await dispatcher.getQueueLength()
+        let onDisk = await queue.readDiskBatch(max: 100)
+        XCTAssertEqual(memCount + onDisk.count, 5, "All events preserved across memory + disk while offline")
     }
 
     func testOfflineToOnlineTriggersFlush() async {
@@ -721,7 +723,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -750,7 +752,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .http(500)
 
         let breaker = CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, jitterRatio: 0.0)
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: breaker,
             queueCapacity: 100
@@ -780,7 +782,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .http(500)
 
         let breaker = CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, jitterRatio: 0.0)
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: breaker,
             queueCapacity: 100
@@ -800,7 +802,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -830,7 +832,7 @@ final class DispatcherTests: XCTestCase {
     func testGetIsOfflineReflectsState() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -846,6 +848,305 @@ final class DispatcherTests: XCTestCase {
         await dispatcher.setOffline(false)
         offline = await dispatcher.getIsOffline()
         XCTAssertFalse(offline)
+    }
+
+
+
+    /// Helper: seed a disk store and build a dispatcher wired to it.
+    private func makeDrainFixture(
+        seed: [EnrichedEventPayload],
+        http: Networking,
+        breaker: CircuitBreaker = CircuitBreaker(failureThreshold: 10),
+        config: Dispatcher.Config = Dispatcher.Config(initialMaxBatchSize: 100)
+    ) async throws -> (dispatcher: Dispatcher, queue: PersistentEventQueue, tempDir: URL) {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DrainFixture-\(UUID().uuidString)")
+        if !seed.isEmpty {
+            try await DiskStorage(baseDirectory: tempDir).write(QueueSnapshot(events: seed))
+        }
+        let queue = PersistentEventQueue(
+            diskStore: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 100
+        )
+        _ = await queue.checkForPersistedEvents()
+        let dispatcher = makeDispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: http,
+            breaker: breaker,
+            persistentQueue: queue,
+            config: config
+        )
+        return (dispatcher, queue, tempDir)
+    }
+
+    func testDiskDrainSendsAllEventsAndClearsFile() async throws {
+        let seed = (0..<5).map { makeTestEvent(messageId: "persisted-\($0)") }
+        let recorder = BatchRecordingNetworking()
+        let fixture = try await makeDrainFixture(seed: seed, http: recorder)
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        // Memory queue event should be untouched by drain
+        await fixture.dispatcher.offer(makeTestEvent(messageId: "memory-0"))
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(recorder.callCount, 1)
+        XCTAssertEqual(recorder.batchSizes, [5])
+
+        let memCount = await fixture.dispatcher.getQueueLength()
+        XCTAssertEqual(memCount, 1, "Memory queue untouched by drain")
+
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertTrue(onDisk.isEmpty, "Disk file should be cleared after successful drain")
+    }
+
+    func testDiskDrainStopsOnServerErrorAndPersistsRemainder() async throws {
+        let seed = (0..<5).map { makeTestEvent(messageId: "persisted-\($0)") }
+        let stub = StubNetworking()
+        stub.mode = .http(500)
+        let fixture = try await makeDrainFixture(seed: seed, http: stub)
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(stub.callCount, 1, "Drain should stop after first 500")
+
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertEqual(onDisk.count, 5, "All events persisted back to disk on server-error halt")
+    }
+
+    func testDiskDrainStopsOn429AndPersistsRemainder() async throws {
+        let seed = (0..<5).map { makeTestEvent(messageId: "persisted-\($0)") }
+        let stub = StubNetworking()
+        stub.mode = .http(429)
+        let fixture = try await makeDrainFixture(seed: seed, http: stub)
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(stub.callCount, 1)
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertEqual(onDisk.count, 5)
+    }
+
+    func testDiskDrainStopsOnNetworkFailureAndPersistsRemainder() async throws {
+        let seed = (0..<5).map { makeTestEvent(messageId: "persisted-\($0)") }
+        let stub = StubNetworking()
+        stub.mode = .error
+        let fixture = try await makeDrainFixture(seed: seed, http: stub)
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(stub.callCount, 1)
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertEqual(onDisk.count, 5)
+    }
+
+    func testDiskDrain413HalvesBatchSize() async throws {
+        let seed = (0..<4).map { makeTestEvent(messageId: "persisted-\($0)") }
+        // First call returns 413, subsequent calls succeed
+        let sequencer = CallSequencer(responses: [.http(413), .success, .success, .success])
+        let fixture = try await makeDrainFixture(
+            seed: seed,
+            http: sequencer,
+            config: Dispatcher.Config(initialMaxBatchSize: 4)
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        // Should retry with smaller batches (2, 2) after 413 halves the size from 4
+        XCTAssertGreaterThanOrEqual(sequencer.callCount, 2)
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertTrue(onDisk.isEmpty, "All events should drain across halved batches")
+    }
+
+    func testDiskDrain413DropsSingleOversizedEvent() async throws {
+        let seed = [makeTestEvent(messageId: "oversize")]
+        let stub = StubNetworking()
+        stub.mode = .http(413)
+        let fixture = try await makeDrainFixture(
+            seed: seed,
+            http: stub,
+            config: Dispatcher.Config(initialMaxBatchSize: 1)
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertTrue(onDisk.isEmpty, "Oversize event at batchSize=1 should be dropped")
+    }
+
+    func testDiskDrainFatalConfigDeletesStoreAndFiresHandler() async throws {
+        let seed = (0..<3).map { makeTestEvent(messageId: "persisted-\($0)") }
+        let stub = StubNetworking()
+        stub.mode = .http(401)
+        let status = StatusHolder()
+
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DrainFatalTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try await DiskStorage(baseDirectory: tempDir).write(QueueSnapshot(events: seed))
+
+        let queue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 100)
+        _ = await queue.checkForPersistedEvents()
+        let dispatcher = makeDispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: stub,
+            breaker: CircuitBreaker(failureThreshold: 10),
+            persistentQueue: queue,
+            onFatalConfigError: { code in status.value = code }
+        )
+
+        await dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(status.value, 401, "FATAL_CONFIG handler must fire from drain path")
+        let onDisk = await queue.readDiskBatch(max: 100)
+        XCTAssertTrue(onDisk.isEmpty, "Disk store deleted on fatal config")
+    }
+
+    func testDiskDrainClientErrorDropsBatchAndContinues() async throws {
+        let seed = (0..<6).map { makeTestEvent(messageId: "persisted-\($0)") }
+        // First 3 events → 400 (drop). Next 3 → 200.
+        let sequencer = CallSequencer(responses: [.http(400), .success])
+        let fixture = try await makeDrainFixture(
+            seed: seed,
+            http: sequencer,
+            config: Dispatcher.Config(initialMaxBatchSize: 3)
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(sequencer.callCount, 2, "Second batch should proceed after first is dropped")
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertTrue(onDisk.isEmpty, "Disk empty after bad batch drop + good batch success")
+    }
+
+    func testDiskDrainConcurrentCallsGuarded() async throws {
+        let seed = (0..<10).map { makeTestEvent(messageId: "persisted-\($0)") }
+        let recorder = BatchRecordingNetworking()
+        let fixture = try await makeDrainFixture(
+            seed: seed,
+            http: recorder,
+            config: Dispatcher.Config(initialMaxBatchSize: 10)
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        // Kick off two drains concurrently
+        let dispatcher = fixture.dispatcher
+        async let a: () = dispatcher.drainDiskStoreToNetwork()
+        async let b: () = dispatcher.drainDiskStoreToNetwork()
+        _ = await (a, b)
+
+        // Only one drain should actually have run
+        XCTAssertEqual(recorder.callCount, 1, "Concurrent drain calls must be guarded — only one should actually drain")
+        XCTAssertEqual(recorder.batchSizes, [10])
+    }
+
+    func testDiskDrainSkipsWhenNoPersistedData() async throws {
+        let recorder = BatchRecordingNetworking()
+        let fixture = try await makeDrainFixture(seed: [], http: recorder)
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(recorder.callCount, 0, "No network calls when hasDiskData is false")
+    }
+
+    func testDiskDrainSkipsWhenOffline() async throws {
+        let seed = (0..<5).map { makeTestEvent(messageId: "persisted-\($0)") }
+        let recorder = BatchRecordingNetworking()
+        let fixture = try await makeDrainFixture(seed: seed, http: recorder)
+        defer { try? FileManager.default.removeItem(at: fixture.tempDir) }
+
+        await fixture.dispatcher.setOffline(true)
+        await fixture.dispatcher.drainDiskStoreToNetwork()
+
+        XCTAssertEqual(recorder.callCount, 0, "Drain must not call network while offline")
+        let onDisk = await fixture.queue.readDiskBatch(max: 100)
+        XCTAssertEqual(onDisk.count, 5, "Events must remain on disk when drain skipped")
+    }
+
+    func testDiskDrainCheckpointEvery10Batches() async throws {
+        // 15 events at batchSize=1 → 15 batches. Checkpoint fires after batch 10.
+        // We inspect disk state at the START of call 11 — after the post-batch-10
+        // checkpoint has had a chance to land on disk.
+        let seed = (0..<15).map { makeTestEvent(messageId: "p-\($0)") }
+        let diskDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DrainCheckpointTest-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
+        try await DiskStorage(baseDirectory: diskDir).write(QueueSnapshot(events: seed))
+        defer { try? FileManager.default.removeItem(at: diskDir) }
+
+        let sequencer = CheckpointInspectingNetworking(inspectAtCall: 11, diskDir: diskDir)
+
+        let queue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: diskDir), maxEventCount: 100)
+        _ = await queue.checkForPersistedEvents()
+        let dispatcher = makeDispatcher(
+            options: TestDataFactory.makeInitOptions(),
+            http: sequencer,
+            breaker: CircuitBreaker(failureThreshold: 100),
+            persistentQueue: queue,
+            config: Dispatcher.Config(initialMaxBatchSize: 1)
+        )
+
+        await dispatcher.drainDiskStoreToNetwork()
+
+        // Drain completes, disk is empty
+        let onDisk = await queue.readDiskBatch(max: 100)
+        XCTAssertTrue(onDisk.isEmpty)
+
+        // Checkpoint wrote (15 - 10 = 5) events remaining to disk after batch 10
+        XCTAssertEqual(sequencer.capturedAtInspection, 5,
+            "Checkpoint after 10 successful batches should leave 5 events on disk")
+    }
+
+    func testSendBatchDirectReturnsNilOnError() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .error
+        let dispatcher = makeDispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        let result = await dispatcher.sendBatchDirect([makeTestEvent()])
+        XCTAssertNil(result, "sendBatchDirect should return nil on network error")
+    }
+
+    func testSendBatchDirectReturnsResponseOnSuccess() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .success
+        let dispatcher = makeDispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        let result = await dispatcher.sendBatchDirect([makeTestEvent()])
+        XCTAssertNotNil(result, "sendBatchDirect should return response on 200")
+        XCTAssertEqual(result?.statusCode, 200)
+        XCTAssertEqual(stub.callCount, 1)
+    }
+
+    func testSendBatchDirectReturnsResponseOnHttpError() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .http(500)
+        let dispatcher = makeDispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+
+        let result = await dispatcher.sendBatchDirect([makeTestEvent()])
+        XCTAssertNotNil(result, "sendBatchDirect should return response on HTTP error")
+        XCTAssertEqual(result?.statusCode, 500)
     }
 }
 
@@ -883,6 +1184,37 @@ private final class BatchRecordingNetworking: Networking, @unchecked Sendable {
     }
 
     private struct AnyCodableElement: Decodable {}
+}
+
+
+/// Always responds 200. At call number `inspectAtCall`, reads disk state at the top of
+/// the call — used to verify that `drainDiskStoreToNetwork` writes a checkpoint every 10
+/// successful batches (inspect at call 11 to see state after the checkpoint post-batch-10).
+private final class CheckpointInspectingNetworking: Networking, @unchecked Sendable {
+    let inspectAtCall: Int
+    let diskDir: URL
+    private let lock = NSLock()
+    private var _callCount = 0
+    private(set) var capturedAtInspection: Int = -1
+
+    init(inspectAtCall: Int, diskDir: URL) {
+        self.inspectAtCall = inspectAtCall
+        self.diskDir = diskDir
+    }
+
+    func postJSON(url: URL, body: Data, timeoutMs: Int, additionalHeaders: [String: String]?) async throws -> NetworkResponse {
+        let count: Int = lock.withLock {
+            _callCount += 1
+            return _callCount
+        }
+        if count == inspectAtCall {
+            let snapshot = await DiskStorage(baseDirectory: diskDir).read()
+            capturedAtInspection = snapshot?.events.count ?? 0
+        }
+        return NetworkResponse(statusCode: 200, headers: [:], body: Data())
+    }
+
+    func parseRetryAfterMs(from headers: [String: String]) -> Int? { nil }
 }
 
 
