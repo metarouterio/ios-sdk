@@ -59,7 +59,6 @@ public actor PersistentEventQueue {
         self.maxDiskEvents = max(0, maxDiskEvents)
     }
 
-    // MARK: - Boot
 
     /// Cheap file-existence check. Sets `hasDiskData` without parsing the file.
     /// Returns `true` if there are persisted events on disk.
@@ -75,21 +74,19 @@ public actor PersistentEventQueue {
         return exists
     }
 
-    // MARK: - Memory queue operations
-
     /// Enqueue an event to the in-memory buffer.
-    /// When the queue is at capacity, the entire memory queue is flushed to disk first.
-    /// Returns the queue count after insertion.
+    /// When the queue is at capacity (by count OR byte size), the entire memory queue is flushed
+    /// to disk first. Returns the queue count after insertion.
     @discardableResult
     public func enqueue(_ event: EnrichedEventPayload) async -> Int {
         let currentCount = await memoryQueue.count
-        if currentCount >= maxEventCount {
+        let eventSize = Self.estimateEventSize(event)
+        if currentCount >= maxEventCount || estimatedBytes + eventSize > maxSizeBytes {
             await flushMemoryToDisk()
         }
 
         let prevCount = await memoryQueue.count
         let newCount = await memoryQueue.enqueue(event)
-        let eventSize = Self.estimateEventSize(event)
         if newCount <= prevCount, estimatedBytes > 0, prevCount > 0 {
             estimatedBytes -= estimatedBytes / prevCount
         }
@@ -108,18 +105,17 @@ public actor PersistentEventQueue {
     }
 
     /// Requeue events at the front (used after retryable send failures).
-    /// If memory cannot fit both current contents and the requeued events, flushes
-    /// current memory to disk first so nothing is dropped.
+    /// If memory cannot fit both current contents and the requeued events (by count OR bytes),
+    /// flushes current memory to disk first so nothing is dropped.
     public func requeueToFront(_ events: [EnrichedEventPayload]) async {
         guard !events.isEmpty else { return }
         let currentCount = await memoryQueue.count
-        if currentCount + events.count > maxEventCount {
+        let addedBytes = events.reduce(0) { $0 + Self.estimateEventSize($1) }
+        if currentCount + events.count > maxEventCount || estimatedBytes + addedBytes > maxSizeBytes {
             await flushMemoryToDisk()
         }
         await memoryQueue.requeueToFront(events)
-        for event in events {
-            estimatedBytes += Self.estimateEventSize(event)
-        }
+        estimatedBytes += addedBytes
     }
 
     /// Drop current front batch without requeueing.
@@ -153,8 +149,6 @@ public actor PersistentEventQueue {
         }
     }
 
-    // MARK: - Disk lock (exposed for Dispatcher's drain)
-
     /// Acquire the disk lock. MUST be paired with `releaseDiskLock()`.
     /// Held by `drainDiskStoreToNetwork` for the entire drain duration so that
     /// mid-drain memory flushes do not clobber the drain's remainder write.
@@ -166,8 +160,6 @@ public actor PersistentEventQueue {
     public func releaseDiskLock() async {
         await diskLock.unlock()
     }
-
-    // MARK: - Disk operations
 
     /// Flush the entire memory queue to disk, merging with existing disk contents
     /// and enforcing `maxDiskEvents`. Memory is cleared after a successful write.
@@ -185,11 +177,17 @@ public actor PersistentEventQueue {
 
     /// Drain's single-read primitive. Reads everything from disk and deletes the file
     /// in a single actor hop (no suspends between). Caller MUST hold the disk lock.
-    /// Returns the events that were on disk (possibly empty).
+    /// Events older than `eventTTL` (7 days) are filtered out before returning.
+    /// Returns the live events that were on disk (possibly empty).
     public func readAllFromDiskAndDelete() async -> [EnrichedEventPayload] {
         let snapshot = await diskStore.read()
-        let events = snapshot?.events ?? []
-        if !events.isEmpty {
+        let allEvents = snapshot?.events ?? []
+        let events = Self.filterExpired(allEvents)
+        let dropped = allEvents.count - events.count
+        if dropped > 0 {
+            Logger.log("Drain TTL filter dropped \(dropped) event(s) older than 7 days")
+        }
+        if !allEvents.isEmpty {
             await diskStore.delete()
             _hasDiskData = false
         } else if _hasDiskData {
@@ -234,8 +232,6 @@ public actor PersistentEventQueue {
         return Array(events.prefix(min(count, events.count)))
     }
 
-    // MARK: - Private helpers
-
     /// Internal flush — no lock, caller must hold `diskLock` (or be `flushMemoryToDisk`).
     private func flushMemoryToDiskInternal() async -> Bool {
         let events = await memoryQueue.drain(max: Int.max)
@@ -261,5 +257,15 @@ public actor PersistentEventQueue {
     /// Fast per-event size estimate. Encodes once per event (at enqueue time only).
     private static func estimateEventSize(_ event: EnrichedEventPayload) -> Int {
         (try? jsonEncoder.encode(event))?.count ?? 512
+    }
+
+    /// Drop events whose `timestamp` is older than `eventTTL`. Events without a
+    /// parseable timestamp are kept (conservative — better to send than silently drop).
+    private static func filterExpired(_ events: [EnrichedEventPayload]) -> [EnrichedEventPayload] {
+        let cutoff = Date().addingTimeInterval(-eventTTL)
+        return events.filter { event in
+            guard let ts = DateFormatters.iso8601.date(from: event.timestamp) else { return true }
+            return ts >= cutoff
+        }
     }
 }

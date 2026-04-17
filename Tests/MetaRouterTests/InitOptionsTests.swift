@@ -28,8 +28,6 @@ final class InitOptionsTests: XCTestCase {
         XCTAssertEqual(options.ingestionHost.absoluteString, "https://host.tld/base")
     }
 
-    // MARK: - maxDiskEvents vs maxQueueEvents inversion warning
-
     func testInversionWarningEmittedWhenDiskSmallerThanMemory() {
         let output = captureStderrAndStdout {
             _ = InitOptions(

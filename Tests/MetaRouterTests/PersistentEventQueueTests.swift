@@ -26,8 +26,6 @@ final class PersistentEventQueueTests: XCTestCase {
         tempDir.appendingPathComponent("queue.v1.json")
     }
 
-    // MARK: - Memory queue basics
-
     func testEnqueueWritesToMemoryOnly() async throws {
         let queue = makeQueue()
         await queue.enqueue(makeTestEvent(messageId: "e1"))
@@ -48,8 +46,6 @@ final class PersistentEventQueueTests: XCTestCase {
         let remaining = await queue.count
         XCTAssertEqual(remaining, 1)
     }
-
-    // MARK: - flushMemoryToDisk
 
     func testFlushMemoryToDiskWritesAndClearsMemory() async throws {
         let queue = makeQueue()
@@ -105,7 +101,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertNil(snapshot)
     }
 
-    // MARK: - Capacity overflow flushes to disk (no drops)
 
     func testEnqueueAtCapacityFlushesEntireMemoryToDisk() async throws {
         let queue = makeQueue(maxEventCount: 3)
@@ -141,7 +136,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(snapshot?.events.map(\.messageId), ["e1", "e2", "e3", "e4", "e5", "e6"])
     }
 
-    // MARK: - requeueToFront at capacity (bug fix)
 
     func testRequeueToFrontPreservesOrderBelowCapacity() async throws {
         let queue = makeQueue()
@@ -180,8 +174,6 @@ final class PersistentEventQueueTests: XCTestCase {
             "Displaced memory events must land on disk, not be dropped")
     }
 
-    // MARK: - checkForPersistedEvents
-
     func testCheckForPersistedEventsReturnsFalseWhenNoFile() async throws {
         let queue = makeQueue()
         let has = await queue.checkForPersistedEvents()
@@ -214,7 +206,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(memCount, 0, "Memory queue must start empty — events stay on disk")
     }
 
-    // MARK: - Drain primitives
 
     func testReadAllFromDiskAndDeleteClearsFile() async throws {
         let disk = DiskStorage(baseDirectory: tempDir)
@@ -264,7 +255,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: diskFilePath.path))
     }
 
-    // MARK: - Clear
 
     func testClearEmptiesMemoryAndDisk() async throws {
         let queue = makeQueue()
@@ -281,7 +271,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertFalse(hasDisk)
     }
 
-    // MARK: - Flush threshold
 
     func testFlushThresholdReachedByCount() async throws {
         let queue = PersistentEventQueue(
@@ -303,7 +292,6 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertTrue(needsFlush)
     }
 
-    // MARK: - Disk persistence disabled (maxDiskEvents = 0)
 
     func testFlushMemoryToDiskIsNoOpWhenMaxDiskEventsZero() async throws {
         let queue = makeQueue(maxDiskEvents: 0)
@@ -379,7 +367,6 @@ final class PersistentEventQueueTests: XCTestCase {
                        "requeued events must survive; newest entries (a, b) get dropped from the back")
     }
 
-    // MARK: - Cross-session persistence
 
     func testPersistsAcrossInstances() async throws {
         let queue1 = makeQueue()
@@ -399,6 +386,50 @@ final class PersistentEventQueueTests: XCTestCase {
 
         let drained = await queue2.readAllFromDiskAndDelete()
         XCTAssertEqual(drained.map(\.messageId), ["s1-0", "s1-1", "s1-2", "s1-3", "s1-4"])
+    }
+
+    func testReadAllFromDiskAndDeleteFiltersEventsOlderThanTTL() async throws {
+        let iso = ISO8601DateFormatter()
+        let recent = iso.string(from: Date())
+        let expired = iso.string(from: Date().addingTimeInterval(-8 * 24 * 60 * 60)) // 8 days ago
+
+        let disk = DiskStorage(baseDirectory: tempDir)
+        let events = [
+            makeTestEvent(messageId: "expired-1", timestamp: expired),
+            makeTestEvent(messageId: "recent-1", timestamp: recent),
+            makeTestEvent(messageId: "expired-2", timestamp: expired),
+            makeTestEvent(messageId: "recent-2", timestamp: recent),
+        ]
+        try await disk.write(QueueSnapshot(events: events))
+
+        let queue = makeQueue()
+        _ = await queue.checkForPersistedEvents()
+        let drained = await queue.readAllFromDiskAndDelete()
+
+        XCTAssertEqual(drained.map(\.messageId), ["recent-1", "recent-2"],
+                       "Events older than 7 days should be filtered out on drain")
+    }
+
+    // MARK: - Byte cap enforcement on enqueue
+
+    func testEnqueueAtByteCapFlushesMemoryToDisk() async throws {
+        // maxSizeBytes small enough that a few test events exceed it.
+        let queue = PersistentEventQueue(
+            diskStore: DiskStorage(baseDirectory: tempDir),
+            maxEventCount: 1000,   // count cap won't trip
+            maxSizeBytes: 1500,
+            maxDiskEvents: 10_000
+        )
+
+        for i in 1...8 {
+            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+
+        let memCount = await queue.count
+        XCTAssertLessThan(memCount, 8, "Byte cap should have triggered a flush; memory should not hold all 8")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: diskFilePath.path),
+                      "Byte cap flush should have written to disk")
     }
 }
 

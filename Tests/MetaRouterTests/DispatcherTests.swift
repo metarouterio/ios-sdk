@@ -41,6 +41,36 @@ private final class StubNetworking: Networking, @unchecked Sendable {
     }
 }
 
+/// Builds a `Dispatcher` backed by a throwaway temp-dir disk store for tests.
+/// Accepts either `queueCapacity:` (helper builds the queue) or `persistentQueue:` (caller builds it).
+private func makeDispatcher(
+    options: InitOptions,
+    http: Networking = NetworkClient(),
+    breaker: CircuitBreaker = CircuitBreaker(),
+    queueCapacity: Int? = nil,
+    persistentQueue: PersistentEventQueue? = nil,
+    config: Dispatcher.Config = Dispatcher.Config(),
+    onFatalConfigError: Dispatcher.FatalConfigHandler? = nil
+) -> Dispatcher {
+    let queue: PersistentEventQueue
+    if let pq = persistentQueue {
+        queue = pq
+    } else {
+        let cap = queueCapacity ?? 2000
+        let diskStore = DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("metarouter-test-\(UUID().uuidString)"))
+        queue = PersistentEventQueue(diskStore: diskStore, maxEventCount: cap)
+    }
+    return Dispatcher(
+        options: options,
+        http: http,
+        breaker: breaker,
+        persistentQueue: queue,
+        config: config,
+        onFatalConfigError: onFatalConfigError
+    )
+}
+
 /// Creates a minimal enriched event for testing
 private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
     let ctx = EventContext(
@@ -65,7 +95,7 @@ final class DispatcherTests: XCTestCase {
     func testFlushSuccessRemovesBatch() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.offer(makeTestEvent())
         await dispatcher.flush()
@@ -79,7 +109,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(401)
         let statusHolder = StatusHolder()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 10, onFatalConfigError: { status in statusHolder.value = status })
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 10, onFatalConfigError: { status in statusHolder.value = status })
 
         await dispatcher.offer(makeTestEvent())
         await dispatcher.flush()
@@ -90,7 +120,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingDisabledByDefault() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.offer(makeTestEvent())
         await dispatcher.flush()
@@ -101,7 +131,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingEnabledAddsHeader() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.setTracing(true)
         await dispatcher.offer(makeTestEvent())
@@ -114,7 +144,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingCanBeDisabled() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.setTracing(true)
         await dispatcher.offer(makeTestEvent())
@@ -135,7 +165,7 @@ final class DispatcherTests: XCTestCase {
     func testTracingPersistsAcrossMultipleFlushes() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
+        let dispatcher = makeDispatcher(options: options, http: stub, breaker: CircuitBreaker(), queueCapacity: 100)
 
         await dispatcher.setTracing(true)
 
@@ -155,7 +185,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(403)
         let statusHolder = StatusHolder()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub, breaker: CircuitBreaker(),
             queueCapacity: 10,
             onFatalConfigError: { status in statusHolder.value = status }
@@ -174,7 +204,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(404)
         let statusHolder = StatusHolder()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub, breaker: CircuitBreaker(),
             queueCapacity: 10,
             onFatalConfigError: { status in statusHolder.value = status }
@@ -193,7 +223,7 @@ final class DispatcherTests: XCTestCase {
 
         // First call returns 413, then subsequent calls succeed
         let sequencer = CallSequencer(responses: [.http(413), .success])
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(failureThreshold: 10), // high threshold so breaker doesn't trip
             queueCapacity: 100,
@@ -219,7 +249,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(500)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000), // trip immediately, long cooldown
             queueCapacity: 100
@@ -238,7 +268,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .httpWithHeaders(429, ["Retry-After": "2"])
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000),
             queueCapacity: 100
@@ -257,7 +287,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(408)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000),
             queueCapacity: 100
@@ -275,7 +305,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(400)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -293,7 +323,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .http(422)
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -311,7 +341,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .error
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000),
             queueCapacity: 100
@@ -329,7 +359,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -350,7 +380,7 @@ final class DispatcherTests: XCTestCase {
 
         // Sequence: 413 → 200 → 200 → 200 (batch size: 4 → 2 → 4 on recovery)
         let sequencer = CallSequencer(responses: [.http(413), .success, .success, .success, .success])
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(failureThreshold: 10),
             queueCapacity: 100,
@@ -383,7 +413,7 @@ final class DispatcherTests: XCTestCase {
 
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options,
             http: stub,
             breaker: CircuitBreaker(),
@@ -420,7 +450,7 @@ final class DispatcherTests: XCTestCase {
         )
         _ = await queue.checkForPersistedEvents()
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: recorder,
             breaker: CircuitBreaker(),
@@ -453,7 +483,7 @@ final class DispatcherTests: XCTestCase {
         )
         _ = await queue.checkForPersistedEvents()
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: recorder,
             breaker: CircuitBreaker(),
@@ -480,7 +510,7 @@ final class DispatcherTests: XCTestCase {
         // when events exceed maxBatchSize without rehydration
         let options = TestDataFactory.makeInitOptions()
         let recorder = BatchRecordingNetworking()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options,
             http: recorder,
             breaker: CircuitBreaker(),
@@ -519,7 +549,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .error
 
         // Default circuit breaker: threshold 3 — circuit stays closed after 1 failure
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -544,7 +574,7 @@ final class DispatcherTests: XCTestCase {
         let options = TestDataFactory.makeInitOptions()
         let sequencer = CallSequencer(responses: [.error, .success])
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -569,7 +599,7 @@ final class DispatcherTests: XCTestCase {
         // Sequence: error → success (retry recovers), then error again on next flush
         let sequencer = CallSequencer(responses: [.error, .success, .error, .success])
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: sequencer,
             breaker: CircuitBreaker(failureThreshold: 10), // high threshold to avoid circuit opening
             queueCapacity: 100,
@@ -608,7 +638,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .http(503)
 
         // Default circuit breaker: stays closed after 1 failure
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -632,7 +662,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100,
@@ -665,7 +695,7 @@ final class DispatcherTests: XCTestCase {
             diskStore: DiskStorage(baseDirectory: tempDir),
             maxEventCount: 100
         )
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: stub,
             breaker: CircuitBreaker(),
@@ -693,7 +723,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -722,7 +752,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .http(500)
 
         let breaker = CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, jitterRatio: 0.0)
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: breaker,
             queueCapacity: 100
@@ -752,7 +782,7 @@ final class DispatcherTests: XCTestCase {
         stub.mode = .http(500)
 
         let breaker = CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, jitterRatio: 0.0)
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: breaker,
             queueCapacity: 100
@@ -772,7 +802,7 @@ final class DispatcherTests: XCTestCase {
         let stub = StubNetworking()
         stub.mode = .success
 
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -802,7 +832,7 @@ final class DispatcherTests: XCTestCase {
     func testGetIsOfflineReflectsState() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -821,7 +851,6 @@ final class DispatcherTests: XCTestCase {
     }
 
 
-    // MARK: - Disk store drain tests
 
     /// Helper: seed a disk store and build a dispatcher wired to it.
     private func makeDrainFixture(
@@ -840,7 +869,7 @@ final class DispatcherTests: XCTestCase {
             maxEventCount: 100
         )
         _ = await queue.checkForPersistedEvents()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: http,
             breaker: breaker,
@@ -963,7 +992,7 @@ final class DispatcherTests: XCTestCase {
 
         let queue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 100)
         _ = await queue.checkForPersistedEvents()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: stub,
             breaker: CircuitBreaker(failureThreshold: 10),
@@ -1056,7 +1085,7 @@ final class DispatcherTests: XCTestCase {
 
         let queue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: diskDir), maxEventCount: 100)
         _ = await queue.checkForPersistedEvents()
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: TestDataFactory.makeInitOptions(),
             http: sequencer,
             breaker: CircuitBreaker(failureThreshold: 100),
@@ -1079,7 +1108,7 @@ final class DispatcherTests: XCTestCase {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
         stub.mode = .error
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -1093,7 +1122,7 @@ final class DispatcherTests: XCTestCase {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
         stub.mode = .success
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100
@@ -1109,7 +1138,7 @@ final class DispatcherTests: XCTestCase {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
         stub.mode = .http(500)
-        let dispatcher = Dispatcher(
+        let dispatcher = makeDispatcher(
             options: options, http: stub,
             breaker: CircuitBreaker(),
             queueCapacity: 100

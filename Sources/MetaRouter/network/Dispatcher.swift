@@ -48,7 +48,6 @@ public actor Dispatcher {
         }
     }
 
-    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
     private static let jsonEncoder = JSONEncoder()
 
     private let options: InitOptions
@@ -81,28 +80,6 @@ public actor Dispatcher {
         self.http = http
         self.breaker = breaker
         self.queue = persistentQueue
-        self.maxBatchSize = config.initialMaxBatchSize
-        self.config = config
-        self.onFatalConfigError = onFatalConfigError
-    }
-
-    /// Backward-compatible init (tests, simple usage). Creates an internal PersistentEventQueue.
-    public init(
-        options: InitOptions,
-        http: Networking = NetworkClient(),
-        breaker: CircuitBreaker = CircuitBreaker(),
-        queueCapacity: Int = 2000,
-        config: Config = Config(),
-        onFatalConfigError: FatalConfigHandler? = nil
-    ) {
-        self.options = options
-        self.http = http
-        self.breaker = breaker
-        self.queue = PersistentEventQueue(
-            diskStore: DiskStorage(baseDirectory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("metarouter-noop-\(UUID().uuidString)")),
-            maxEventCount: queueCapacity
-        )
         self.maxBatchSize = config.initialMaxBatchSize
         self.config = config
         self.onFatalConfigError = onFatalConfigError
@@ -259,7 +236,7 @@ public actor Dispatcher {
         guard !events.isEmpty else { return NetworkResponse(statusCode: 200, headers: [:], body: Data()) }
 
         var batch = events
-        let sentAt = Self.isoFormatter.string(from: Date())
+        let sentAt = DateFormatters.iso8601.string(from: Date())
         for i in 0..<batch.count {
             batch[i].sentAt = sentAt
         }
@@ -409,7 +386,7 @@ public actor Dispatcher {
             guard !batch.isEmpty else { return }
             
             // Add sentAt timestamp to all events in batch
-            let sentAt = Self.isoFormatter.string(from: Date())
+            let sentAt = DateFormatters.iso8601.string(from: Date())
             for i in 0..<batch.count {
                 batch[i].sentAt = sentAt
             }

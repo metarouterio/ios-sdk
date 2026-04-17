@@ -117,18 +117,6 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             }
         }
 
-        // Periodic network reconciliation — only active while the dispatcher thinks
-        // we're offline. Catches transitions that NWPathMonitor's pathUpdateHandler
-        // misses (known issue on simulator, rare edge cases on device).
-        Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10s
-                guard let self else { return }
-                guard await self.dispatcher.getIsOffline() else { continue }
-                monitor.reconcile()
-            }
-        }
-
         self.initTask = Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()

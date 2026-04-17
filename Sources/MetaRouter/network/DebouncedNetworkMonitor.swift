@@ -42,13 +42,6 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
         inner.stop()
     }
 
-    /// Delegate reconciliation to the inner monitor.
-    /// If the inner monitor detects a drifted status, its callback flows through
-    /// our handleRawStatusChange which applies the normal debounce logic.
-    public func reconcile() {
-        inner.reconcile()
-    }
-
     private func handleRawStatusChange(_ rawStatus: NetworkStatus) {
         lock.lock()
         let oldStatus = _currentStatus
@@ -62,20 +55,15 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
             lock.unlock()
 
             if oldStatus != .disconnected {
-                Logger.log("Debounced network: immediate offline transition")
                 callback?(.disconnected)
             }
         } else {
             // Online: debounce — wait for stability before firing
-            Logger.log("Debounced network: raw online signal received (current=\(oldStatus.rawValue)), starting \(debounceNs / 1_000_000_000)s debounce")
             debounceTask?.cancel()
             let interval = debounceNs
             debounceTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: interval)
-                guard !Task.isCancelled else {
-                    Logger.log("Debounced network: online debounce cancelled (flapping?)")
-                    return
-                }
+                guard !Task.isCancelled else { return }
                 self?.commitOnline()
             }
             lock.unlock()
@@ -90,7 +78,6 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
         lock.unlock()
 
         if oldStatus != .connected {
-            Logger.log("Debounced network: online transition confirmed after debounce")
             callback?(.connected)
         }
     }
