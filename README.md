@@ -36,6 +36,14 @@ Add the following dependency to your `Package.swift`:
 
 Or add it via Xcode: **File → Add Package Dependencies → Enter repository URL**
 
+#### Pre-release builds
+
+To try a pre-release (e.g. beta) version, pin to an exact tag. SPM does not resolve pre-releases through version ranges:
+
+```swift
+.package(url: "https://github.com/metarouterio/ios-sdk.git", exact: "1.4.0-beta.1")
+```
+
 ## Usage
 
 ### Basic Setup
