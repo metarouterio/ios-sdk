@@ -11,6 +11,11 @@ private final class StatusHolder: @unchecked Sendable {
     }
 }
 
+private actor CounterHolder {
+    private(set) var value: Int = 0
+    func increment() { value += 1 }
+}
+
 private final class StubNetworking: Networking, @unchecked Sendable {
     enum Mode { case success, http(Int), httpWithHeaders(Int, [String: String]), error }
     var mode: Mode = .success
@@ -1102,6 +1107,87 @@ final class DispatcherTests: XCTestCase {
         // Checkpoint wrote (15 - 10 = 5) events remaining to disk after batch 10
         XCTAssertEqual(sequencer.capturedAtInspection, 5,
             "Checkpoint after 10 successful batches should leave 5 events on disk")
+    }
+
+    /// Regression for the Android `ae23de6` bug where `onFlushComplete` fired on
+    /// *any* non-paused flush attempt, triggering a disk drain against the same
+    /// failing endpoint. The drain handler must only fire when at least one batch
+    /// actually succeeded (2xx) during the flush.
+    func testOnFlushCompleteSkippedWhenNoBatchSucceeded() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .http(400) // all events dropped, queue empties, but no 2xx
+
+        let drainCalls = CounterHolder()
+        let dispatcher = makeDispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+        await dispatcher.setFlushCompleteHandler { await drainCalls.increment() }
+
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush()
+
+        let remaining = await dispatcher.getQueueLength()
+        XCTAssertEqual(remaining, 0, "400 drops empty the queue without a 2xx")
+        let calls = await drainCalls.value
+        XCTAssertEqual(calls, 0, "onFlushComplete must NOT fire when no batch succeeded")
+    }
+
+    func testOnFlushCompleteFiresOnSuccessfulFlush() async {
+        let options = TestDataFactory.makeInitOptions()
+        let stub = StubNetworking()
+        stub.mode = .success
+
+        let drainCalls = CounterHolder()
+        let dispatcher = makeDispatcher(
+            options: options, http: stub,
+            breaker: CircuitBreaker(),
+            queueCapacity: 100
+        )
+        await dispatcher.setFlushCompleteHandler { await drainCalls.increment() }
+
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush()
+
+        let calls = await drainCalls.value
+        XCTAssertEqual(calls, 1, "onFlushComplete fires after a successful flush")
+    }
+
+    /// Regression for the Android `1e457cc` retry/flush-churn bug.
+    /// When a retry is armed inside its backoff window, subsequent `flush()` calls
+    /// (from the periodic loop or `offer()` auto-flush) must not re-enter
+    /// `processUntilEmpty` and cancel+relaunch the armed retry.
+    func testFlushDoesNotRelaunchArmedRetryDuringBackoff() async {
+        let options = TestDataFactory.makeInitOptions()
+        // Fail once so the retry arms, then stay success-capable.
+        let sequencer = CallSequencer(responses: [.error, .success])
+        // Long backoff so the retry can't fire during the test window.
+        let dispatcher = makeDispatcher(
+            options: options, http: sequencer,
+            breaker: CircuitBreaker(failureThreshold: 1, cooldownMs: 60_000, jitterRatio: 0.0),
+            queueCapacity: 100,
+            config: Dispatcher.Config(baseRetryDelayMs: 5_000, maxRetryDelayMs: 10_000)
+        )
+
+        await dispatcher.offer(makeTestEvent())
+        await dispatcher.flush() // failure → retry armed
+        XCTAssertEqual(sequencer.callCount, 1)
+
+        let armed = await dispatcher.retryTimerTask
+        XCTAssertNotNil(armed, "Retry should be armed after failure")
+
+        // Simulate periodic flushLoop + offer-threshold triggers during the backoff window.
+        await dispatcher.flush()
+        await dispatcher.flush()
+        await dispatcher.flush()
+
+        XCTAssertEqual(sequencer.callCount, 1, "No additional HTTP should fire while retry is armed")
+
+        // The original armed task must NOT have been cancelled+replaced.
+        XCTAssertEqual(armed?.isCancelled, false,
+            "Armed retry task must not be cancelled by intermediate flush() calls")
     }
 
     func testSendBatchDirectReturnsNilOnError() async {

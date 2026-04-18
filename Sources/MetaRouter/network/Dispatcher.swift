@@ -1,6 +1,6 @@
 import Foundation
 
-/// Shared classification of HTTP status codes used by both the dispatcher and the overflow drain.
+/// Shared classification of HTTP status codes used by both the dispatcher and the disk drain.
 public enum ResponseCategory: Sendable {
     case success
     case serverError
@@ -59,7 +59,7 @@ public actor Dispatcher {
     private var onFlushComplete: FlushCompleteHandler?
 
     private var flushTimerTask: Task<Void, Never>? = nil
-    private var retryTimerTask: Task<Void, Never>? = nil
+    internal var retryTimerTask: Task<Void, Never>? = nil
     private var isFlushing = false
     private let config: Config
     private var tracingEnabled = false
@@ -101,7 +101,7 @@ public actor Dispatcher {
     /// Update offline state. Idempotent — only acts on actual transitions.
     /// When going offline, stops retrying (no point while offline).
     /// When coming online, resets circuit breaker, flushes memory queue,
-    /// and starts draining overflow from disk to network in the background.
+    /// and starts draining the disk store to the network in the background.
     public func setOffline(_ offline: Bool) async {
         if !isOffline && offline {
             // Going offline: stop retrying (no point while offline)
@@ -167,19 +167,23 @@ public actor Dispatcher {
 
     public func flush() async {
         guard !isFlushing else { return }
+        // An armed retry IS the next attempt — don't let periodic/offer-triggered
+        // flushes cancel+relaunch it and thrash the backoff window.
+        if let armed = retryTimerTask, !armed.isCancelled { return }
         guard await queue.count > 0 else { return }
         isFlushing = true
         defer { isFlushing = false }
-        await processUntilEmpty()
+        let hadSuccess = await processUntilEmpty()
         if await queue.count == 0 {
             Logger.log(
                 "Flush completed successfully",
                 writeKey: options.writeKey,
                 host: options.ingestionHost.absoluteString)
-            // Fire onFlushComplete only when online — triggers overflow drain
-            if !isOffline, let handler = onFlushComplete {
-                await handler()
-            }
+        }
+        // Fire onFlushComplete only after a real 2xx — triggers the disk drain.
+        // Gating on success avoids churning disk writes against a failing endpoint.
+        if hadSuccess, !isOffline, let handler = onFlushComplete {
+            await handler()
         }
     }
 
@@ -230,7 +234,7 @@ public actor Dispatcher {
     }
 
     /// Send a batch of events directly to the network, bypassing the memory queue.
-    /// Used by overflow drain to flush disk events without loading into memory.
+    /// Used by the disk drain to send persisted events without loading them into memory.
     /// Returns the NetworkResponse on success/HTTP error, nil on network/encoding failure.
     public func sendBatchDirect(_ events: [EnrichedEventPayload]) async -> NetworkResponse? {
         guard !events.isEmpty else { return NetworkResponse(statusCode: 200, headers: [:], body: Data()) }
@@ -246,7 +250,7 @@ public actor Dispatcher {
         do {
             body = try Self.jsonEncoder.encode(payload)
         } catch {
-            Logger.error("Failed to encode overflow batch: \(error)")
+            Logger.error("Failed to encode disk drain batch: \(error)")
             return nil
         }
 
@@ -257,11 +261,11 @@ public actor Dispatcher {
             if (200..<300).contains(resp.statusCode) {
                 breaker.onSuccess()
             } else {
-                Logger.warn("Overflow batch send failed with status \(resp.statusCode)")
+                Logger.warn("Disk drain batch send failed with status \(resp.statusCode)")
             }
             return resp
         } catch {
-            Logger.warn("Overflow batch send failed: \(error.localizedDescription)")
+            Logger.warn("Disk drain batch send failed: \(error.localizedDescription)")
             return nil
         }
     }
@@ -367,30 +371,34 @@ public actor Dispatcher {
         }
     }
 
-    private func processUntilEmpty() async {
+    /// Returns `true` if at least one batch was accepted with a 2xx during this cycle.
+    /// The caller uses this to gate `onFlushComplete` — a drain triggered by a flush
+    /// that produced no successes would just thrash the same failing endpoint.
+    private func processUntilEmpty() async -> Bool {
+        var hadSuccess = false
         while await queue.count > 0 {
             guard !isOffline else {
                 Logger.log("Offline — flushing \(await queue.count) event(s) to disk")
                 await queue.flushMemoryToDisk()
-                return
+                return hadSuccess
             }
 
             let waitMs = breaker.beforeRequest()
             if waitMs > 0 {
                 Logger.warn("Circuit breaker \(breaker.getState()), retrying in \(waitMs)ms (\(await queue.count) event(s) pending)")
                 await scheduleRetry(afterMs: waitMs)
-                return
+                return hadSuccess
             }
 
             var batch = await queue.drain(max: maxBatchSize)
-            guard !batch.isEmpty else { return }
-            
+            guard !batch.isEmpty else { return hadSuccess }
+
             // Add sentAt timestamp to all events in batch
             let sentAt = DateFormatters.iso8601.string(from: Date())
             for i in 0..<batch.count {
                 batch[i].sentAt = sentAt
             }
-            
+
             let payload = ["batch": batch]
             let body: Data
             do {
@@ -418,6 +426,7 @@ public actor Dispatcher {
                 let resp = try await http.postJSON(url: url, body: body, timeoutMs: config.timeoutMs, additionalHeaders: headers)
 
                 if (200..<300).contains(resp.statusCode) {
+                    hadSuccess = true
                     consecutiveRetries = 0
                     Logger.log(
                         "API call successful",
@@ -426,7 +435,7 @@ public actor Dispatcher {
                 }
 
                 let shouldStop = await handleResponse(resp, originalBatch: batch)
-                if shouldStop { return }
+                if shouldStop { return hadSuccess }
             } catch {
                 consecutiveRetries += 1
                 breaker.onFailure()
@@ -434,9 +443,10 @@ public actor Dispatcher {
                 let retryDelay = max(retryFloorMs(), breaker.beforeRequest())
                 Logger.warn("API call failed: \(error.localizedDescription), \(await queue.count) event(s) pending retry in \(retryDelay)ms (circuit: \(breaker.getState()), retry #\(consecutiveRetries))")
                 await scheduleRetry(afterMs: retryDelay)
-                return
+                return hadSuccess
             }
         }
+        return hadSuccess
     }
 
     /// Returns `true` if processUntilEmpty should stop (retryable failure scheduled a retry).
@@ -516,8 +526,15 @@ public actor Dispatcher {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(afterMs) * 1_000_000)
             guard !Task.isCancelled else { return }
+            // Null the reference before calling flush() so the guard in flush()
+            // doesn't block the retry's own invocation.
+            await self.clearRetryTimerTask()
             await self.flush()
         }
+    }
+
+    private func clearRetryTimerTask() {
+        retryTimerTask = nil
     }
 }
 
