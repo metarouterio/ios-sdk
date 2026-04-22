@@ -58,7 +58,7 @@ final class PersistentEventQueueTests: XCTestCase {
         let count = await queue.count
         XCTAssertEqual(count, 0, "Memory should be empty after flush")
 
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertEqual(snapshot?.events.map(\.messageId), ["e1", "e2"])
     }
 
@@ -73,7 +73,7 @@ final class PersistentEventQueueTests: XCTestCase {
         await queue.enqueue(makeTestEvent(messageId: "e2"))
         _ = await queue.flushMemoryToDisk()
 
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertEqual(snapshot?.events.map(\.messageId), ["e1", "e2"],
             "Second flush should append to existing disk contents")
     }
@@ -86,7 +86,7 @@ final class PersistentEventQueueTests: XCTestCase {
         }
         _ = await queue.flushMemoryToDisk()
 
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertEqual(snapshot?.events.count, 5, "Disk cap should drop oldest")
         XCTAssertEqual(snapshot?.events.first?.messageId, "e7")
         XCTAssertEqual(snapshot?.events.last?.messageId, "e11")
@@ -97,7 +97,7 @@ final class PersistentEventQueueTests: XCTestCase {
         let flushed = await queue.flushMemoryToDisk()
         XCTAssertFalse(flushed)
 
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertNil(snapshot)
     }
 
@@ -117,7 +117,7 @@ final class PersistentEventQueueTests: XCTestCase {
         let drained = await queue.drain(max: 10)
         XCTAssertEqual(drained.map(\.messageId), ["e4"])
 
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertEqual(snapshot?.events.map(\.messageId), ["e1", "e2", "e3"])
     }
 
@@ -132,7 +132,7 @@ final class PersistentEventQueueTests: XCTestCase {
         let memCount = await queue.count
         XCTAssertEqual(memCount, 1)
 
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertEqual(snapshot?.events.map(\.messageId), ["e1", "e2", "e3", "e4", "e5", "e6"])
     }
 
@@ -169,7 +169,7 @@ final class PersistentEventQueueTests: XCTestCase {
             "Requeued events stay in memory")
 
         // m1-m3 should be on disk (no drops)
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertEqual(snapshot?.events.map(\.messageId), ["m1", "m2", "m3"],
             "Displaced memory events must land on disk, not be dropped")
     }
@@ -227,7 +227,7 @@ final class PersistentEventQueueTests: XCTestCase {
         await queue.writeDiskStore([makeTestEvent(messageId: "v1")])
         await queue.writeDiskStore([makeTestEvent(messageId: "v2-a"), makeTestEvent(messageId: "v2-b")])
 
-        let snapshot = await DiskStorage(baseDirectory: tempDir).read()
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
         XCTAssertEqual(snapshot?.events.map(\.messageId), ["v2-a", "v2-b"])
         let hasDisk = await queue.hasDiskData
         XCTAssertTrue(hasDisk)
@@ -408,6 +408,57 @@ final class PersistentEventQueueTests: XCTestCase {
 
         XCTAssertEqual(drained.map(\.messageId), ["recent-1", "recent-2"],
                        "Events older than 7 days should be filtered out on drain")
+    }
+
+    // MARK: - Pending overflow on disk write failure
+
+    /// Poison the tempDir path so DiskStorage.ensureDirectory fails.
+    /// Creates a regular file where the queue expects a directory.
+    private func poisonDiskPath() throws {
+        try FileManager.default.createDirectory(
+            at: tempDir.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try Data("blocker".utf8).write(to: tempDir)
+    }
+
+    func testPendingOverflowPreservesEventsWhenDiskWriteFailsAtCapacity() async throws {
+        try poisonDiskPath()
+        let queue = makeQueue(maxEventCount: 3)
+
+        for i in 1...5 {
+            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+
+        // Nothing should have been dropped (neither memory ring-buffer nor disk).
+        XCTAssertFalse(FileManager.default.isReadableFile(atPath: diskFilePath.path),
+                       "No disk file should be created while path is poisoned")
+
+        // Recover: remove the poison so subsequent flush can succeed.
+        try FileManager.default.removeItem(at: tempDir)
+
+        // Next successful flush should persist all 5 events (3 memory + 2 pending overflow).
+        let flushed = await queue.flushMemoryToDisk()
+        XCTAssertTrue(flushed)
+
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
+        XCTAssertEqual(snapshot?.events.map(\.messageId), ["e1", "e2", "e3", "e4", "e5"],
+                       "No events should be lost across failure + recovery")
+    }
+
+    func testPendingOverflowRetainedAcrossRepeatedFailures() async throws {
+        try poisonDiskPath()
+        let queue = makeQueue(maxEventCount: 2)
+
+        // memory cap 2 + 4 overflow events = 6 total, all must survive
+        for i in 1...6 {
+            await queue.enqueue(makeTestEvent(messageId: "e\(i)"))
+        }
+
+        try FileManager.default.removeItem(at: tempDir)
+        _ = await queue.flushMemoryToDisk()
+
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
+        XCTAssertEqual(snapshot?.events.count, 6)
     }
 
     // MARK: - Byte cap enforcement on enqueue

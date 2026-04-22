@@ -48,7 +48,7 @@ public actor DiskStorage {
     /// Uses atomic write to prevent partial-file corruption.
     public func write(_ snapshot: QueueSnapshot) throws {
         guard !snapshot.events.isEmpty else {
-            delete()
+            try delete()
             return
         }
 
@@ -64,12 +64,13 @@ public actor DiskStorage {
     /// Returns the final on-disk event count.
     @discardableResult
     public func append(_ events: [EnrichedEventPayload], maxEvents: Int) throws -> Int {
+        // Corrupt reads self-heal via delete-and-throw in read(); treat as empty.
+        let existing = (try? read())?.events ?? []
+
         guard !events.isEmpty else {
-            let existing = read()?.events.count ?? 0
-            return existing
+            return existing.count
         }
 
-        let existing = read()?.events ?? []
         var combined = existing + events
         if maxEvents > 0 && combined.count > maxEvents {
             let dropCount = combined.count - maxEvents
@@ -85,9 +86,10 @@ public actor DiskStorage {
         return combined.count
     }
 
-    /// Read the snapshot from disk. Returns nil if no file exists.
-    /// Corrupt or unparseable files are deleted, logged as a warning, and return nil.
-    public func read() -> QueueSnapshot? {
+    /// Read the snapshot from disk.
+    /// Returns nil only when the file does not exist. I/O and decode failures throw.
+    /// Corrupt files are deleted before rethrowing so the next read starts clean.
+    public func read() throws -> QueueSnapshot? {
         let fm = FileManager.default
         guard fm.fileExists(atPath: filePath.path) else {
             return nil
@@ -99,15 +101,17 @@ public actor DiskStorage {
             Logger.log("Queue snapshot read from disk: \(snapshot.events.count) events, \(data.count) bytes")
             return snapshot
         } catch {
-            Logger.warn("Queue snapshot file is corrupt or unparseable: \(error). Deleting file.")
-            delete()
-            return nil
+            Logger.warn("Queue snapshot read failed: \(error). Deleting file.")
+            try? FileManager.default.removeItem(at: filePath)
+            throw error
         }
     }
 
-    /// Delete the snapshot file if it exists.
-    public func delete() {
-        try? FileManager.default.removeItem(at: filePath)
+    /// Delete the snapshot file. No-op if the file is already absent; throws on real I/O failure.
+    public func delete() throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: filePath.path) else { return }
+        try fm.removeItem(at: filePath)
         Logger.log("Queue snapshot deleted from disk")
     }
 

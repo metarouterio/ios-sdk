@@ -411,7 +411,7 @@ final class DispatcherTests: XCTestCase {
         XCTAssertEqual(remaining, 0, "All events should drain after batch size recovery")
     }
 
-    func testFlushToDiskDelegatesToQueue() async {
+    func testFlushToDiskDelegatesToQueue() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("DispatcherDiskTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -432,7 +432,7 @@ final class DispatcherTests: XCTestCase {
         await dispatcher.flushToDisk()
 
         let diskStore = DiskStorage(baseDirectory: tempDir)
-        let snapshot = await diskStore.read()
+        let snapshot = try await diskStore.read()
         XCTAssertEqual(snapshot?.events.count, 1)
         XCTAssertEqual(snapshot?.events[0].messageId, "disk-test")
     }
@@ -1294,7 +1294,7 @@ private final class CheckpointInspectingNetworking: Networking, @unchecked Senda
             return _callCount
         }
         if count == inspectAtCall {
-            let snapshot = await DiskStorage(baseDirectory: diskDir).read()
+            let snapshot = try? await DiskStorage(baseDirectory: diskDir).read()
             capturedAtInspection = snapshot?.events.count ?? 0
         }
         return NetworkResponse(statusCode: 200, headers: [:], body: Data())
