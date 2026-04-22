@@ -40,6 +40,13 @@ public actor PersistentEventQueue {
     /// Initialized via `checkForPersistedEvents()` on boot, updated by disk writes/deletes.
     private var _hasDiskData: Bool = false
 
+    /// Events that arrived while memory was at capacity AND the capacity-triggered
+    /// disk flush failed. They are held in process memory until the next successful
+    /// disk write absorbs them, so a transient disk failure does not cost us events.
+    /// Capped at `maxEventCount` — if the overflow itself exceeds the cap, the oldest
+    /// pending entries are dropped (same ring-buffer semantics as memory).
+    private var pendingOverflow: [EnrichedEventPayload] = []
+
     public var hasDiskData: Bool { _hasDiskData }
 
     public init(
@@ -74,15 +81,45 @@ public actor PersistentEventQueue {
         return exists
     }
 
+    /// Delete the disk store without taking the lock. Caller MUST hold `diskLock`.
+    /// Used by the drain's fatal-config path (already holds the lock) and by the
+    /// public `clear()` / `deleteDiskStore()` which acquire it themselves.
+    private func deleteDiskStoreLocked() async {
+        do {
+            try await diskStore.delete()
+        } catch {
+            Logger.warn("Failed to delete disk store: \(error)")
+        }
+        _hasDiskData = false
+    }
+
     /// Enqueue an event to the in-memory buffer.
     /// When the queue is at capacity (by count OR byte size), the entire memory queue is flushed
-    /// to disk first. Returns the queue count after insertion.
+    /// to disk first. If that flush fails AND persistence is enabled, the incoming event is held
+    /// in a pending-overflow buffer instead of evicting an older event — parity with the RN SDK's
+    /// "owned in JS memory until native write succeeds" contract.
+    /// Returns the memory queue count after insertion.
     @discardableResult
     public func enqueue(_ event: EnrichedEventPayload) async -> Int {
         let currentCount = await memoryQueue.count
         let eventSize = Self.estimateEventSize(event)
         if currentCount >= maxEventCount || estimatedBytes + eventSize > maxSizeBytes {
             await flushMemoryToDisk()
+        }
+
+        // Disk flush failed (memory still at cap) and persistence is enabled:
+        // park in pending-overflow rather than dropping the oldest via the ring buffer.
+        // Cap overflow at maxDiskEvents — these events are headed for disk, so they
+        // shouldn't exceed the disk's capacity even if disk writes stay unavailable.
+        let postFlushCount = await memoryQueue.count
+        if maxDiskEvents > 0 && postFlushCount >= maxEventCount {
+            pendingOverflow.append(event)
+            if pendingOverflow.count > maxDiskEvents {
+                let drop = pendingOverflow.count - maxDiskEvents
+                pendingOverflow.removeFirst(drop)
+                Logger.warn("Pending overflow cap reached — dropped \(drop) oldest")
+            }
+            return postFlushCount
         }
 
         let prevCount = await memoryQueue.count
@@ -126,11 +163,15 @@ public actor PersistentEventQueue {
         }
     }
 
-    /// Clear all events from memory AND delete the disk store.
+    /// Clear all events from memory, pending-overflow, AND delete the disk store.
+    /// Serialized against in-flight drains/flushes via the disk lock.
     public func clear() async {
         await memoryQueue.clear()
         estimatedBytes = 0
-        await deleteDiskStore()
+        pendingOverflow.removeAll(keepingCapacity: false)
+        await diskLock.lock()
+        await deleteDiskStoreLocked()
+        await diskLock.unlock()
     }
 
     /// Current number of events in memory.
@@ -139,8 +180,10 @@ public actor PersistentEventQueue {
     }
 
     /// Returns true if the memory buffer has reached the flush-to-disk threshold.
+    /// Also true whenever pending-overflow is non-empty, so a retry flush is attempted.
     public var needsFlushToDisk: Bool {
         get async {
+            if !pendingOverflow.isEmpty { return true }
             let eventCount = await memoryQueue.count
             if eventCount >= flushThresholdCount {
                 return true
@@ -180,7 +223,13 @@ public actor PersistentEventQueue {
     /// Events older than `eventTTL` (7 days) are filtered out before returning.
     /// Returns the live events that were on disk (possibly empty).
     public func readAllFromDiskAndDelete() async -> [EnrichedEventPayload] {
-        let snapshot = await diskStore.read()
+        let snapshot: QueueSnapshot?
+        do {
+            snapshot = try await diskStore.read()
+        } catch {
+            Logger.warn("Disk read failed during drain: \(error) — treating as empty")
+            snapshot = nil
+        }
         let allEvents = snapshot?.events ?? []
         let events = Self.filterExpired(allEvents)
         let dropped = allEvents.count - events.count
@@ -188,11 +237,11 @@ public actor PersistentEventQueue {
             Logger.log("Drain TTL filter dropped \(dropped) event(s) older than 7 days")
         }
         if !allEvents.isEmpty {
-            await diskStore.delete()
+            try? await diskStore.delete()
             _hasDiskData = false
         } else if _hasDiskData {
             // File was missing or empty — flag was stale
-            await diskStore.delete()
+            try? await diskStore.delete()
             _hasDiskData = false
         }
         return events
@@ -205,8 +254,7 @@ public actor PersistentEventQueue {
     public func writeDiskStore(_ events: [EnrichedEventPayload]) async {
         guard maxDiskEvents > 0 else { return }
         guard !events.isEmpty else {
-            await diskStore.delete()
-            _hasDiskData = false
+            await deleteDiskStoreLocked()
             return
         }
         do {
@@ -218,36 +266,56 @@ public actor PersistentEventQueue {
     }
 
     /// Delete the disk store entirely and clear the `hasDiskData` flag.
+    /// Serialized against in-flight drains/flushes via the disk lock.
     public func deleteDiskStore() async {
-        await diskStore.delete()
-        _hasDiskData = false
+        await diskLock.lock()
+        await deleteDiskStoreLocked()
+        await diskLock.unlock()
+    }
+
+    /// Delete the disk store without acquiring the lock. Caller MUST hold the lock.
+    /// Used by the drain's fatal-config path, which already holds `diskLock`.
+    public func deleteDiskStoreHoldingLock() async {
+        await deleteDiskStoreLocked()
     }
 
     /// Read a batch from disk without deleting it. Used by tests and callers that
     /// need to peek at disk contents without the full drain protocol.
     public func readDiskBatch(max count: Int) async -> [EnrichedEventPayload] {
-        guard let snapshot = await diskStore.read() else { return [] }
-        let events = snapshot.events
-        guard !events.isEmpty else { return [] }
-        return Array(events.prefix(min(count, events.count)))
+        let snapshot: QueueSnapshot?
+        do {
+            snapshot = try await diskStore.read()
+        } catch {
+            Logger.warn("Disk read failed in readDiskBatch: \(error)")
+            return []
+        }
+        guard let snapshot, !snapshot.events.isEmpty else { return [] }
+        return Array(snapshot.events.prefix(min(count, snapshot.events.count)))
     }
 
     /// Internal flush — no lock, caller must hold `diskLock` (or be `flushMemoryToDisk`).
+    /// Flushes memory-queue events AND any pending-overflow events in one disk write.
+    /// On failure, memory is restored and pending-overflow is left intact so the next
+    /// successful flush catches them up.
     private func flushMemoryToDiskInternal() async -> Bool {
-        let events = await memoryQueue.drain(max: Int.max)
+        let memoryEvents = await memoryQueue.drain(max: Int.max)
+        let overflowEvents = pendingOverflow
+        let events = memoryEvents + overflowEvents
         guard !events.isEmpty else { return false }
         estimatedBytes = 0
 
         do {
             let total = try await diskStore.append(events, maxEvents: maxDiskEvents)
             _hasDiskData = total > 0
+            pendingOverflow.removeAll(keepingCapacity: false)
             Logger.log("Memory queue flushed to disk: \(events.count) events, \(total) total on disk")
             return true
         } catch {
             Logger.warn("Failed to flush memory queue to disk: \(error)")
-            // Re-enqueue events that failed to persist so they aren't lost
-            await memoryQueue.requeueToFront(events)
-            for event in events {
+            // Restore memory so events aren't lost; leave pending-overflow untouched
+            // so it will be re-attempted on the next flush.
+            await memoryQueue.requeueToFront(memoryEvents)
+            for event in memoryEvents {
                 estimatedBytes += Self.estimateEventSize(event)
             }
             return false

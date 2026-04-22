@@ -20,7 +20,7 @@ final class DiskStorageTests: XCTestCase {
         let snapshot = QueueSnapshot(events: events)
 
         try await storage.write(snapshot)
-        let loaded = await storage.read()
+        let loaded = try await storage.read()
 
         XCTAssertNotNil(loaded)
         XCTAssertEqual(loaded?.events.count, 1)
@@ -28,7 +28,7 @@ final class DiskStorageTests: XCTestCase {
     }
 
     func testReadReturnsNilWhenNoFile() async throws {
-        let loaded = await storage.read()
+        let loaded = try await storage.read()
         XCTAssertNil(loaded)
     }
 
@@ -36,9 +36,9 @@ final class DiskStorageTests: XCTestCase {
         let snapshot = QueueSnapshot(events: [makeTestEvent()])
         try await storage.write(snapshot)
 
-        await storage.delete()
+        try await storage.delete()
 
-        let loaded = await storage.read()
+        let loaded = try await storage.read()
         XCTAssertNil(loaded)
     }
 
@@ -49,7 +49,7 @@ final class DiskStorageTests: XCTestCase {
         let second = QueueSnapshot(events: [makeTestEvent(messageId: "second")])
         try await storage.write(second)
 
-        let loaded = await storage.read()
+        let loaded = try await storage.read()
         XCTAssertEqual(loaded?.events.count, 1)
         XCTAssertEqual(loaded?.events[0].messageId, "second")
     }
@@ -75,13 +75,13 @@ final class DiskStorageTests: XCTestCase {
 
         // Write first, then verify a concurrent read returns complete data
         try await localStorage.write(snapshot)
-        let loaded = await localStorage.read()
+        let loaded = try await localStorage.read()
 
         XCTAssertNotNil(loaded)
         XCTAssertEqual(loaded?.events.count, 100)
     }
 
-    func testCorruptFileIsDeletedOnRead() async throws {
+    func testCorruptFileThrowsAndIsDeleted() async throws {
         let fm = FileManager.default
         try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let filePath = tempDir.appendingPathComponent("queue.v1.json")
@@ -89,9 +89,24 @@ final class DiskStorageTests: XCTestCase {
 
         XCTAssertTrue(fm.fileExists(atPath: filePath.path), "Corrupt file should exist before read")
 
-        let loaded = await storage.read()
-        XCTAssertNil(loaded, "Corrupt file should return nil")
-        XCTAssertFalse(fm.fileExists(atPath: filePath.path), "Corrupt file must be deleted after failed read")
+        do {
+            _ = try await storage.read()
+            XCTFail("Expected corrupt read to throw")
+        } catch {
+            // expected
+        }
+        XCTAssertFalse(fm.fileExists(atPath: filePath.path), "Corrupt file must still be deleted after failed read")
+    }
+
+    func testReadReturnsNilOnlyWhenAbsent() async throws {
+        // Missing file → nil, no throw
+        let loaded = try await storage.read()
+        XCTAssertNil(loaded)
+    }
+
+    func testDeleteIsNoOpWhenAbsent() async throws {
+        // No file exists yet — delete should not throw
+        try await storage.delete()
     }
 
     func testUnknownVersionFileReturnsEmptyEvents() async throws {
@@ -103,7 +118,7 @@ final class DiskStorageTests: XCTestCase {
         """
         try Data(json.utf8).write(to: filePath)
 
-        let loaded = await storage.read()
+        let loaded = try await storage.read()
 
         // QueueSnapshot handles unknown version gracefully with empty events
         XCTAssertNotNil(loaded)

@@ -350,7 +350,7 @@ public actor Dispatcher {
 
             case .fatalConfig:
                 Logger.error("Disk drain fatal config error (\(resp.statusCode)) — deleting disk store")
-                await queue.deleteDiskStore()
+                await queue.deleteDiskStoreHoldingLock()
                 onFatalConfigError?(resp.statusCode)
                 return
 
