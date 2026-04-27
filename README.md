@@ -603,7 +603,7 @@ When `trackLifecycleEvents` is enabled (default `false` — opt-in), the SDK aut
 | Event | Fires when | Properties |
 | ----- | ---------- | ---------- |
 | `Application Installed` | First launch on a device — no prior identity, no prior `(version, build)` persisted | `version`, `build` |
-| `Application Updated`   | App `(version, build)` changed since last launch, **or** lifecycle tracking is being enabled for the first time on an existing user (no install spike for the upgraded population) | `version`, `build`, `previous_version`, `previous_build` |
+| `Application Updated`   | App `(version, build)` changed since last launch, **or** lifecycle tracking is being enabled for the first time on an existing user (no install spike for the upgraded population) | `version`, `build`, `previous_version`, `previous_build`. **Note:** for the upgrade-from-pre-lifecycle case, `previous_version` and `previous_build` are emitted as the literal string `"unknown"` since the SDK had no prior persisted values. |
 | `Application Opened`    | After cold launch (process foregrounded) and on every `background → active` resume | `from_background` (Bool), `version`, `build`, optional `url`, optional `referring_application` |
 | `Application Backgrounded` | App enters background. Emitted **before** the dispatcher's flush-to-disk so the event is captured in the same drain | _(none)_ |
 
@@ -622,7 +622,7 @@ Only `background → active` transitions emit `Application Opened`. Brief `inact
 
 ### Enabling
 
-Lifecycle tracking is **opt-in** — set `trackLifecycleEvents: true` in `InitOptions` to turn it on. When disabled (the default), no lifecycle events are emitted and `openURL` is a no-op (logs a debug warning the first time it's called).
+Lifecycle tracking is **opt-in** — set `trackLifecycleEvents: true` in `InitOptions` to turn it on. When disabled (the default), no lifecycle events are emitted; calls to `openURL` are silent no-ops for event emission but log a debug warning so misconfiguration ("I'm calling `openURL` but no events fire!") is diagnosable from logs.
 
 ```swift
 let options = InitOptions(
@@ -640,7 +640,7 @@ Forward inbound deep-link URLs to the SDK so the next `Application Opened` event
 
 ```swift
 import UIKit
-import MetaRouterSwiftSDK
+import MetaRouter
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
@@ -650,7 +650,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
 
         if let urlContext = connectionOptions.urlContexts.first {
-            MetaRouter.Analytics.shared.openURL(
+            MetaRouter.Analytics.client().openURL(
                 urlContext.url,
                 sourceApplication: urlContext.options.sourceApplication
             )
@@ -660,7 +660,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     // Resume deep link arrives here on background → active
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         guard let urlContext = URLContexts.first else { return }
-        MetaRouter.Analytics.shared.openURL(
+        MetaRouter.Analytics.client().openURL(
             urlContext.url,
             sourceApplication: urlContext.options.sourceApplication
         )
@@ -670,17 +670,32 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
 **`UIApplicationDelegate` (legacy, single-scene apps):**
 
+For apps that launch on a deep link in the legacy single-scene model, the URL is delivered through `launchOptions` in `application(_:didFinishLaunchingWithOptions:)`, **not** through `application(_:open:options:)`. Forward both:
+
 ```swift
 import UIKit
-import MetaRouterSwiftSDK
+import MetaRouter
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
 
+    // Cold-launch deep link arrives here via launchOptions
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        if let url = launchOptions?[.url] as? URL {
+            MetaRouter.Analytics.client().openURL(
+                url,
+                sourceApplication: launchOptions?[.sourceApplication] as? String
+            )
+        }
+        return true
+    }
+
+    // Resume deep link arrives here on background → active
     func application(_ app: UIApplication,
                      open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        MetaRouter.Analytics.shared.openURL(
+        MetaRouter.Analytics.client().openURL(
             url,
             sourceApplication: options[.sourceApplication] as? String
         )
@@ -689,13 +704,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 ```
 
-**Universal Links** are delivered through `NSUserActivity`, not the `openURL` callback. Pull the `webpageURL` out yourself and forward it the same way:
+**Universal Links** are delivered through `NSUserActivity`, not the `openURL` callback. Pull the `webpageURL` out yourself and forward it the same way. Universal Links carry no source-application identifier (they originate from Safari or another system handler), so always pass `sourceApplication: nil`.
 
 ```swift
 func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
     guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
           let url = userActivity.webpageURL else { return }
-    MetaRouter.Analytics.shared.openURL(url, sourceApplication: nil)
+    MetaRouter.Analytics.client().openURL(url, sourceApplication: nil)
 }
 ```
 
@@ -715,14 +730,17 @@ Deep-link URLs frequently carry sensitive data — auth tokens, password reset c
 
 ```swift
 func sanitized(_ url: URL) -> URL {
-    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-    components?.queryItems = components?.queryItems?.filter { item in
-        !["token", "code", "otp", "secret"].contains(item.name.lowercased())
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+        return url
     }
-    return components?.url ?? url
+    // Replace with your project's actual deny-list. This is illustrative.
+    let denied: Set<String> = ["token", "code", "otp", "secret",
+                               "access_token", "id_token", "auth", "key", "password"]
+    components.queryItems = components.queryItems?.filter { !denied.contains($0.name.lowercased()) }
+    return components.url ?? url
 }
 
-MetaRouter.Analytics.shared.openURL(
+MetaRouter.Analytics.client().openURL(
     sanitized(incomingURL),
     sourceApplication: nil
 )
