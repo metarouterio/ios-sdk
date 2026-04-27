@@ -7,6 +7,7 @@ public struct InitOptions: Sendable {
     public let debug: Bool
     public let maxQueueEvents: Int
     public let maxDiskEvents: Int
+    public let trackLifecycleEvents: Bool
 
     public init(
         writeKey: String,
@@ -14,7 +15,8 @@ public struct InitOptions: Sendable {
         flushIntervalSeconds: Int = 10,
         debug: Bool = false,
         maxQueueEvents: Int = 2000,
-        maxDiskEvents: Int = 10000
+        maxDiskEvents: Int = 10000,
+        trackLifecycleEvents: Bool = true
     ) {
         precondition(!writeKey.isEmpty, "writeKey must not be empty")
 
@@ -30,6 +32,7 @@ public struct InitOptions: Sendable {
         self.debug = debug
         self.maxQueueEvents = max(1, maxQueueEvents)
         self.maxDiskEvents = maxDiskEvents
+        self.trackLifecycleEvents = trackLifecycleEvents
 
         if self.maxDiskEvents > 0 && self.maxDiskEvents < self.maxQueueEvents {
             Logger.warn("maxDiskEvents (\(self.maxDiskEvents)) is less than maxQueueEvents (\(self.maxQueueEvents)) — memory can hold more events than disk can preserve; events may be dropped during background flush")
@@ -44,7 +47,8 @@ extension InitOptions {
         flushIntervalSeconds: Int = 10,
         debug: Bool = false,
         maxQueueEvents: Int = 2000,
-        maxDiskEvents: Int = 10000
+        maxDiskEvents: Int = 10000,
+        trackLifecycleEvents: Bool = true
     ) {
         var host = ingestionHost.trimmingCharacters(in: .whitespacesAndNewlines)
         if host.hasSuffix("/") {
@@ -59,7 +63,8 @@ extension InitOptions {
             flushIntervalSeconds: flushIntervalSeconds,
             debug: debug,
             maxQueueEvents: maxQueueEvents,
-            maxDiskEvents: maxDiskEvents
+            maxDiskEvents: maxDiskEvents,
+            trackLifecycleEvents: trackLifecycleEvents
         )
     }
 }

@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 
 /// Injectable dependencies for testing. All fields optional — defaults to production implementations.
 internal struct AnalyticsDependencies: Sendable {
@@ -12,6 +16,14 @@ internal struct AnalyticsDependencies: Sendable {
     var dispatcher: Dispatcher?
     var persistentQueue: PersistentEventQueue?
     var networkMonitor: NetworkReachability?
+    var lifecycleEmitter: LifecycleEventEmitter?
+    var lifecycleStorage: LifecycleStorage?
+    var identityStorage: IdentityStorage?
+    var appVersionInfo: AppVersionInfo?
+    /// Override the initial app foreground state read at cold launch.
+    /// When nil, production code reads `UIApplication.shared.applicationState`
+    /// from the main actor; tests can pass `.active` / `.background` directly.
+    var initialAppState: AppForegroundState?
 
     static let production = AnalyticsDependencies()
 }
@@ -29,6 +41,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
     private var initTask: Task<Void, Never>?
+    private let lifecycleEmitter: LifecycleEventEmitter?
+    private let initialAppStateOverride: AppForegroundState?
 
     private init(options: InitOptions, deps: AnalyticsDependencies = .production) {
         self.lifecycleState = .initializing
@@ -59,6 +73,22 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             persistentQueue: persistentQueue,
             config: deps.dispatcherConfig ?? Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
+
+        // Build the lifecycle emitter only when the feature is enabled. Construction
+        // happens BEFORE identityManager.initialize() runs (in initTask), so the
+        // emitter's snapshot of "did identity exist before this launch?" is honest.
+        if options.trackLifecycleEvents {
+            self.lifecycleEmitter = deps.lifecycleEmitter ?? LifecycleEventEmitter(
+                enrichmentService: self.enrichmentService,
+                dispatcher: self.dispatcher,
+                storage: deps.lifecycleStorage ?? LifecycleStorage(),
+                identityStorage: deps.identityStorage ?? IdentityStorage(),
+                versionInfo: deps.appVersionInfo ?? .fromBundle()
+            )
+        } else {
+            self.lifecycleEmitter = nil
+        }
+        self.initialAppStateOverride = deps.initialAppState
 
         let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
         let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
@@ -91,10 +121,14 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                     guard let self else { return }
                     await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
                     await self.dispatcher.flush()
+                    await self.lifecycleEmitter?.emitForegroundFromBackground()
                 }
             },
             onBackgroundAsync: { [weak self] in
                 guard let self else { return }
+                // Emit Application Backgrounded BEFORE flush/disk-flush so the event
+                // is captured by the same drain that ships pending events to disk.
+                await self.lifecycleEmitter?.emitBackgrounded()
                 await self.dispatcher.flush()
                 await self.dispatcher.flushToDisk()
                 await self.dispatcher.stopFlushLoop()
@@ -146,11 +180,37 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                        writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
 
+            // Emit cold-launch lifecycle sequence (Installed/Updated then Opened).
+            // Runs after .ready so events flow through the standard track path.
+            if let emitter = self.lifecycleEmitter {
+                let initialState = await self.readInitialAppState()
+                await emitter.emitColdLaunchSequence(initialAppState: initialState)
+            }
+
             // Drain any persisted events from a previous session
             if monitor.currentStatus == .connected {
                 await self.dispatcher.drainDiskStoreToNetwork()
             }
         }
+    }
+
+    /// Reads the current process foreground state. On iOS, hops to `MainActor`
+    /// because `UIApplication.shared.applicationState` is main-actor isolated.
+    /// Tests can short-circuit by setting `AnalyticsDependencies.initialAppState`.
+    private func readInitialAppState() async -> AppForegroundState {
+        if let override = initialAppStateOverride { return override }
+        #if canImport(UIKit)
+        return await MainActor.run {
+            switch UIApplication.shared.applicationState {
+            case .active: return AppForegroundState.active
+            case .inactive: return .inactive
+            case .background: return .background
+            @unknown default: return .active
+            }
+        }
+        #else
+        return .active
+        #endif
     }
 
     internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {
@@ -475,6 +535,16 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task { [weak self] in
             guard let self else { return }
             await self.dispatcher.setTracing(enabled)
+        }
+    }
+
+    public func handleDeepLink(url: URL, sourceApplication: String?) {
+        guard let emitter = lifecycleEmitter else { return }
+        Task {
+            await emitter.handleDeepLink(
+                url: url.absoluteString,
+                sourceApplication: sourceApplication
+            )
         }
     }
 }
