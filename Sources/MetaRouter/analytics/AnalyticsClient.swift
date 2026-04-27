@@ -111,25 +111,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         }
 
         self.lifecycle = AppLifecycleObserver(
-            onForeground: { [weak self] in
-                guard let self, self.lifecycleState == .ready else { return }
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
-                    await self.dispatcher.flush()
-                    await self.lifecycleCoordinator?.onForeground()
-                }
-            },
-            onBackgroundAsync: { [weak self] in
-                guard let self else { return }
-                // Emit Application Backgrounded BEFORE flush/disk-flush so the event
-                // is captured by the same drain that ships pending events to disk.
-                await self.lifecycleCoordinator?.onBackground()
-                await self.dispatcher.flush()
-                await self.dispatcher.flushToDisk()
-                await self.dispatcher.stopFlushLoop()
-                await self.dispatcher.cancelScheduledRetry()
-            }
+            onForeground: { [weak self] in self?.handleForeground() },
+            onBackgroundAsync: { [weak self] in await self?.handleBackground() }
         )
         
         // Wire network monitor: set initial state and subscribe to changes
@@ -185,6 +168,26 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 await self.dispatcher.drainDiskStoreToNetwork()
             }
         }
+    }
+
+    private func handleForeground() {
+        guard lifecycleState == .ready else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
+            await self.dispatcher.flush()
+            await self.lifecycleCoordinator?.onForeground()
+        }
+    }
+
+    /// Emit `Application Backgrounded` BEFORE flush/disk-flush so the event
+    /// is captured by the same drain that ships pending events to disk.
+    private func handleBackground() async {
+        await lifecycleCoordinator?.onBackground()
+        await dispatcher.flush()
+        await dispatcher.flushToDisk()
+        await dispatcher.stopFlushLoop()
+        await dispatcher.cancelScheduledRetry()
     }
 
     internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {
