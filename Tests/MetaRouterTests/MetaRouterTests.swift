@@ -40,9 +40,9 @@ final class MetaRouterTests: XCTestCase {
     func testClientAndProxyAreConnected() {
         let options = InitOptions(writeKey: "test-key", ingestionHost: "https://test.com")
         
-        let initialProxy = MetaRouter.Analytics.client()
+        let initialProxy = MetaRouter.Analytics.shared
         let afterInit = MetaRouter.Analytics.initialize(with: options)
-        let againProxy = MetaRouter.Analytics.client()
+        let againProxy = MetaRouter.Analytics.shared
         
         XCTAssertTrue(initialProxy === afterInit, "Initialize should return same proxy")
         XCTAssertTrue(afterInit === againProxy, "Client should return same proxy")
