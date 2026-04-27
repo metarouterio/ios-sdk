@@ -42,8 +42,11 @@ public struct LifecycleStorage: @unchecked Sendable {
         setBuild(build)
     }
 
-    /// Removes the persisted version and build. Intended for tests.
-    public func clear() {
+    /// Removes the persisted version and build. Test-only seam — production code
+    /// must never call this. The whole point of the `metarouter:lifecycle:*`
+    /// namespace separation is that nothing — not even `reset()` — can wipe
+    /// install/update state.
+    internal func clear() {
         userDefaults.removeObject(forKey: LifecycleStorageKey.version.rawValue)
         userDefaults.removeObject(forKey: LifecycleStorageKey.build.rawValue)
     }
