@@ -253,9 +253,9 @@ final class LifecycleEventEmitterTests: XCTestCase {
 
     // MARK: - deep-link buffer
 
-    func testHandleDeepLinkAttachesUrlAndReferringApplicationToNextOpened() async {
+    func testOpenURLAttachesUrlAndReferringApplicationToNextOpened() async {
         let emitter = makeEmitter()
-        await emitter.handleDeepLink(
+        await emitter.openURL(
             url: "myapp://product/42",
             sourceApplication: "com.example.referrer"
         )
@@ -271,11 +271,11 @@ final class LifecycleEventEmitterTests: XCTestCase {
 
     func testDeepLinkBufferIsOneShot() async {
         let emitter = makeEmitter()
-        await emitter.handleDeepLink(url: "myapp://x", sourceApplication: nil)
+        await emitter.openURL(url: "myapp://x", sourceApplication: nil)
         await emitter.emitColdLaunchSequence(initialAppState: .active)
         _ = await drain()
 
-        // Second Opened (background→active) without a new handleDeepLink should not
+        // Second Opened (background→active) without a new openURL should not
         // carry buffered URL.
         await emitter.emitBackgrounded()
         await emitter.emitForegroundFromBackground()
@@ -287,9 +287,9 @@ final class LifecycleEventEmitterTests: XCTestCase {
         XCTAssertNil(opened.properties?["referring_application"])
     }
 
-    func testHandleDeepLinkWithoutSourceOmitsReferringApplication() async {
+    func testOpenURLWithoutSourceOmitsReferringApplication() async {
         let emitter = makeEmitter()
-        await emitter.handleDeepLink(url: "myapp://x", sourceApplication: nil)
+        await emitter.openURL(url: "myapp://x", sourceApplication: nil)
         await emitter.emitColdLaunchSequence(initialAppState: .active)
 
         let events = await drain()

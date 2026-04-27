@@ -188,7 +188,7 @@ internal actor LifecycleEventEmitter {
 
     /// Buffers a deep-link URL (and optional source application) to be attached
     /// to the next `Application Opened` event. One-shot — cleared on emit.
-    func handleDeepLink(url: String, sourceApplication: String?) {
+    func openURL(url: String, sourceApplication: String?) {
         pendingDeepLink = PendingDeepLink(url: url, source: sourceApplication)
     }
 

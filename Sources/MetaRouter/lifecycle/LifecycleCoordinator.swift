@@ -33,8 +33,8 @@ internal final class LifecycleCoordinator: @unchecked Sendable {
         await emitter.emitColdLaunchSequence(initialAppState: initialState)
     }
 
-    func handleDeepLink(url: URL, sourceApplication: String?) async {
-        await emitter.handleDeepLink(
+    func openURL(_ url: URL, sourceApplication: String?) async {
+        await emitter.openURL(
             url: url.absoluteString,
             sourceApplication: sourceApplication
         )

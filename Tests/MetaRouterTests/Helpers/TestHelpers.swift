@@ -156,8 +156,8 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.setTracing(enabled: enabled))
     }
 
-    func handleDeepLink(url: URL, sourceApplication: String?) {
-        recordCall(.handleDeepLink(url: url, sourceApplication: sourceApplication))
+    func openURL(_ url: URL, sourceApplication: String?) {
+        recordCall(.openURL(url: url, sourceApplication: sourceApplication))
     }
 }
 
@@ -179,7 +179,7 @@ enum AnalyticsCall: Equatable {
     case setAdvertisingId(advertisingId: String?)
     case clearAdvertisingId
     case setTracing(enabled: Bool)
-    case handleDeepLink(url: URL, sourceApplication: String?)
+    case openURL(url: URL, sourceApplication: String?)
 }
 
 // CodableValue Test Extensions

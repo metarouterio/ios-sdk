@@ -230,7 +230,7 @@ The analytics client provides the following methods:
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
 - `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
-- `handleDeepLink(url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. See [Lifecycle Events](#lifecycle-events) for wiring
+- `openURL(_ url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. Mirrors UIKit's `application(_:open:options:)` shape. See [Lifecycle Events](#lifecycle-events) for wiring
 
 ### Testing APIs
 
@@ -622,7 +622,7 @@ Only `background → active` transitions emit `Application Opened`. Brief `inact
 
 ### Disabling
 
-Set `trackLifecycleEvents: false` in `InitOptions` to opt out entirely. No lifecycle events will be emitted, and `handleDeepLink` becomes a no-op.
+Set `trackLifecycleEvents: false` in `InitOptions` to opt out entirely. No lifecycle events will be emitted, and `openURL` becomes a no-op (logs a debug warning the first time it's called).
 
 ```swift
 let options = InitOptions(
@@ -650,8 +650,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
 
         if let urlContext = connectionOptions.urlContexts.first {
-            MetaRouter.Analytics.shared.handleDeepLink(
-                url: urlContext.url,
+            MetaRouter.Analytics.shared.openURL(
+                urlContext.url,
                 sourceApplication: urlContext.options.sourceApplication
             )
         }
@@ -660,8 +660,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     // Resume deep link arrives here on background → active
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         guard let urlContext = URLContexts.first else { return }
-        MetaRouter.Analytics.shared.handleDeepLink(
-            url: urlContext.url,
+        MetaRouter.Analytics.shared.openURL(
+            urlContext.url,
             sourceApplication: urlContext.options.sourceApplication
         )
     }
@@ -680,8 +680,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ app: UIApplication,
                      open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        MetaRouter.Analytics.shared.handleDeepLink(
-            url: url,
+        MetaRouter.Analytics.shared.openURL(
+            url,
             sourceApplication: options[.sourceApplication] as? String
         )
         return true
@@ -689,23 +689,23 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 ```
 
-**Universal Links** are delivered through `NSUserActivity`, not `openURL`. Pull the `webpageURL` out yourself and forward it the same way:
+**Universal Links** are delivered through `NSUserActivity`, not the `openURL` callback. Pull the `webpageURL` out yourself and forward it the same way:
 
 ```swift
 func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
     guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
           let url = userActivity.webpageURL else { return }
-    MetaRouter.Analytics.shared.handleDeepLink(url: url, sourceApplication: nil)
+    MetaRouter.Analytics.shared.openURL(url, sourceApplication: nil)
 }
 ```
 
 #### Buffer Semantics
 
-`handleDeepLink` stores **one** URL until the next `Application Opened` emits. Practical implications:
+`openURL` stores **one** URL until the next `Application Opened` emits. Practical implications:
 
 - **Calling twice before an Opened**: only the most recent URL is attached. No queue.
 - **Calling without an Opened ever firing**: the URL sits in the buffer until the next Opened, whenever that is.
-- **After emit**: the buffer is cleared. Subsequent Opened events get no URL unless `handleDeepLink` is called again.
+- **After emit**: the buffer is cleared. Subsequent Opened events get no URL unless `openURL` is called again.
 
 This shape matches how iOS delivers URLs — at one moment, correlated with one Opened.
 
@@ -722,8 +722,8 @@ func sanitized(_ url: URL) -> URL {
     return components?.url ?? url
 }
 
-MetaRouter.Analytics.shared.handleDeepLink(
-    url: sanitized(incomingURL),
+MetaRouter.Analytics.shared.openURL(
+    sanitized(incomingURL),
     sourceApplication: nil
 )
 ```

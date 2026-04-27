@@ -512,10 +512,13 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         }
     }
 
-    public func handleDeepLink(url: URL, sourceApplication: String?) {
-        guard let coordinator = lifecycleCoordinator else { return }
+    public func openURL(_ url: URL, sourceApplication: String?) {
+        guard let coordinator = lifecycleCoordinator else {
+            Logger.warn("openURL called but trackLifecycleEvents is disabled — ignoring")
+            return
+        }
         Task {
-            await coordinator.handleDeepLink(url: url, sourceApplication: sourceApplication)
+            await coordinator.openURL(url, sourceApplication: sourceApplication)
         }
     }
 }

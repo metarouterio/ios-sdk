@@ -26,11 +26,12 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     func clearAdvertisingId()
     func setTracing(_ enabled: Bool)
 
-    /// Buffers a deep-link URL to be attached to the next `Application Opened`
-    /// event as the `url` (and optionally `referring_application`) property.
-    /// Call from `application(_:open:options:)` or `scene(_:openURLContexts:)`,
-    /// and from `application(_:didFinishLaunchingWithOptions:)` for cold-launch
-    /// deep-link capture using `launchOptions[.url]` / `[.sourceApplication]`.
-    /// Buffered values are one-shot — cleared after the next emit.
-    func handleDeepLink(url: URL, sourceApplication: String?)
+    /// Tells the SDK the app is opening with this URL. Buffers the URL to be
+    /// attached to the next `Application Opened` event as the `url` (and
+    /// optionally `referring_application`) property. Call from
+    /// `application(_:open:options:)` or `scene(_:openURLContexts:)`, and from
+    /// `application(_:didFinishLaunchingWithOptions:)` for cold-launch capture
+    /// using `launchOptions[.url]` / `[.sourceApplication]`. One-shot — cleared
+    /// after the next emit.
+    func openURL(_ url: URL, sourceApplication: String?)
 }
