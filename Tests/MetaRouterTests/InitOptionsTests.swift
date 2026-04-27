@@ -80,6 +80,38 @@ final class InitOptionsTests: XCTestCase {
         XCTAssertFalse(output.contains("less than"),
                        "equal values are not an inversion")
     }
+
+    func testTrackLifecycleEventsDefaultsToFalse() {
+        let urlOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: URL(string: "https://example.com")!
+        )
+        XCTAssertFalse(urlOptions.trackLifecycleEvents,
+                       "trackLifecycleEvents should default to false (URL initializer) — opt-in feature")
+
+        let stringOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: "https://example.com"
+        )
+        XCTAssertFalse(stringOptions.trackLifecycleEvents,
+                       "trackLifecycleEvents should default to false (String initializer) — opt-in feature")
+    }
+
+    func testTrackLifecycleEventsCanBeEnabled() {
+        let urlOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: URL(string: "https://example.com")!,
+            trackLifecycleEvents: true
+        )
+        XCTAssertTrue(urlOptions.trackLifecycleEvents)
+
+        let stringOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: "https://example.com",
+            trackLifecycleEvents: true
+        )
+        XCTAssertTrue(stringOptions.trackLifecycleEvents)
+    }
 }
 
 /// Captures both stdout and stderr during `block`. Used to assert on Logger.warn output.
