@@ -82,6 +82,31 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         XCTAssertEqual(after.first?.event, "user_event")
     }
 
+    /// Calling `openURL` while `trackLifecycleEvents == false` is a silent no-op
+    /// for event emission, but logs a debug warning so misconfiguration ("I'm
+    /// calling openURL but no events fire!") is diagnosable from logs.
+    func testOpenURLWithFeatureDisabledLogsWarning() async {
+        Logger.setDebugLogging(true)
+        defer { Logger.setDebugLogging(false) }
+
+        let bundle = Setup(defaults: defaults, trackLifecycleEvents: false)
+        await bundle.waitForInit()
+        await bundle.consumeAll()
+
+        let output = await captureStderrAndStdout(settle: 0.1) {
+            bundle.client.openURL(URL(string: "myapp://x")!, sourceApplication: nil)
+        }
+
+        XCTAssertTrue(output.contains("openURL called but trackLifecycleEvents is disabled"),
+                      "Expected disabled-flag warning, got: \(output)")
+
+        // Sanity: still no event emitted.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let events = await bundle.collectEvents()
+        XCTAssertTrue(events.isEmpty,
+                      "openURL with feature disabled must not emit any event")
+    }
+
     /// `reset()` must NOT clear lifecycle storage — install/update state survives
     /// because lifecycle keys live in a separate UserDefaults namespace.
     func testResetPreservesLifecycleStorage() async {
@@ -161,6 +186,11 @@ private final class Setup {
     let queue: PersistentEventQueue
     let lifecycleStorage: LifecycleStorage
     let recorder: RecordingNetworking
+    let tempDir: URL
+
+    deinit {
+        try? FileManager.default.removeItem(at: tempDir)
+    }
 
     init(defaults: UserDefaults, trackLifecycleEvents: Bool) {
         let options = InitOptions(
@@ -170,7 +200,7 @@ private final class Setup {
             trackLifecycleEvents: trackLifecycleEvents
         )
 
-        let tempDir = FileManager.default.temporaryDirectory
+        self.tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("metarouter-integration-\(UUID().uuidString)")
         let diskStore = DiskStorage(baseDirectory: tempDir)
         self.queue = PersistentEventQueue(diskStore: diskStore, maxEventCount: 1000)

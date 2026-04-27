@@ -113,29 +113,3 @@ final class InitOptionsTests: XCTestCase {
         XCTAssertTrue(stringOptions.trackLifecycleEvents)
     }
 }
-
-/// Captures both stdout and stderr during `block`. Used to assert on Logger.warn output.
-/// Order matters: restore the original fds before reading so the pipe writer reaches EOF.
-private func captureStderrAndStdout(_ block: () -> Void) -> String {
-    let pipe = Pipe()
-    let origOut = dup(fileno(stdout))
-    let origErr = dup(fileno(stderr))
-    setvbuf(stdout, nil, _IONBF, 0)
-    setvbuf(stderr, nil, _IONBF, 0)
-    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stdout))
-    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stderr))
-
-    block()
-
-    // Restore stdout/stderr FIRST so no more writers reference the pipe
-    dup2(origOut, fileno(stdout))
-    dup2(origErr, fileno(stderr))
-    close(origOut)
-    close(origErr)
-    // Now safe to close the writer and read until EOF
-    pipe.fileHandleForWriting.closeFile()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    return String(data: data, encoding: .utf8) ?? ""
-}
-
-
