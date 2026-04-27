@@ -259,7 +259,7 @@ await MetaRouter.Analytics.resetAndWait()
 - 💿 **Disk-Backed Queue**: Events survive app termination and are rehydrated on next launch
 - 🔌 **Circuit Breaker**: Intelligent retry logic with exponential backoff
 - ⚡ **Batching**: Automatic event batching for network efficiency
-- 📲 **Lifecycle Events**: Automatic `Application Installed` / `Updated` / `Opened` / `Backgrounded` tracking with opt-in deep-link attribution
+- 📲 **Lifecycle Events** (opt-in): Automatic `Application Installed` / `Updated` / `Opened` / `Backgrounded` tracking with deep-link attribution support
 
 ## ✅ Compatibility
 
@@ -596,7 +596,7 @@ The SDK automatically handles app lifecycle events:
 
 ## Lifecycle Events
 
-When `trackLifecycleEvents` is enabled (default `true`), the SDK automatically emits four canonical lifecycle events. They flow through the same enrichment + dispatch pipeline as any other event, so they pick up `anonymousId`, `userId`, `groupId`, device context, and timestamps.
+When `trackLifecycleEvents` is enabled (default `false` — opt-in), the SDK automatically emits four canonical lifecycle events. They flow through the same enrichment + dispatch pipeline as any other event, so they pick up `anonymousId`, `userId`, `groupId`, device context, and timestamps.
 
 ### The Four Events
 
@@ -620,15 +620,15 @@ If the process was woken in the background (silent push, background fetch, locat
 
 Only `background → active` transitions emit `Application Opened`. Brief `inactive` states (Control Center, FaceID prompt, system alert) do **not** emit — they're not real foregrounds.
 
-### Disabling
+### Enabling
 
-Set `trackLifecycleEvents: false` in `InitOptions` to opt out entirely. No lifecycle events will be emitted, and `openURL` becomes a no-op (logs a debug warning the first time it's called).
+Lifecycle tracking is **opt-in** — set `trackLifecycleEvents: true` in `InitOptions` to turn it on. When disabled (the default), no lifecycle events are emitted and `openURL` is a no-op (logs a debug warning the first time it's called).
 
 ```swift
 let options = InitOptions(
     writeKey: "YOUR_WRITE_KEY",
     ingestionHost: "https://your-ingestion-host.com",
-    trackLifecycleEvents: false
+    trackLifecycleEvents: true
 )
 ```
 

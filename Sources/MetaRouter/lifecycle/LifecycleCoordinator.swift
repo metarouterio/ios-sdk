@@ -1,9 +1,5 @@
 import Foundation
 
-#if canImport(UIKit)
-import UIKit
-#endif
-
 /// Bridges `AnalyticsClient`'s init / foreground / background / deep-link callbacks
 /// to `LifecycleEventEmitter`. Owns the cold-launch app-state probe so the UIKit
 /// dependency stays out of `AnalyticsClient`. Designed as an extension point for
@@ -29,7 +25,12 @@ internal final class LifecycleCoordinator: @unchecked Sendable {
     }
 
     func onReady() async {
-        let initialState = await readInitialAppState()
+        let initialState: AppForegroundState
+        if let override = initialStateOverride {
+            initialState = override
+        } else {
+            initialState = await currentAppForegroundState()
+        }
         await emitter.emitColdLaunchSequence(initialAppState: initialState)
     }
 
@@ -39,23 +40,28 @@ internal final class LifecycleCoordinator: @unchecked Sendable {
             sourceApplication: sourceApplication
         )
     }
+}
 
-    /// Reads current process foreground state. Hops to `MainActor` on iOS because
-    /// `UIApplication.shared.applicationState` is main-actor isolated. Tests
-    /// short-circuit via `initialStateOverride`.
-    private func readInitialAppState() async -> AppForegroundState {
-        if let override = initialStateOverride { return override }
-        #if canImport(UIKit)
-        return await MainActor.run {
-            switch UIApplication.shared.applicationState {
-            case .active: return AppForegroundState.active
-            case .inactive: return .inactive
-            case .background: return .background
-            @unknown default: return .active
-            }
+#if canImport(UIKit)
+import UIKit
+
+/// Reads `UIApplication.applicationState` on the main actor (it's main-actor
+/// isolated) and maps to our platform-neutral `AppForegroundState`.
+fileprivate func currentAppForegroundState() async -> AppForegroundState {
+    await MainActor.run {
+        switch UIApplication.shared.applicationState {
+        case .active: return .active
+        case .inactive: return .inactive
+        case .background: return .background
+        @unknown default: return .active
         }
-        #else
-        return .active
-        #endif
     }
 }
+#else
+/// UIKit unavailable (macOS native, Linux). macOS apps don't have the iOS
+/// background-launch scenario (silent push, background fetch), so `.active`
+/// is the correct cold-launch assumption — `Application Opened` fires normally.
+fileprivate func currentAppForegroundState() async -> AppForegroundState {
+    .active
+}
+#endif

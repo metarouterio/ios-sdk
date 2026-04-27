@@ -81,36 +81,36 @@ final class InitOptionsTests: XCTestCase {
                        "equal values are not an inversion")
     }
 
-    func testTrackLifecycleEventsDefaultsToTrue() {
+    func testTrackLifecycleEventsDefaultsToFalse() {
         let urlOptions = InitOptions(
             writeKey: "wk",
             ingestionHost: URL(string: "https://example.com")!
         )
-        XCTAssertTrue(urlOptions.trackLifecycleEvents,
-                      "trackLifecycleEvents should default to true (URL initializer)")
+        XCTAssertFalse(urlOptions.trackLifecycleEvents,
+                       "trackLifecycleEvents should default to false (URL initializer) — opt-in feature")
 
         let stringOptions = InitOptions(
             writeKey: "wk",
             ingestionHost: "https://example.com"
         )
-        XCTAssertTrue(stringOptions.trackLifecycleEvents,
-                      "trackLifecycleEvents should default to true (String initializer)")
+        XCTAssertFalse(stringOptions.trackLifecycleEvents,
+                       "trackLifecycleEvents should default to false (String initializer) — opt-in feature")
     }
 
-    func testTrackLifecycleEventsCanBeDisabled() {
+    func testTrackLifecycleEventsCanBeEnabled() {
         let urlOptions = InitOptions(
             writeKey: "wk",
             ingestionHost: URL(string: "https://example.com")!,
-            trackLifecycleEvents: false
+            trackLifecycleEvents: true
         )
-        XCTAssertFalse(urlOptions.trackLifecycleEvents)
+        XCTAssertTrue(urlOptions.trackLifecycleEvents)
 
         let stringOptions = InitOptions(
             writeKey: "wk",
             ingestionHost: "https://example.com",
-            trackLifecycleEvents: false
+            trackLifecycleEvents: true
         )
-        XCTAssertFalse(stringOptions.trackLifecycleEvents)
+        XCTAssertTrue(stringOptions.trackLifecycleEvents)
     }
 }
 

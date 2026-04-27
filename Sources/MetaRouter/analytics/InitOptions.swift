@@ -16,7 +16,7 @@ public struct InitOptions: Sendable {
         debug: Bool = false,
         maxQueueEvents: Int = 2000,
         maxDiskEvents: Int = 10000,
-        trackLifecycleEvents: Bool = true
+        trackLifecycleEvents: Bool = false
     ) {
         precondition(!writeKey.isEmpty, "writeKey must not be empty")
 
@@ -48,7 +48,7 @@ extension InitOptions {
         debug: Bool = false,
         maxQueueEvents: Int = 2000,
         maxDiskEvents: Int = 10000,
-        trackLifecycleEvents: Bool = true
+        trackLifecycleEvents: Bool = false
     ) {
         var host = ingestionHost.trimmingCharacters(in: .whitespacesAndNewlines)
         if host.hasSuffix("/") {
