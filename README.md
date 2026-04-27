@@ -19,6 +19,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 - [Compatibility](#-compatibility)
 - [Debugging](#debugging)
 - [Identity Persistence](#identity-persistence)
+- [Lifecycle Events](#lifecycle-events)
 - [Event Queue Persistence](#event-queue-persistence)
 - [Advertising ID (IDFA)](#advertising-id-idfa)
 - [Using the alias() Method](#using-the-alias-method)
@@ -229,6 +230,7 @@ The analytics client provides the following methods:
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
 - `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
+- `handleDeepLink(url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. See [Lifecycle Events](#lifecycle-events) for wiring
 
 ### Testing APIs
 
@@ -257,6 +259,7 @@ await MetaRouter.Analytics.resetAndWait()
 - 💿 **Disk-Backed Queue**: Events survive app termination and are rehydrated on next launch
 - 🔌 **Circuit Breaker**: Intelligent retry logic with exponential backoff
 - ⚡ **Batching**: Automatic event batching for network efficiency
+- 📲 **Lifecycle Events**: Automatic `Application Installed` / `Updated` / `Opened` / `Backgrounded` tracking with opt-in deep-link attribution
 
 ## ✅ Compatibility
 
@@ -591,7 +594,143 @@ The SDK automatically handles app lifecycle events:
 - **App Termination**: Best-effort disk snapshot (not guaranteed — process may exit before completion)
 - **Identity Persistence**: Anonymous ID, user ID, group ID, and advertising ID are persisted across app launches
 
-### Event Queue Persistence
+## Lifecycle Events
+
+When `trackLifecycleEvents` is enabled (default `true`), the SDK automatically emits four canonical lifecycle events. They flow through the same enrichment + dispatch pipeline as any other event, so they pick up `anonymousId`, `userId`, `groupId`, device context, and timestamps.
+
+### The Four Events
+
+| Event | Fires when | Properties |
+| ----- | ---------- | ---------- |
+| `Application Installed` | First launch on a device — no prior identity, no prior `(version, build)` persisted | `version`, `build` |
+| `Application Updated`   | App `(version, build)` changed since last launch, **or** lifecycle tracking is being enabled for the first time on an existing user (no install spike for the upgraded population) | `version`, `build`, `previous_version`, `previous_build` |
+| `Application Opened`    | After cold launch (process foregrounded) and on every `background → active` resume | `from_background` (Bool), `version`, `build`, optional `url`, optional `referring_application` |
+| `Application Backgrounded` | App enters background. Emitted **before** the dispatcher's flush-to-disk so the event is captured in the same drain | _(none)_ |
+
+### Cold Launch Sequencing
+
+On a cold launch with `trackLifecycleEvents: true`, the SDK emits in this order once initialization completes:
+
+1. `Application Installed` **or** `Application Updated` (or neither, if version/build hasn't changed)
+2. `Application Opened` with `from_background: false`
+
+If the process was woken in the background (silent push, background fetch, location update), the cold-launch `Application Opened` is **suppressed**. The next true `background → active` transition emits `Application Opened` with `from_background: false` as the cold-launch bridge.
+
+### Resume vs. inactive
+
+Only `background → active` transitions emit `Application Opened`. Brief `inactive` states (Control Center, FaceID prompt, system alert) do **not** emit — they're not real foregrounds.
+
+### Disabling
+
+Set `trackLifecycleEvents: false` in `InitOptions` to opt out entirely. No lifecycle events will be emitted, and `handleDeepLink` becomes a no-op.
+
+```swift
+let options = InitOptions(
+    writeKey: "YOUR_WRITE_KEY",
+    ingestionHost: "https://your-ingestion-host.com",
+    trackLifecycleEvents: false
+)
+```
+
+### Deep Link Attribution
+
+Forward inbound deep-link URLs to the SDK so the next `Application Opened` event carries `url` and `referring_application` properties. This is a one-shot buffer — the next Opened consumes and clears it.
+
+**`UIScene` (iOS 13+, recommended):**
+
+```swift
+import UIKit
+import MetaRouterSwiftSDK
+
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+
+    // Cold-launch deep link arrives here in connectionOptions
+    func scene(_ scene: UIScene,
+               willConnectTo session: UISceneSession,
+               options connectionOptions: UIScene.ConnectionOptions) {
+
+        if let urlContext = connectionOptions.urlContexts.first {
+            MetaRouter.Analytics.shared.handleDeepLink(
+                url: urlContext.url,
+                sourceApplication: urlContext.options.sourceApplication
+            )
+        }
+    }
+
+    // Resume deep link arrives here on background → active
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        guard let urlContext = URLContexts.first else { return }
+        MetaRouter.Analytics.shared.handleDeepLink(
+            url: urlContext.url,
+            sourceApplication: urlContext.options.sourceApplication
+        )
+    }
+}
+```
+
+**`UIApplicationDelegate` (legacy, single-scene apps):**
+
+```swift
+import UIKit
+import MetaRouterSwiftSDK
+
+@main
+final class AppDelegate: UIResponder, UIApplicationDelegate {
+
+    func application(_ app: UIApplication,
+                     open url: URL,
+                     options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        MetaRouter.Analytics.shared.handleDeepLink(
+            url: url,
+            sourceApplication: options[.sourceApplication] as? String
+        )
+        return true
+    }
+}
+```
+
+**Universal Links** are delivered through `NSUserActivity`, not `openURL`. Pull the `webpageURL` out yourself and forward it the same way:
+
+```swift
+func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+    guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+          let url = userActivity.webpageURL else { return }
+    MetaRouter.Analytics.shared.handleDeepLink(url: url, sourceApplication: nil)
+}
+```
+
+#### Buffer Semantics
+
+`handleDeepLink` stores **one** URL until the next `Application Opened` emits. Practical implications:
+
+- **Calling twice before an Opened**: only the most recent URL is attached. No queue.
+- **Calling without an Opened ever firing**: the URL sits in the buffer until the next Opened, whenever that is.
+- **After emit**: the buffer is cleared. Subsequent Opened events get no URL unless `handleDeepLink` is called again.
+
+This shape matches how iOS delivers URLs — at one moment, correlated with one Opened.
+
+#### Privacy
+
+Deep-link URLs frequently carry sensitive data — auth tokens, password reset codes, magic-link secrets, OTPs. **The host app is responsible for sanitizing URLs before forwarding them.** Strip query parameters that shouldn't leave the device:
+
+```swift
+func sanitized(_ url: URL) -> URL {
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.queryItems = components?.queryItems?.filter { item in
+        !["token", "code", "otp", "secret"].contains(item.name.lowercased())
+    }
+    return components?.url ?? url
+}
+
+MetaRouter.Analytics.shared.handleDeepLink(
+    url: sanitized(incomingURL),
+    sourceApplication: nil
+)
+```
+
+The SDK does not auto-instrument deep-link capture (no method swizzling, no `UIApplicationDelegate` proxy). Manual forwarding keeps integration explicit, avoids conflicts with other SDKs that swizzle (Firebase, Adjust, AppsFlyer, Branch), and gives the host control over what data is captured.
+
+## Event Queue Persistence
 
 Unsent events are automatically persisted to disk and recovered across app launches. This prevents event loss when the app is backgrounded, terminated, or encounters network issues.
 
