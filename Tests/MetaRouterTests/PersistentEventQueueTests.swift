@@ -410,7 +410,7 @@ final class PersistentEventQueueTests: XCTestCase {
                        "Events older than 7 days should be filtered out on drain")
     }
 
-    // MARK: - Pending overflow on disk write failure
+    // Pending overflow on disk write failure
 
     /// Poison the tempDir path so DiskStorage.ensureDirectory fails.
     /// Creates a regular file where the queue expects a directory.
@@ -461,7 +461,7 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(snapshot?.events.count, 6)
     }
 
-    // MARK: - Byte cap enforcement on enqueue
+    //  Byte cap enforcement on enqueue
 
     func testEnqueueAtByteCapFlushesMemoryToDisk() async throws {
         // maxSizeBytes small enough that a few test events exceed it.

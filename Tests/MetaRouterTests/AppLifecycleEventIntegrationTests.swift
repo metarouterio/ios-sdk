@@ -154,8 +154,6 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
     }
 }
 
-// MARK: - test scaffolding
-
 /// Bundles all dependencies needed to drive an `AnalyticsClient` with a
 /// drainable queue + a recording network sink that captures flushed batches.
 private final class Setup {

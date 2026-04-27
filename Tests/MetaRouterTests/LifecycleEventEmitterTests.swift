@@ -68,7 +68,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
         try await super.tearDown()
     }
 
-    // MARK: - cold launch
+    // cold launch
 
     func testColdLaunchFreshInstallEmitsInstalledThenOpened() async {
         let emitter = makeEmitter()
@@ -168,7 +168,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
         XCTAssertEqual(events[0].properties?["from_background"], .bool(false))
     }
 
-    // MARK: - foreground / background
+    // foreground / background
 
     func testBackgroundedEmitsApplicationBackgrounded() async {
         let emitter = makeEmitter()
@@ -251,7 +251,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
         XCTAssertEqual(events[1].properties?["from_background"], .bool(true))
     }
 
-    // MARK: - deep-link buffer
+    // deep-link buffer
 
     func testOpenURLAttachesUrlAndReferringApplicationToNextOpened() async {
         let emitter = makeEmitter()
@@ -299,7 +299,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
                      "Optional source must be omitted, not emitted as null")
     }
 
-    // MARK: - helpers
+    // helpers
 
     private func makeEmitter() -> LifecycleEventEmitter {
         return LifecycleEventEmitter(
