@@ -128,6 +128,7 @@ internal actor LifecycleEventEmitter {
     ///      (Control Center, FaceID prompt, system alert). Only `background → active` emits.
     func emitForegroundFromBackground() async {
         if coldLaunchSuppressed {
+            Logger.log("Cold-launch Application Opened bridged from background")
             await emitOpened(fromBackground: false)
             coldLaunchSuppressed = false
             coldLaunchEmitted = true
@@ -137,7 +138,8 @@ internal actor LifecycleEventEmitter {
 
         guard coldLaunchEmitted else {
             // First didBecomeActive during init — cold-launch path will (or did) emit.
-            lastTrackedAppState = .active
+            // Don't mutate `lastTrackedAppState` here: the cold-launch path is the
+            // canonical source of truth for it (set in `emitColdLaunchSequence`).
             return
         }
 
@@ -150,7 +152,18 @@ internal actor LifecycleEventEmitter {
 
     /// Called from `AppLifecycleObserver.onBackgroundAsync` BEFORE the dispatcher
     /// flushes to disk so the event is captured by `flushToDisk()`.
+    ///
+    /// Guarded against firing before the cold-launch sequence runs: if neither
+    /// `coldLaunchEmitted` nor `coldLaunchSuppressed` is set, no `emitColdLaunchSequence`
+    /// has happened yet, so emitting `Application Backgrounded` would produce
+    /// a spec-violating event sequence (Backgrounded with no preceding Opened).
+    /// Race scenario: process woken in `.background`, observer registered,
+    /// `didEnterBackground` fires before the async `initTask → onReady` chain.
     func emitBackgrounded() async {
+        guard coldLaunchEmitted || coldLaunchSuppressed else {
+            Logger.log("Backgrounded fired before cold-launch sequence — suppressing to preserve event ordering")
+            return
+        }
         lastTrackedAppState = .background
         let event = await enrichmentService.createTrackEvent(
             event: LifecycleEventNames.applicationBackgrounded,
@@ -161,7 +174,11 @@ internal actor LifecycleEventEmitter {
 
     /// Buffers a deep-link URL (and optional source application) to be attached
     /// to the next `Application Opened` event. One-shot — cleared on emit.
+    /// Last-write-wins if called multiple times before the next Opened.
     func openURL(url: String, sourceApplication: String?) {
+        if pendingDeepLink != nil {
+            Logger.log("Pending deep link overwritten by newer URL")
+        }
         pendingDeepLink = PendingDeepLink(url: url, source: sourceApplication)
     }
 

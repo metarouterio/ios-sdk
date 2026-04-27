@@ -299,6 +299,94 @@ final class LifecycleEventEmitterTests: XCTestCase {
                      "Optional source must be omitted, not emitted as null")
     }
 
+    /// Cold launch in `.inactive` state (rare but possible — pulled-down
+    /// notification banner mid-launch, etc.) should suppress just like
+    /// `.background` does. The bridge fires on the next true foreground entry.
+    func testColdLaunchInInactiveSuppressesOpenedUntilForeground() async {
+        let emitter = makeEmitter()
+        await emitter.emitColdLaunchSequence(initialAppState: .inactive)
+
+        var events = await drain()
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events[0].event, "Application Installed")
+
+        await emitter.emitForegroundFromBackground()
+        events = await drain()
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events[0].event, "Application Opened")
+        XCTAssertEqual(events[0].properties?["from_background"], .bool(false))
+    }
+
+    /// Deep-link buffered before a cold launch that was suppressed (background-
+    /// launched process woken by a deep link) survives the suppression and
+    /// attaches to the bridge `Application Opened` when the user actually
+    /// foregrounds the app.
+    func testDeepLinkSurvivesSuppressedColdLaunch() async {
+        let emitter = makeEmitter()
+        await emitter.openURL(url: "myapp://promo/42", sourceApplication: "com.example.referrer")
+        await emitter.emitColdLaunchSequence(initialAppState: .background)
+        _ = await drain()
+
+        await emitter.emitForegroundFromBackground()
+        let events = await drain()
+        XCTAssertEqual(events.count, 1)
+        let opened = events[0]
+        XCTAssertEqual(opened.event, "Application Opened")
+        XCTAssertEqual(opened.properties?["url"], .string("myapp://promo/42"))
+        XCTAssertEqual(opened.properties?["referring_application"], .string("com.example.referrer"))
+    }
+
+    /// `emitBackgrounded` does NOT consume the deep-link buffer — buffer is
+    /// one-shot per `Application Opened`, not per any-emit.
+    func testBackgroundedDoesNotConsumeDeepLinkBuffer() async {
+        let emitter = makeEmitter()
+        await emitter.emitColdLaunchSequence(initialAppState: .active)
+        _ = await drain()
+
+        await emitter.openURL(url: "myapp://x", sourceApplication: nil)
+        await emitter.emitBackgrounded()
+        let bgEvents = await drain()
+        XCTAssertEqual(bgEvents.count, 1)
+        XCTAssertEqual(bgEvents[0].event, "Application Backgrounded")
+        XCTAssertNil(bgEvents[0].properties?["url"],
+                     "Backgrounded must never carry deep-link properties")
+
+        // Buffer should still be intact and attach to the next Opened.
+        await emitter.emitForegroundFromBackground()
+        let resumeEvents = await drain()
+        XCTAssertEqual(resumeEvents.count, 1)
+        XCTAssertEqual(resumeEvents[0].event, "Application Opened")
+        XCTAssertEqual(resumeEvents[0].properties?["url"], .string("myapp://x"))
+    }
+
+    /// Same-bundle no-op cold launch (no install/update event) must still
+    /// persist `(version, build)` so subsequent launches see them as "seen".
+    func testSameVersionColdLaunchStillPersistsVersionBuild() async {
+        // Pre-seed with current bundle's (version, build) — same as `metadata`.
+        lifecycleStorage.setVersionBuild(version: "1.5.0", build: "42")
+        let emitter = makeEmitter()
+        await emitter.emitColdLaunchSequence(initialAppState: .active)
+        _ = await drain()
+
+        // Storage values should still match — and crucially, this would also
+        // catch a regression where the no-op path skipped the persist call.
+        XCTAssertEqual(lifecycleStorage.getVersion(), "1.5.0")
+        XCTAssertEqual(lifecycleStorage.getBuild(), "42")
+    }
+
+    /// Defensive: `emitBackgrounded` called before any cold-launch sequence
+    /// is suppressed. Race scenario — process woken in `.background`, observer
+    /// already registered, `didEnterBackground` arriving before async
+    /// `initTask → onReady` fires. Without the guard, we'd emit Backgrounded
+    /// with no preceding Opened, which is a spec violation.
+    func testBackgroundedBeforeColdLaunchIsSuppressed() async {
+        let emitter = makeEmitter()
+        await emitter.emitBackgrounded()
+        let events = await drain()
+        XCTAssertTrue(events.isEmpty,
+                      "Backgrounded before cold launch must be suppressed to preserve event ordering")
+    }
+
     // helpers
 
     private func makeEmitter() -> LifecycleEventEmitter {
