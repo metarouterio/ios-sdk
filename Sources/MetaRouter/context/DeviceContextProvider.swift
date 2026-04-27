@@ -29,16 +29,16 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     private let contextActor = ContextActor()
     private let library: LibraryContext
-    private let appMetadata: AppMetadata
+    private let appContext: AppContext
     private let advertisingIdActor = AdvertisingIdActor()
 
     public init(
         libraryName: String = "metarouter-ios-sdk",
         libraryVersion: String = MetaRouterSDK.version,
-        appMetadata: AppMetadata = .fromBundle()
+        appContext: AppContext = .fromBundle()
     ) {
         self.library = LibraryContext(name: libraryName, version: libraryVersion)
-        self.appMetadata = appMetadata
+        self.appContext = appContext
     }
 
     public func getContext() async -> EventContext {
@@ -79,12 +79,7 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
     }
 
     private func collectAppContext() async -> AppContext {
-        AppContext(
-            name: appMetadata.name,
-            version: appMetadata.version,
-            build: appMetadata.build,
-            namespace: appMetadata.namespace
-        )
+        appContext
     }
 
     private func collectDeviceContext() async -> DeviceContext {
