@@ -29,13 +29,16 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
 
     private let contextActor = ContextActor()
     private let library: LibraryContext
+    private let appMetadata: AppMetadata
     private let advertisingIdActor = AdvertisingIdActor()
 
     public init(
         libraryName: String = "metarouter-ios-sdk",
-        libraryVersion: String = MetaRouterSDK.version
+        libraryVersion: String = MetaRouterSDK.version,
+        appMetadata: AppMetadata = .fromBundle()
     ) {
         self.library = LibraryContext(name: libraryName, version: libraryVersion)
+        self.appMetadata = appMetadata
     }
 
     public func getContext() async -> EventContext {
@@ -76,17 +79,12 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
     }
 
     private func collectAppContext() async -> AppContext {
-        let bundle = Bundle.main
-        let info = bundle.infoDictionary ?? [:]
-
-        let name = (info["CFBundleDisplayName"] as? String)
-            ?? (info["CFBundleName"] as? String)
-            ?? "Unknown"
-        let version = info["CFBundleShortVersionString"] as? String ?? "unknown"
-        let build = info["CFBundleVersion"] as? String ?? "unknown"
-        let namespace = bundle.bundleIdentifier ?? "unknown"
-
-        return AppContext(name: name, version: version, build: build, namespace: namespace)
+        AppContext(
+            name: appMetadata.name,
+            version: appMetadata.version,
+            build: appMetadata.build,
+            namespace: appMetadata.namespace
+        )
     }
 
     private func collectDeviceContext() async -> DeviceContext {

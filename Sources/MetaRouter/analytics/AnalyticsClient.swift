@@ -14,7 +14,7 @@ internal struct AnalyticsDependencies: Sendable {
     var networkMonitor: NetworkReachability?
     var lifecycleStorage: LifecycleStorage?
     var identityStorage: IdentityStorage?
-    var appVersionInfo: AppVersionInfo?
+    var appMetadata: AppMetadata?
     /// Override the initial app foreground state read at cold launch.
     /// Tests pass `.active` / `.background` directly to skip the UIKit probe.
     var initialAppState: AppForegroundState?
@@ -41,7 +41,12 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         self.lifecycleState = .initializing
 
         self.options = options
-        self.contextProvider = deps.contextProvider ?? DeviceContextProvider()
+        // Snapshot bundle metadata once — used by both DeviceContextProvider (per-event
+        // app context) and LifecycleEventEmitter (install/update detection). Bundle
+        // is OS-loaded at process start and immutable, so caching is safe.
+        let appMetadata = deps.appMetadata ?? .fromBundle()
+        self.contextProvider = deps.contextProvider
+            ?? DeviceContextProvider(appMetadata: appMetadata)
         self.identityManager = deps.identityManager ?? IdentityManager(
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
@@ -76,7 +81,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 dispatcher: self.dispatcher,
                 storage: deps.lifecycleStorage ?? LifecycleStorage(),
                 identityStorage: deps.identityStorage ?? IdentityStorage(),
-                versionInfo: deps.appVersionInfo ?? .fromBundle()
+                metadata: appMetadata
             )
             self.lifecycleCoordinator = LifecycleCoordinator(
                 emitter: emitter,

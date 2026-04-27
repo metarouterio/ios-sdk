@@ -195,7 +195,7 @@ private final class Setup {
         deps.identityManager = identityManager
         deps.lifecycleStorage = self.lifecycleStorage
         deps.identityStorage = identityStorage
-        deps.appVersionInfo = AppVersionInfo(version: "1.5.0", build: "42")
+        deps.appMetadata = AppMetadata(name: "test-app", version: "1.5.0", build: "42", namespace: "com.metarouter.test")
         // Force "active" on cold launch so we can assert the Opened event regardless of platform.
         deps.initialAppState = .active
         deps.dispatcherConfig = Dispatcher.Config(

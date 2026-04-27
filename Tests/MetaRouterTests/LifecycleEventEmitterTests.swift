@@ -16,7 +16,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
     private var enrichmentService: EventEnrichmentService!
     private var identityStorage: IdentityStorage!
     private var lifecycleStorage: LifecycleStorage!
-    private let version = AppVersionInfo(version: "1.5.0", build: "42")
+    private let metadata = AppMetadata(name: "test-app", version: "1.5.0", build: "42", namespace: "com.metarouter.test")
 
     override func setUp() async throws {
         try await super.setUp()
@@ -307,7 +307,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
             dispatcher: dispatcher,
             storage: lifecycleStorage,
             identityStorage: identityStorage,
-            versionInfo: version
+            metadata: metadata
         )
     }
 

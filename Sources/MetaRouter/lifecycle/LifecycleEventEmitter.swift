@@ -7,23 +7,35 @@ public enum AppForegroundState: Sendable, Equatable {
     case background
 }
 
-/// Snapshot of the app's `(version, build)` taken from the bundle at SDK init.
-/// `version` reads `CFBundleShortVersionString`, `build` reads `CFBundleVersion`,
-/// matching `DeviceContextProvider.collectAppContext()`.
-public struct AppVersionInfo: Sendable, Equatable {
+/// Snapshot of the app's bundle metadata taken once at SDK init. Single source
+/// of truth for `EventEnrichmentService` (per-event `app` context block) and
+/// `LifecycleEventEmitter` (install/update detection). `Bundle.main.infoDictionary`
+/// is OS-loaded once at process start and immutable for the process lifetime, so
+/// caching is safe.
+public struct AppMetadata: Sendable, Equatable {
+    public let name: String
     public let version: String
     public let build: String
+    public let namespace: String
 
-    public init(version: String, build: String) {
+    public init(name: String, version: String, build: String, namespace: String) {
+        self.name = name
         self.version = version
         self.build = build
+        self.namespace = namespace
     }
 
-    public static func fromBundle(_ bundle: Bundle = .main) -> AppVersionInfo {
+    public static func fromBundle(_ bundle: Bundle = .main) -> AppMetadata {
         let info = bundle.infoDictionary ?? [:]
-        let version = info["CFBundleShortVersionString"] as? String ?? "unknown"
-        let build = info["CFBundleVersion"] as? String ?? "unknown"
-        return AppVersionInfo(version: version, build: build)
+        let name = (info["CFBundleDisplayName"] as? String)
+            ?? (info["CFBundleName"] as? String)
+            ?? "Unknown"
+        return AppMetadata(
+            name: name,
+            version: info["CFBundleShortVersionString"] as? String ?? "unknown",
+            build: info["CFBundleVersion"] as? String ?? "unknown",
+            namespace: bundle.bundleIdentifier ?? "unknown"
+        )
     }
 }
 
@@ -54,7 +66,7 @@ internal actor LifecycleEventEmitter {
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
     private let storage: LifecycleStorage
-    private let versionInfo: AppVersionInfo
+    private let metadata: AppMetadata
     private let hadIdentityBeforeInit: Bool
 
     private var coldLaunchEmitted: Bool = false
@@ -72,12 +84,12 @@ internal actor LifecycleEventEmitter {
         dispatcher: Dispatcher,
         storage: LifecycleStorage = LifecycleStorage(),
         identityStorage: IdentityStorage = IdentityStorage(),
-        versionInfo: AppVersionInfo = .fromBundle()
+        metadata: AppMetadata = .fromBundle()
     ) {
         self.enrichmentService = enrichmentService
         self.dispatcher = dispatcher
         self.storage = storage
-        self.versionInfo = versionInfo
+        self.metadata = metadata
         // Snapshot before IdentityManager.initialize() auto-creates an anonymousId,
         // so we can tell a true fresh install (no identity) from an existing user
         // upgrading to a lifecycle-aware SDK build (identity already present).
@@ -97,7 +109,7 @@ internal actor LifecycleEventEmitter {
     func emitColdLaunchSequence(initialAppState: AppForegroundState) async {
         let prevVersion = storage.getVersion()
         let prevBuild = storage.getBuild()
-        let curr = versionInfo
+        let curr = metadata
 
         if prevVersion == nil && prevBuild == nil {
             if hadIdentityBeforeInit {
@@ -195,8 +207,8 @@ internal actor LifecycleEventEmitter {
     private func emitOpened(fromBackground: Bool) async {
         var properties: [String: CodableValue] = [
             LifecycleEventProperties.fromBackground: .bool(fromBackground),
-            LifecycleEventProperties.version: .string(versionInfo.version),
-            LifecycleEventProperties.build: .string(versionInfo.build),
+            LifecycleEventProperties.version: .string(metadata.version),
+            LifecycleEventProperties.build: .string(metadata.build),
         ]
         if let buf = pendingDeepLink {
             properties[LifecycleEventProperties.url] = .string(buf.url)
