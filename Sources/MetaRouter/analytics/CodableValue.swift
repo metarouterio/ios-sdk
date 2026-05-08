@@ -184,18 +184,29 @@ extension CodableValue {
   /// Convert any supported value to CodableValue
   /// - Parameter value: The value to convert
   /// - Returns: A CodableValue if the conversion was successful, nil otherwise
+  ///
+  /// Container handling is tolerant: a single unsupported value inside a dict
+  /// or array drops only that key/element (with a warning logged) rather than
+  /// invalidating the entire container.
   public static func from(_ value: Any) -> CodableValue? {
-    // Handle Optional<Any> first
-    if let unwrapped = Mirror(reflecting: value).unwrapOptional() {
-      return from(unwrapped)
+    // NSNull (common from JSONSerialization / Obj-C bridging) → null
+    if value is NSNull {
+      return .null
     }
-    
-    // Handle already converted values
+
+    // Optional<T>.none → null; Optional<T>.some(x) → recurse with x
+    if Mirror(reflecting: value).displayStyle == .optional {
+      if let unwrapped = Mirror(reflecting: value).unwrapOptional() {
+        return from(unwrapped)
+      }
+      return .null
+    }
+
+    // Already a CodableValue
     if let codableValue = value as? CodableValue {
       return codableValue
     }
-    
-    // Handle primitive types
+
     switch value {
     case let string as String: return .string(string)
     case let int as Int: return .int(int)
@@ -203,17 +214,27 @@ extension CodableValue {
     case let float as Float: return .double(Double(float))
     case let bool as Bool: return .bool(bool)
     case let array as [Any]:
-      let converted = array.compactMap(from)
-      return converted.count == array.count ? .array(converted) : nil
+      var converted: [CodableValue] = []
+      converted.reserveCapacity(array.count)
+      for element in array {
+        if let cv = from(element) {
+          converted.append(cv)
+        } else {
+          Logger.warn("CodableValue: dropping unsupported array element of type \(type(of: element))")
+        }
+      }
+      return .array(converted)
     case let dict as [String: Any]:
       var converted: [String: CodableValue] = [:]
-      converted.reserveCapacity(dict.count) // Performance optimization
+      converted.reserveCapacity(dict.count)
       for (key, val) in dict {
-        guard let codableVal = from(val) else { return nil }
-        converted[key] = codableVal
+        if let cv = from(val) {
+          converted[key] = cv
+        } else {
+          Logger.warn("CodableValue: dropping unsupported value for key '\(key)' of type \(type(of: val))")
+        }
       }
       return .object(converted)
-    case Optional<Any>.none: return .null
     default: return nil
     }
   }

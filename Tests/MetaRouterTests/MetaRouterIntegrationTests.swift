@@ -57,7 +57,7 @@ final class MetaRouterIntegrationTests: XCTestCase {
         let options = TestDataFactory.makeInitOptions()
         
         // Get the proxy (before initialization)
-        let proxy = MetaRouter.Analytics.client()
+        let proxy = MetaRouter.Analytics.shared
         
         // Make calls before initialization (should be queued)
         proxy.track("queued_event", properties: nil)
@@ -83,7 +83,7 @@ final class MetaRouterIntegrationTests: XCTestCase {
         // Multiple initialize calls should return the same proxy
         let client1 = MetaRouter.Analytics.initialize(with: options)
         let client2 = MetaRouter.Analytics.initialize(with: options)
-        let client3 = MetaRouter.Analytics.client()
+        let client3 = MetaRouter.Analytics.shared
         
         XCTAssertTrue(client1 === client2, "Multiple initialize calls should return same proxy")
         XCTAssertTrue(client1 === client3, "Client() should return same proxy as initialize")
@@ -309,7 +309,7 @@ final class MetaRouterIntegrationTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 5.0)
         
         // Verify final state is consistent
-        let client = MetaRouter.Analytics.client()
+        let client = MetaRouter.Analytics.shared
         let debugInfo = await client.getDebugInfo()
         XCTAssertNotNil(debugInfo)
     }
@@ -334,7 +334,7 @@ final class MetaRouterIntegrationTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 5.0)
         
         // Should be in a valid state after all operations
-        let finalClient = MetaRouter.Analytics.client()
+        let finalClient = MetaRouter.Analytics.shared
         XCTAssertNotNil(finalClient)
     }
     
@@ -485,7 +485,7 @@ final class MetaRouterIntegrationTests: XCTestCase {
 
     func testSetAdvertisingIdWithProxy() async {
         // Get proxy before initialization
-        let proxy = MetaRouter.Analytics.client()
+        let proxy = MetaRouter.Analytics.shared
 
         // Set advertising ID before initialization (should be queued)
         proxy.setAdvertisingId("QUEUED-IDFA")
@@ -555,7 +555,7 @@ final class MetaRouterIntegrationTests: XCTestCase {
 
     func testClearAdvertisingIdWithProxyIntegration() async {
         // Get proxy before initialization
-        let proxy = MetaRouter.Analytics.client()
+        let proxy = MetaRouter.Analytics.shared
 
         // Set advertising ID before initialization (should be queued)
         proxy.setAdvertisingId("QUEUED-IDFA")

@@ -211,6 +211,23 @@ Calls to `track`, `identify`, etc. are **buffered in-memory** by the proxy and r
 - On fatal config errors (`401/403/404`), the client enters **disabled** state and drops subsequent calls.
 - `sentAt` is stamped when the batch is prepared for transmission (just before network send). If you need the original occurrence time, pass your own `timestamp` on each event.
 
+### MetaRouter.Analytics.shared
+
+Property-style accessor for the live proxy, matching Apple SDK convention (`URLSession.shared`, `UserDefaults.standard`, etc.). Returns the same proxy that `initialize(with:)` returns — call it from anywhere in your app once the SDK has been initialized:
+
+```swift
+// Initialize once at app launch
+MetaRouter.Analytics.initialize(with: options)
+
+// Use anywhere — no need to thread the proxy through your code
+MetaRouter.Analytics.shared.track("Button Tapped")
+MetaRouter.Analytics.shared.identify("user123")
+```
+
+`.shared` is safe to call before `initialize(with:)` — the proxy buffers calls until binding completes (same FIFO + replay-on-ready semantics described above). Use the proxy returned from `initialize(with:)` if you prefer dependency-injection style; both refer to the same underlying instance.
+
+> **Note:** `MetaRouter.Analytics.client()` is deprecated as of this release; use `.shared` instead. Existing call sites will continue to work (with a yellow deprecation warning) until the next major version.
+
 ### Analytics Interface
 
 The analytics client provides the following methods:
