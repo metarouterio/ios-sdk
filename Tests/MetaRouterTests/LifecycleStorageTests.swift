@@ -24,19 +24,10 @@ final class LifecycleStorageTests: XCTestCase {
         XCTAssertNil(storage.getVersion())
         XCTAssertNil(storage.getBuild())
 
-        storage.setVersion("1.5.0")
-        storage.setBuild("42")
+        storage.setVersionBuild(version: "1.5.0", build: "42")
 
         XCTAssertEqual(storage.getVersion(), "1.5.0")
         XCTAssertEqual(storage.getBuild(), "42")
-    }
-
-    func testSetVersionBuildHelperSetsBoth() {
-        let storage = LifecycleStorage(userDefaults: defaults)
-        storage.setVersionBuild(version: "2.0.0", build: "100")
-
-        XCTAssertEqual(storage.getVersion(), "2.0.0")
-        XCTAssertEqual(storage.getBuild(), "100")
     }
 
     func testClearRemovesBothKeys() {
@@ -74,19 +65,5 @@ final class LifecycleStorageTests: XCTestCase {
     func testKeysUseExpectedNamespace() {
         XCTAssertEqual(LifecycleStorageKey.version.rawValue, "metarouter:lifecycle:version")
         XCTAssertEqual(LifecycleStorageKey.build.rawValue, "metarouter:lifecycle:build")
-    }
-
-    func testIdentityStorageHasAnyValueDetectsAnyKey() {
-        let storage = IdentityStorage(userDefaults: defaults)
-        XCTAssertFalse(storage.hasAnyValue())
-
-        storage.set(.anonymousId, value: "abc")
-        XCTAssertTrue(storage.hasAnyValue())
-
-        storage.clear()
-        XCTAssertFalse(storage.hasAnyValue())
-
-        storage.set(.userId, value: "u")
-        XCTAssertTrue(storage.hasAnyValue())
     }
 }

@@ -430,6 +430,123 @@ final class CodableValueTests: XCTestCase {
         }
     }
     
+    // MARK: - Nil / Unsupported-Type Tolerance
+    //
+    // Regression coverage: previously a single value that failed to convert
+    // (NSNull, Date, custom struct, etc.) caused `from(_:)` to return nil for
+    // the entire enclosing dict/array, dropping all sibling keys/elements.
+    // Per-key/per-element tolerance is now expected.
+
+    func testConvertNSNullDirectlyReturnsNullCase() {
+        let value = CodableValue.from(NSNull())
+        XCTAssertEqual(value, .null)
+    }
+
+    func testConvertOptionalNoneDirectlyReturnsNullCase() {
+        let none: String? = nil
+        let value = CodableValue.from(none as Any)
+        XCTAssertEqual(value, .null)
+    }
+
+    func testConvertDictWithNSNullPreservesOtherKeys() {
+        let input: [String: Any] = [
+            "name": "Chris",
+            "phone": NSNull(),
+            "age": 30
+        ]
+
+        let converted = CodableValue.convert(input)
+
+        XCTAssertNotNil(converted, "Dict containing NSNull must not collapse to nil")
+        XCTAssertEqual(converted?["name"], .string("Chris"))
+        XCTAssertEqual(converted?["age"], .int(30))
+        XCTAssertEqual(converted?["phone"], .null)
+    }
+
+    func testConvertDictWithOptionalNonePreservesOtherKeys() {
+        let phone: String? = nil
+        let input: [String: Any] = [
+            "name": "Chris",
+            "phone": phone as Any,
+            "age": 30
+        ]
+
+        let converted = CodableValue.convert(input)
+
+        XCTAssertNotNil(converted, "Dict containing Optional.none must not collapse to nil")
+        XCTAssertEqual(converted?["name"], .string("Chris"))
+        XCTAssertEqual(converted?["age"], .int(30))
+        XCTAssertEqual(converted?["phone"], .null)
+    }
+
+    func testConvertDictWithUnsupportedTypeDoesNotPoisonDict() {
+        struct Custom {}
+        let input: [String: Any] = [
+            "name": "Chris",
+            "weird": Custom(),
+            "age": 30
+        ]
+
+        let converted = CodableValue.convert(input)
+
+        XCTAssertNotNil(converted, "Dict containing an unsupported value must not collapse to nil")
+        XCTAssertEqual(converted?["name"], .string("Chris"))
+        XCTAssertEqual(converted?["age"], .int(30))
+        XCTAssertNil(converted?["weird"], "Unsupported value should be dropped, not poison the dict")
+    }
+
+    func testConvertArrayWithUnsupportedElementDoesNotPoisonArray() {
+        struct Custom {}
+        let input: [String: Any] = [
+            "tags": ["a", Custom(), "b"]
+        ]
+
+        let converted = CodableValue.convert(input)
+
+        XCTAssertNotNil(converted, "Array containing an unsupported value must not collapse to nil")
+        if case .array(let elements) = converted?["tags"] ?? .null {
+            XCTAssertEqual(elements, [.string("a"), .string("b")])
+        } else {
+            XCTFail("Expected tags to remain an array with surviving elements")
+        }
+    }
+
+    func testConvertArrayWithNSNullPreservesNullElement() {
+        let input: [String: Any] = [
+            "vals": [1, NSNull(), 3]
+        ]
+
+        let converted = CodableValue.convert(input)
+
+        XCTAssertNotNil(converted)
+        if case .array(let elements) = converted?["vals"] ?? .null {
+            XCTAssertEqual(elements, [.int(1), .null, .int(3)])
+        } else {
+            XCTFail("Expected vals to remain an array with null preserved")
+        }
+    }
+
+    func testNestedDictWithNSNullPreservesStructure() {
+        let input: [String: Any] = [
+            "user": [
+                "id": "u1",
+                "email": NSNull()
+            ] as [String: Any],
+            "score": 10
+        ]
+
+        let converted = CodableValue.convert(input)
+
+        XCTAssertNotNil(converted)
+        XCTAssertEqual(converted?["score"], .int(10))
+        if case .object(let user) = converted?["user"] ?? .null {
+            XCTAssertEqual(user["id"], .string("u1"))
+            XCTAssertEqual(user["email"], .null)
+        } else {
+            XCTFail("Expected user to remain an object with null email preserved")
+        }
+    }
+
     func testLiteralSyntaxWithComplexStructures() {
         let value: CodableValue = [
             "mixed_array": [1, "two", 3.0, true, ["nested"]],
