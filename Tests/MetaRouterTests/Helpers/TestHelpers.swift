@@ -155,6 +155,10 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
     func setTracing(_ enabled: Bool) {
         recordCall(.setTracing(enabled: enabled))
     }
+
+    func openURL(_ url: URL, sourceApplication: String?) {
+        recordCall(.openURL(url: url, sourceApplication: sourceApplication))
+    }
 }
 
 // Analytics Call Recording
@@ -175,6 +179,7 @@ enum AnalyticsCall: Equatable {
     case setAdvertisingId(advertisingId: String?)
     case clearAdvertisingId
     case setTracing(enabled: Bool)
+    case openURL(url: URL, sourceApplication: String?)
 }
 
 // CodableValue Test Extensions
@@ -210,4 +215,74 @@ enum TestUtilities {
 
         return condition()
     }
+
+    /// Async-condition variant for actor-backed state (queues, etc) where the
+    /// predicate itself needs to `await`. Same 10ms poll interval as `waitFor`.
+    static func waitForAsync(
+        timeout: TimeInterval = 1.0,
+        condition: @escaping () async -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)  // 10ms
+        }
+
+        return await condition()
+    }
+}
+
+// stdout/stderr capture for asserting on Logger output
+
+/// Captures both stdout and stderr during `block`. Used to assert on Logger.warn output.
+/// Order matters: restore the original fds before reading so the pipe writer reaches EOF.
+func captureStderrAndStdout(_ block: () -> Void) -> String {
+    let pipe = Pipe()
+    let origOut = dup(fileno(stdout))
+    let origErr = dup(fileno(stderr))
+    setvbuf(stdout, nil, _IONBF, 0)
+    setvbuf(stderr, nil, _IONBF, 0)
+    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stdout))
+    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stderr))
+
+    block()
+
+    // Restore stdout/stderr FIRST so no more writers reference the pipe
+    dup2(origOut, fileno(stdout))
+    dup2(origErr, fileno(stderr))
+    close(origOut)
+    close(origErr)
+    // Now safe to close the writer and read until EOF
+    pipe.fileHandleForWriting.closeFile()
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    return String(data: data, encoding: .utf8) ?? ""
+}
+
+/// Async variant — useful when the block under test fires fire-and-forget
+/// Tasks (e.g. `AnalyticsClient.openURL`) and the log line is emitted
+/// asynchronously. Sleeps `settle` before restoring fds so background
+/// Tasks have time to write.
+func captureStderrAndStdout(
+    settle: TimeInterval = 0.2,
+    _ block: () async -> Void
+) async -> String {
+    let pipe = Pipe()
+    let origOut = dup(fileno(stdout))
+    let origErr = dup(fileno(stderr))
+    setvbuf(stdout, nil, _IONBF, 0)
+    setvbuf(stderr, nil, _IONBF, 0)
+    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stdout))
+    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stderr))
+
+    await block()
+    try? await Task.sleep(nanoseconds: UInt64(settle * 1_000_000_000))
+
+    dup2(origOut, fileno(stdout))
+    dup2(origErr, fileno(stderr))
+    close(origOut)
+    close(origErr)
+    pipe.fileHandleForWriting.closeFile()
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    return String(data: data, encoding: .utf8) ?? ""
 }

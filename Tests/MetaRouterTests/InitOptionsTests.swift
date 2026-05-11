@@ -80,30 +80,36 @@ final class InitOptionsTests: XCTestCase {
         XCTAssertFalse(output.contains("less than"),
                        "equal values are not an inversion")
     }
+
+    func testTrackLifecycleEventsDefaultsToFalse() {
+        let urlOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: URL(string: "https://example.com")!
+        )
+        XCTAssertFalse(urlOptions.trackLifecycleEvents,
+                       "trackLifecycleEvents should default to false (URL initializer) — opt-in feature")
+
+        let stringOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: "https://example.com"
+        )
+        XCTAssertFalse(stringOptions.trackLifecycleEvents,
+                       "trackLifecycleEvents should default to false (String initializer) — opt-in feature")
+    }
+
+    func testTrackLifecycleEventsCanBeEnabled() {
+        let urlOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: URL(string: "https://example.com")!,
+            trackLifecycleEvents: true
+        )
+        XCTAssertTrue(urlOptions.trackLifecycleEvents)
+
+        let stringOptions = InitOptions(
+            writeKey: "wk",
+            ingestionHost: "https://example.com",
+            trackLifecycleEvents: true
+        )
+        XCTAssertTrue(stringOptions.trackLifecycleEvents)
+    }
 }
-
-/// Captures both stdout and stderr during `block`. Used to assert on Logger.warn output.
-/// Order matters: restore the original fds before reading so the pipe writer reaches EOF.
-private func captureStderrAndStdout(_ block: () -> Void) -> String {
-    let pipe = Pipe()
-    let origOut = dup(fileno(stdout))
-    let origErr = dup(fileno(stderr))
-    setvbuf(stdout, nil, _IONBF, 0)
-    setvbuf(stderr, nil, _IONBF, 0)
-    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stdout))
-    dup2(pipe.fileHandleForWriting.fileDescriptor, fileno(stderr))
-
-    block()
-
-    // Restore stdout/stderr FIRST so no more writers reference the pipe
-    dup2(origOut, fileno(stdout))
-    dup2(origErr, fileno(stderr))
-    close(origOut)
-    close(origErr)
-    // Now safe to close the writer and read until EOF
-    pipe.fileHandleForWriting.closeFile()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    return String(data: data, encoding: .utf8) ?? ""
-}
-
-
