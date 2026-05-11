@@ -175,6 +175,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         }
     }
 
+    /// Drain any residue from the previous background period BEFORE emitting
+    /// `Application Opened` so the foreground session starts with a clean queue.
+    /// `onForeground()` only enqueues the event — the just-started flush loop
+    /// ships it on the next tick, so backlog size doesn't delay emission.
     private func handleForeground() {
         guard lifecycleState == .ready else { return }
         Task { [weak self] in

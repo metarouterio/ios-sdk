@@ -77,9 +77,11 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
 
         // Sanity: regular track() still works
         bundle.client.track("user_event")
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        let after = await bundle.collectEvents()
-        XCTAssertEqual(after.first?.event, "user_event")
+        let found = await TestUtilities.waitForAsync(timeout: 1.0) {
+            let events = await bundle.collectEvents()
+            return events.contains { $0.event == "user_event" }
+        }
+        XCTAssertTrue(found, "expected user_event to be enqueued")
     }
 
     /// Calling `openURL` while `trackLifecycleEvents == false` is a silent no-op
@@ -100,7 +102,8 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         XCTAssertTrue(output.contains("openURL called but trackLifecycleEvents is disabled"),
                       "Expected disabled-flag warning, got: \(output)")
 
-        // Sanity: still no event emitted.
+        // Absence wait: we're verifying NO event fires, so a fixed sleep is
+        // required — `waitFor` would just early-exit on the first empty poll.
         try? await Task.sleep(nanoseconds: 100_000_000)
         let events = await bundle.collectEvents()
         XCTAssertTrue(events.isEmpty,
@@ -115,6 +118,8 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         XCTAssertEqual(bundle.lifecycleStorage.getVersion(), "1.5.0")
 
         bundle.client.reset()
+        // Absence wait: verifying lifecycle storage is NOT cleared by reset(),
+        // so we need the full duration to be confident no async clear runs.
         try? await Task.sleep(nanoseconds: 300_000_000)
 
         XCTAssertEqual(bundle.lifecycleStorage.getVersion(), "1.5.0",
@@ -150,11 +155,14 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
                 object: nil
             )
         }
-        try? await Task.sleep(nanoseconds: 500_000_000)
 
-        let events = await bundle.collectEvents()
-        XCTAssertTrue(events.contains(where: { $0.event == "Application Backgrounded" }),
-                      "expected Application Backgrounded after background notification, got \(events.map { $0.event ?? "?" })")
+        // `handleBackground` runs `flush()` after emitting, so Backgrounded
+        // lands in the recorder (network sink) — sync, no drain needed.
+        let found = await TestUtilities.waitFor(timeout: 1.0) {
+            bundle.recorder.recorded.contains { $0.event == "Application Backgrounded" }
+        }
+        XCTAssertTrue(found,
+                      "expected Application Backgrounded after background notification, got \(bundle.recorder.recorded.map { $0.event ?? "?" })")
     }
 
     func testForegroundAfterBackgroundEmitsOpenedFromBackground() async {
@@ -165,17 +173,39 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         await MainActor.run {
             NotificationCenter.default.post(name: Self.backgroundNotificationName, object: nil)
         }
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        // Backgrounded lands in the recorder via `handleBackground`'s flush.
+        let bgFound = await TestUtilities.waitFor(timeout: 1.0) {
+            bundle.recorder.recorded.contains { $0.event == "Application Backgrounded" }
+        }
+        XCTAssertTrue(bgFound, "expected Application Backgrounded before foregrounding")
 
         await MainActor.run {
             NotificationCenter.default.post(name: Self.foregroundNotificationName, object: nil)
         }
-        try? await Task.sleep(nanoseconds: 400_000_000)
-
-        let events = await bundle.collectEvents()
-        let opened = events.first(where: { $0.event == "Application Opened" })
-        XCTAssertNotNil(opened, "expected Application Opened after foreground, got \(events.map { $0.event ?? "?" })")
+        // Opened is emitted AFTER `handleForeground`'s flush, so it sits in
+        // the queue — drain into a collector each poll, then assert on the
+        // accumulated snapshot.
+        let collector = EventCollector()
+        let fgFound = await TestUtilities.waitForAsync(timeout: 1.0) {
+            let batch = await bundle.queue.drain(max: 100)
+            await collector.add(batch)
+            return await collector.contains { $0.event == "Application Opened" }
+        }
+        let captured = await collector.snapshot()
+        XCTAssertTrue(fgFound, "expected Application Opened after foreground, got \(captured.map { $0.event ?? "?" })")
+        let opened = captured.first(where: { $0.event == "Application Opened" })
         XCTAssertEqual(opened?.properties?["from_background"], .bool(true))
+    }
+}
+
+/// Thread-safe event accumulator for tests that need to assert across multiple
+/// poll iterations of an async-drained queue.
+private actor EventCollector {
+    private var events: [EnrichedEventPayload] = []
+    func add(_ batch: [EnrichedEventPayload]) { events.append(contentsOf: batch) }
+    func snapshot() -> [EnrichedEventPayload] { events }
+    func contains(where predicate: (EnrichedEventPayload) -> Bool) -> Bool {
+        events.contains(where: predicate)
     }
 }
 

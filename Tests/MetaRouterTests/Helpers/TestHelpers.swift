@@ -215,6 +215,22 @@ enum TestUtilities {
 
         return condition()
     }
+
+    /// Async-condition variant for actor-backed state (queues, etc) where the
+    /// predicate itself needs to `await`. Same 10ms poll interval as `waitFor`.
+    static func waitForAsync(
+        timeout: TimeInterval = 1.0,
+        condition: @escaping () async -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)  // 10ms
+        }
+
+        return await condition()
+    }
 }
 
 // stdout/stderr capture for asserting on Logger output

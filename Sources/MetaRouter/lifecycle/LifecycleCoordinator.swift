@@ -35,7 +35,7 @@ internal final class LifecycleCoordinator: @unchecked Sendable {
     }
 
     func openURL(_ url: URL, sourceApplication: String?) async {
-        await emitter.openURL(
+        await emitter.recordOpenedURL(
             url: url.absoluteString,
             sourceApplication: sourceApplication
         )
