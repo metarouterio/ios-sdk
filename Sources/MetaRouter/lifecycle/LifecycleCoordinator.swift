@@ -34,8 +34,8 @@ internal final class LifecycleCoordinator: @unchecked Sendable {
         await emitter.emitColdLaunchSequence(initialAppState: initialState)
     }
 
-    func openURL(_ url: URL, sourceApplication: String?) async {
-        await emitter.openURL(
+    func recordOpenedURL(_ url: URL, sourceApplication: String?) async {
+        await emitter.recordOpenedURL(
             url: url.absoluteString,
             sourceApplication: sourceApplication
         )

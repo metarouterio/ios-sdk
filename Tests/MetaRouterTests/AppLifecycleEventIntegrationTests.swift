@@ -82,10 +82,10 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         XCTAssertEqual(after.first?.event, "user_event")
     }
 
-    /// Calling `openURL` while `trackLifecycleEvents == false` is a silent no-op
+    /// Calling `recordOpenedURL` while `trackLifecycleEvents == false` is a silent no-op
     /// for event emission, but logs a debug warning so misconfiguration ("I'm
-    /// calling openURL but no events fire!") is diagnosable from logs.
-    func testOpenURLWithFeatureDisabledLogsWarning() async {
+    /// calling recordOpenedURL but no events fire!") is diagnosable from logs.
+    func testRecordOpenedURLWithFeatureDisabledLogsWarning() async {
         Logger.setDebugLogging(true)
         defer { Logger.setDebugLogging(false) }
 
@@ -94,17 +94,17 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         await bundle.consumeAll()
 
         let output = await captureStderrAndStdout(settle: 0.1) {
-            bundle.client.openURL(URL(string: "myapp://x")!, sourceApplication: nil)
+            bundle.client.recordOpenedURL(URL(string: "myapp://x")!, sourceApplication: nil)
         }
 
-        XCTAssertTrue(output.contains("openURL called but trackLifecycleEvents is disabled"),
+        XCTAssertTrue(output.contains("recordOpenedURL called but trackLifecycleEvents is disabled"),
                       "Expected disabled-flag warning, got: \(output)")
 
         // Sanity: still no event emitted.
         try? await Task.sleep(nanoseconds: 100_000_000)
         let events = await bundle.collectEvents()
         XCTAssertTrue(events.isEmpty,
-                      "openURL with feature disabled must not emit any event")
+                      "recordOpenedURL with feature disabled must not emit any event")
     }
 
     /// `reset()` must NOT clear lifecycle storage — install/update state survives

@@ -156,8 +156,8 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.setTracing(enabled: enabled))
     }
 
-    func openURL(_ url: URL, sourceApplication: String?) {
-        recordCall(.openURL(url: url, sourceApplication: sourceApplication))
+    func recordOpenedURL(_ url: URL, sourceApplication: String?) {
+        recordCall(.recordOpenedURL(url: url, sourceApplication: sourceApplication))
     }
 }
 
@@ -179,7 +179,7 @@ enum AnalyticsCall: Equatable {
     case setAdvertisingId(advertisingId: String?)
     case clearAdvertisingId
     case setTracing(enabled: Bool)
-    case openURL(url: URL, sourceApplication: String?)
+    case recordOpenedURL(url: URL, sourceApplication: String?)
 }
 
 // CodableValue Test Extensions
@@ -244,7 +244,7 @@ func captureStderrAndStdout(_ block: () -> Void) -> String {
 }
 
 /// Async variant — useful when the block under test fires fire-and-forget
-/// Tasks (e.g. `AnalyticsClient.openURL`) and the log line is emitted
+/// Tasks (e.g. `AnalyticsClient.recordOpenedURL`) and the log line is emitted
 /// asynchronously. Sleeps `settle` before restoring fds so background
 /// Tasks have time to write.
 func captureStderrAndStdout(

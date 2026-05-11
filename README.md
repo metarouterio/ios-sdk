@@ -247,7 +247,7 @@ The analytics client provides the following methods:
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
 - `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
-- `openURL(_ url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. Mirrors UIKit's `application(_:open:options:)` shape. See [Lifecycle Events](#lifecycle-events) for wiring
+- `recordOpenedURL(_ url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. Mirrors UIKit's `application(_:open:options:)` shape. See [Lifecycle Events](#lifecycle-events) for wiring
 
 ### Testing APIs
 
@@ -639,7 +639,7 @@ Only `background → active` transitions emit `Application Opened`. Brief `inact
 
 ### Enabling
 
-Lifecycle tracking is **opt-in** — set `trackLifecycleEvents: true` in `InitOptions` to turn it on. When disabled (the default), no lifecycle events are emitted; calls to `openURL` are silent no-ops for event emission but log a debug warning so misconfiguration ("I'm calling `openURL` but no events fire!") is diagnosable from logs.
+Lifecycle tracking is **opt-in** — set `trackLifecycleEvents: true` in `InitOptions` to turn it on. When disabled (the default), no lifecycle events are emitted; calls to `recordOpenedURL` are silent no-ops for event emission but log a debug warning so misconfiguration ("I'm calling `recordOpenedURL` but no events fire!") is diagnosable from logs.
 
 ```swift
 let options = InitOptions(
@@ -667,7 +667,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
 
         if let urlContext = connectionOptions.urlContexts.first {
-            MetaRouter.Analytics.client().openURL(
+            MetaRouter.Analytics.shared.recordOpenedURL(
                 urlContext.url,
                 sourceApplication: urlContext.options.sourceApplication
             )
@@ -677,7 +677,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     // Resume deep link arrives here on background → active
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         guard let urlContext = URLContexts.first else { return }
-        MetaRouter.Analytics.client().openURL(
+        MetaRouter.Analytics.shared.recordOpenedURL(
             urlContext.url,
             sourceApplication: urlContext.options.sourceApplication
         )
@@ -700,7 +700,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         if let url = launchOptions?[.url] as? URL {
-            MetaRouter.Analytics.client().openURL(
+            MetaRouter.Analytics.shared.recordOpenedURL(
                 url,
                 sourceApplication: launchOptions?[.sourceApplication] as? String
             )
@@ -712,7 +712,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ app: UIApplication,
                      open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        MetaRouter.Analytics.client().openURL(
+        MetaRouter.Analytics.shared.recordOpenedURL(
             url,
             sourceApplication: options[.sourceApplication] as? String
         )
@@ -727,17 +727,17 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
     guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
           let url = userActivity.webpageURL else { return }
-    MetaRouter.Analytics.client().openURL(url, sourceApplication: nil)
+    MetaRouter.Analytics.shared.recordOpenedURL(url, sourceApplication: nil)
 }
 ```
 
 #### Buffer Semantics
 
-`openURL` stores **one** URL until the next `Application Opened` emits. Practical implications:
+`recordOpenedURL` stores **one** URL until the next `Application Opened` emits. Practical implications:
 
 - **Calling twice before an Opened**: only the most recent URL is attached. No queue.
 - **Calling without an Opened ever firing**: the URL sits in the buffer until the next Opened, whenever that is.
-- **After emit**: the buffer is cleared. Subsequent Opened events get no URL unless `openURL` is called again.
+- **After emit**: the buffer is cleared. Subsequent Opened events get no URL unless `recordOpenedURL` is called again.
 
 This shape matches how iOS delivers URLs — at one moment, correlated with one Opened.
 
@@ -757,7 +757,7 @@ func sanitized(_ url: URL) -> URL {
     return components.url ?? url
 }
 
-MetaRouter.Analytics.client().openURL(
+MetaRouter.Analytics.shared.recordOpenedURL(
     sanitized(incomingURL),
     sourceApplication: nil
 )

@@ -520,13 +520,13 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         }
     }
 
-    public func openURL(_ url: URL, sourceApplication: String?) {
+    public func recordOpenedURL(_ url: URL, sourceApplication: String?) {
         guard let coordinator = lifecycleCoordinator else {
-            Logger.warn("openURL called but trackLifecycleEvents is disabled — ignoring")
+            Logger.warn("recordOpenedURL called but trackLifecycleEvents is disabled — ignoring")
             return
         }
         Task {
-            await coordinator.openURL(url, sourceApplication: sourceApplication)
+            await coordinator.recordOpenedURL(url, sourceApplication: sourceApplication)
         }
     }
 }

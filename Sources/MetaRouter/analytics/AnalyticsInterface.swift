@@ -33,5 +33,5 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// `application(_:didFinishLaunchingWithOptions:)` for cold-launch capture
     /// using `launchOptions[.url]` / `[.sourceApplication]`. One-shot — cleared
     /// after the next emit.
-    func openURL(_ url: URL, sourceApplication: String?)
+    func recordOpenedURL(_ url: URL, sourceApplication: String?)
 }
