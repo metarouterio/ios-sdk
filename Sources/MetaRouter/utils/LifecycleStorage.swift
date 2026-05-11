@@ -29,17 +29,13 @@ public struct LifecycleStorage: @unchecked Sendable {
         return userDefaults.string(forKey: LifecycleStorageKey.build.rawValue)
     }
 
-    public func setVersion(_ value: String) {
-        userDefaults.set(value, forKey: LifecycleStorageKey.version.rawValue)
-    }
-
-    public func setBuild(_ value: String) {
-        userDefaults.set(value, forKey: LifecycleStorageKey.build.rawValue)
-    }
-
+    /// Version and build are persisted together to keep them in lockstep — the
+    /// lifecycle emitter treats `(version, build)` as a pair, so independent
+    /// setters would let the two halves drift and trigger spurious
+    /// `Application Updated` events on the next cold launch.
     public func setVersionBuild(version: String, build: String) {
-        setVersion(version)
-        setBuild(build)
+        userDefaults.set(version, forKey: LifecycleStorageKey.version.rawValue)
+        userDefaults.set(build, forKey: LifecycleStorageKey.build.rawValue)
     }
 
     /// Removes the persisted version and build. Test-only seam — production code
