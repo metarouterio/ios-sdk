@@ -43,6 +43,14 @@ public enum MetaRouter {
         }
 
 
+        /// Idiomatic singleton-style accessor matching Apple SDK conventions
+        /// (`URLSession.shared`, `UserDefaults.standard`, `FileManager.default`).
+        /// Returns the same buffered proxy `initialize(with:)` returns — calls
+        /// made before `initialize` are queued and replayed on bind.
+        public static var shared: AnalyticsInterface { proxy }
+
+        @available(*, deprecated, renamed: "shared",
+                   message: "Use MetaRouter.Analytics.shared. client() will be removed in v2.0.")
         public static func client() -> AnalyticsInterface { proxy }
 
         public static func reset() {                       

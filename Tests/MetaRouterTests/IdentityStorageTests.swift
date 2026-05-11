@@ -177,8 +177,21 @@ final class IdentityStorageTests: XCTestCase {
     func testSetUnicodeCharacters() {
         let unicodeString = "用户-123-🎉"
         storage.set(.userId, value: unicodeString)
-        
+
         XCTAssertEqual(storage.get(.userId), unicodeString)
+    }
+
+    func testHasAnyValueDetectsAnyKey() {
+        XCTAssertFalse(storage.hasAnyValue())
+
+        storage.set(.anonymousId, value: "abc")
+        XCTAssertTrue(storage.hasAnyValue())
+
+        storage.clear()
+        XCTAssertFalse(storage.hasAnyValue())
+
+        storage.set(.userId, value: "u")
+        XCTAssertTrue(storage.hasAnyValue())
     }
 }
 

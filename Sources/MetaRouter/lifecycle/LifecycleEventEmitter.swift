@@ -175,7 +175,7 @@ internal actor LifecycleEventEmitter {
     /// Buffers a deep-link URL (and optional source application) to be attached
     /// to the next `Application Opened` event. One-shot — cleared on emit.
     /// Last-write-wins if called multiple times before the next Opened.
-    func openURL(url: String, sourceApplication: String?) {
+    func recordOpenedURL(url: String, sourceApplication: String?) {
         if pendingDeepLink != nil {
             Logger.log("Pending deep link overwritten by newer URL")
         }
