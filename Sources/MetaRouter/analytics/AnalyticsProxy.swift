@@ -105,6 +105,10 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     public func setTracing(_ enabled: Bool) {
         Task { await state.enqueue(.setTracing(enabled)) }
     }
+
+    public func recordOpenedURL(_ url: URL, sourceApplication: String?) {
+        Task { await state.enqueue(.recordOpenedURL(url, sourceApplication)) }
+    }
 }
 
 extension AnalyticsProxy {
@@ -128,6 +132,7 @@ private enum Call {
     case setAdvertisingId(String?)
     case clearAdvertisingId
     case setTracing(Bool)
+    case recordOpenedURL(URL, String?)
 }
 
 private actor ProxyState {
@@ -210,6 +215,7 @@ private actor ProxyState {
         case .setAdvertisingId(let advertisingId): r.setAdvertisingId(advertisingId)
         case .clearAdvertisingId: r.clearAdvertisingId()
         case .setTracing(let enabled): r.setTracing(enabled)
+        case .recordOpenedURL(let url, let source): r.recordOpenedURL(url, sourceApplication: source)
         }
     }
 }

@@ -151,17 +151,48 @@ final class AnalyticsProxyTests: XCTestCase {
     func testResetForwardedWhenBound() async {
         proxy.bind(mockClient)
         proxy.reset()
-        
+
         let forwarded = await TestUtilities.waitFor { [weak self] in
             self?.mockClient.callCount == 1
         }
-        
+
         XCTAssertTrue(forwarded)
         XCTAssertEqual(mockClient.calls.first, .reset)
     }
-    
+
+    func testRecordOpenedURLForwardedWhenBound() async {
+        proxy.bind(mockClient)
+        let url = URL(string: "myapp://promo/42")!
+        proxy.recordOpenedURL(url, sourceApplication: "com.example.referrer")
+
+        let forwarded = await TestUtilities.waitFor { [weak self] in
+            self?.mockClient.callCount == 1
+        }
+
+        XCTAssertTrue(forwarded)
+        XCTAssertEqual(mockClient.calls.first, .recordOpenedURL(url: url, sourceApplication: "com.example.referrer"))
+    }
+
+    func testRecordOpenedURLQueuedBeforeBindAndReplayedInOrder() async {
+        let url1 = URL(string: "myapp://a")!
+        let url2 = URL(string: "myapp://b")!
+        proxy.recordOpenedURL(url1, sourceApplication: nil)
+        proxy.track("between_urls")
+        proxy.recordOpenedURL(url2, sourceApplication: "com.example")
+
+        proxy.bind(mockClient)
+        let allForwarded = await TestUtilities.waitFor { [weak self] in
+            self?.mockClient.callCount == 3
+        }
+
+        XCTAssertTrue(allForwarded)
+        XCTAssertEqual(mockClient.calls[0], .recordOpenedURL(url: url1, sourceApplication: nil))
+        XCTAssertEqual(mockClient.calls[1], .track(event: "between_urls", properties: nil))
+        XCTAssertEqual(mockClient.calls[2], .recordOpenedURL(url: url2, sourceApplication: "com.example"))
+    }
+
     // Call Queuing Tests
-    
+
     func testCallsQueuedWhenNotBound() async {
         // Make calls before binding
         // Add delays to ensure sequential processing due to Task{} concurrency

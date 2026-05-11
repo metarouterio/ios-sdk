@@ -12,6 +12,12 @@ internal struct AnalyticsDependencies: Sendable {
     var dispatcher: Dispatcher?
     var persistentQueue: PersistentEventQueue?
     var networkMonitor: NetworkReachability?
+    var lifecycleStorage: LifecycleStorage?
+    var identityStorage: IdentityStorage?
+    var appContext: AppContext?
+    /// Override the initial app foreground state read at cold launch.
+    /// Tests pass `.active` / `.background` directly to skip the UIKit probe.
+    var initialAppState: AppForegroundState?
 
     static let production = AnalyticsDependencies()
 }
@@ -29,12 +35,18 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
     private var initTask: Task<Void, Never>?
+    private let lifecycleCoordinator: LifecycleCoordinator?
 
     private init(options: InitOptions, deps: AnalyticsDependencies = .production) {
         self.lifecycleState = .initializing
 
         self.options = options
-        self.contextProvider = deps.contextProvider ?? DeviceContextProvider()
+        // Snapshot bundle metadata once — used by both DeviceContextProvider (per-event
+        // app context) and LifecycleEventEmitter (install/update detection). Bundle
+        // is OS-loaded at process start and immutable, so caching is safe.
+        let appContext = deps.appContext ?? .fromBundle()
+        self.contextProvider = deps.contextProvider
+            ?? DeviceContextProvider(appContext: appContext)
         self.identityManager = deps.identityManager ?? IdentityManager(
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
@@ -59,6 +71,25 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             persistentQueue: persistentQueue,
             config: deps.dispatcherConfig ?? Dispatcher.Config(endpointPath: "/v1/batch", timeoutMs: 8000, autoFlushThreshold: 20, initialMaxBatchSize: 100)
         )
+
+        // Build the lifecycle coordinator only when the feature is enabled. Construction
+        // happens BEFORE identityManager.initialize() runs (in initTask), so the
+        // emitter's snapshot of "did identity exist before this launch?" is honest.
+        if options.trackLifecycleEvents {
+            let emitter = LifecycleEventEmitter(
+                enrichmentService: self.enrichmentService,
+                dispatcher: self.dispatcher,
+                storage: deps.lifecycleStorage ?? LifecycleStorage(),
+                identityStorage: deps.identityStorage ?? IdentityStorage(),
+                appContext: appContext
+            )
+            self.lifecycleCoordinator = LifecycleCoordinator(
+                emitter: emitter,
+                initialStateOverride: deps.initialAppState
+            )
+        } else {
+            self.lifecycleCoordinator = nil
+        }
 
         let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
         let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
@@ -85,21 +116,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         }
 
         self.lifecycle = AppLifecycleObserver(
-            onForeground: { [weak self] in
-                guard let self, self.lifecycleState == .ready else { return }
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
-                    await self.dispatcher.flush()
-                }
-            },
-            onBackgroundAsync: { [weak self] in
-                guard let self else { return }
-                await self.dispatcher.flush()
-                await self.dispatcher.flushToDisk()
-                await self.dispatcher.stopFlushLoop()
-                await self.dispatcher.cancelScheduledRetry()
-            }
+            onForeground: { [weak self] in self?.handleForeground() },
+            onBackgroundAsync: { [weak self] in await self?.handleBackground() }
         )
         
         // Wire network monitor: set initial state and subscribe to changes
@@ -146,11 +164,35 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                        writeKey: self.options.writeKey,
                        host: self.options.ingestionHost.absoluteString)
 
+            // Emit cold-launch lifecycle sequence (Installed/Updated then Opened).
+            // Runs after .ready so events flow through the standard track path.
+            await self.lifecycleCoordinator?.onReady()
+
             // Drain any persisted events from a previous session
             if monitor.currentStatus == .connected {
                 await self.dispatcher.drainDiskStoreToNetwork()
             }
         }
+    }
+
+    private func handleForeground() {
+        guard lifecycleState == .ready else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
+            await self.dispatcher.flush()
+            await self.lifecycleCoordinator?.onForeground()
+        }
+    }
+
+    /// Emit `Application Backgrounded` BEFORE flush/disk-flush so the event
+    /// is captured by the same drain that ships pending events to disk.
+    private func handleBackground() async {
+        await lifecycleCoordinator?.onBackground()
+        await dispatcher.flush()
+        await dispatcher.flushToDisk()
+        await dispatcher.stopFlushLoop()
+        await dispatcher.cancelScheduledRetry()
     }
 
     internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {
@@ -475,6 +517,16 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task { [weak self] in
             guard let self else { return }
             await self.dispatcher.setTracing(enabled)
+        }
+    }
+
+    public func recordOpenedURL(_ url: URL, sourceApplication: String?) {
+        guard let coordinator = lifecycleCoordinator else {
+            Logger.warn("recordOpenedURL called but trackLifecycleEvents is disabled — ignoring")
+            return
+        }
+        Task {
+            await coordinator.recordOpenedURL(url, sourceApplication: sourceApplication)
         }
     }
 }
