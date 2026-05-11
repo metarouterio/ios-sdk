@@ -253,9 +253,9 @@ final class LifecycleEventEmitterTests: XCTestCase {
 
     // deep-link buffer
 
-    func testOpenURLAttachesUrlAndReferringApplicationToNextOpened() async {
+    func testRecordOpenedURLAttachesUrlAndReferringApplicationToNextOpened() async {
         let emitter = makeEmitter()
-        await emitter.openURL(
+        await emitter.recordOpenedURL(
             url: "myapp://product/42",
             sourceApplication: "com.example.referrer"
         )
@@ -271,11 +271,11 @@ final class LifecycleEventEmitterTests: XCTestCase {
 
     func testDeepLinkBufferIsOneShot() async {
         let emitter = makeEmitter()
-        await emitter.openURL(url: "myapp://x", sourceApplication: nil)
+        await emitter.recordOpenedURL(url: "myapp://x", sourceApplication: nil)
         await emitter.emitColdLaunchSequence(initialAppState: .active)
         _ = await drain()
 
-        // Second Opened (background→active) without a new openURL should not
+        // Second Opened (background→active) without a new recordOpenedURL should not
         // carry buffered URL.
         await emitter.emitBackgrounded()
         await emitter.emitForegroundFromBackground()
@@ -287,9 +287,9 @@ final class LifecycleEventEmitterTests: XCTestCase {
         XCTAssertNil(opened.properties?["referring_application"])
     }
 
-    func testOpenURLWithoutSourceOmitsReferringApplication() async {
+    func testRecordOpenedURLWithoutSourceOmitsReferringApplication() async {
         let emitter = makeEmitter()
-        await emitter.openURL(url: "myapp://x", sourceApplication: nil)
+        await emitter.recordOpenedURL(url: "myapp://x", sourceApplication: nil)
         await emitter.emitColdLaunchSequence(initialAppState: .active)
 
         let events = await drain()
@@ -323,7 +323,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
     /// foregrounds the app.
     func testDeepLinkSurvivesSuppressedColdLaunch() async {
         let emitter = makeEmitter()
-        await emitter.openURL(url: "myapp://promo/42", sourceApplication: "com.example.referrer")
+        await emitter.recordOpenedURL(url: "myapp://promo/42", sourceApplication: "com.example.referrer")
         await emitter.emitColdLaunchSequence(initialAppState: .background)
         _ = await drain()
 
@@ -343,7 +343,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
         await emitter.emitColdLaunchSequence(initialAppState: .active)
         _ = await drain()
 
-        await emitter.openURL(url: "myapp://x", sourceApplication: nil)
+        await emitter.recordOpenedURL(url: "myapp://x", sourceApplication: nil)
         await emitter.emitBackgrounded()
         let bgEvents = await drain()
         XCTAssertEqual(bgEvents.count, 1)
