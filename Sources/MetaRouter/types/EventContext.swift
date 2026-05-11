@@ -1,7 +1,9 @@
 import Foundation
 
-/// App-specific context information
-public struct AppContext: Codable, Sendable {
+/// App-specific context information. Cached once at SDK init from the bundle
+/// (see `fromBundle`) — `Bundle.main.infoDictionary` is OS-loaded at process
+/// start and immutable, so the cached value is stable for the SDK lifetime.
+public struct AppContext: Codable, Sendable, Equatable {
     public let name: String
     public let version: String
     public let build: String
@@ -12,6 +14,19 @@ public struct AppContext: Codable, Sendable {
         self.version = version
         self.build = build
         self.namespace = namespace
+    }
+
+    public static func fromBundle(_ bundle: Bundle = .main) -> AppContext {
+        let info = bundle.infoDictionary ?? [:]
+        let name = (info["CFBundleDisplayName"] as? String)
+            ?? (info["CFBundleName"] as? String)
+            ?? "Unknown"
+        return AppContext(
+            name: name,
+            version: info["CFBundleShortVersionString"] as? String ?? "unknown",
+            build: info["CFBundleVersion"] as? String ?? "unknown",
+            namespace: bundle.bundleIdentifier ?? "unknown"
+        )
     }
 }
 

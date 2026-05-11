@@ -38,5 +38,16 @@ public struct IdentityStorage: @unchecked Sendable {
         remove(.groupId)
         remove(.advertisingId)
     }
+
+    /// Returns `true` if any identity field is currently persisted.
+    /// Used by `LifecycleEventEmitter` to differentiate a true fresh install
+    /// (no identity, no lifecycle storage) from an existing user upgrading from
+    /// a pre-lifecycle SDK build (identity present, no lifecycle storage).
+    public func hasAnyValue() -> Bool {
+        return get(.anonymousId) != nil
+            || get(.userId) != nil
+            || get(.groupId) != nil
+            || get(.advertisingId) != nil
+    }
 }
 
