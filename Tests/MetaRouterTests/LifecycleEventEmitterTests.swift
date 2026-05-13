@@ -122,14 +122,14 @@ final class LifecycleEventEmitterTests: XCTestCase {
     }
 
     func testColdLaunchVersionDifferenceEmitsUpdatedThenOpened() async {
-        lifecycleStorage.setVersionBuild(version: "1.4.0", build: "37")
+        lifecycleStorage.setVersionBuild(version: "1.5.0", build: "37")
         let emitter = makeEmitter()
         await emitter.emitColdLaunchSequence(initialAppState: .active)
 
         let events = await drain()
         XCTAssertEqual(events.count, 2)
         XCTAssertEqual(events[0].event, "Application Updated")
-        XCTAssertEqual(events[0].properties?["previous_version"], .string("1.4.0"))
+        XCTAssertEqual(events[0].properties?["previous_version"], .string("1.5.0"))
         XCTAssertEqual(events[0].properties?["previous_build"], .string("37"))
         XCTAssertEqual(events[0].properties?["version"], .string("1.5.0"))
         XCTAssertEqual(events[0].properties?["build"], .string("42"))
