@@ -71,6 +71,59 @@ final class WebViewBridgeTests: XCTestCase {
     }
 
     @MainActor
+    func testOriginRulesAreNormalizedSoCaseAndDefaultPortVariantsMatch() {
+        // Scheme/host case and explicit default ports pass validation but would never
+        // match the canonical origin the page reports — normalized at attach so the
+        // allowlist entry a host plausibly writes actually works.
+        XCTAssertEqual(
+            WebViewBridge.normalizeOriginRules(["https://Shop.MetaRouter.com:443"]),
+            ["https://shop.metarouter.com"]
+        )
+        XCTAssertEqual(
+            WebViewBridge.normalizeOriginRules(["HTTP://Example.com:80"]),
+            ["http://example.com"]
+        )
+        // Non-default ports are meaningful and preserved.
+        XCTAssertEqual(
+            WebViewBridge.normalizeOriginRules(["http://localhost:8080", "https://x.com:8443"]),
+            ["http://localhost:8080", "https://x.com:8443"]
+        )
+
+        let webView = WKWebView()
+        let (_, processor) = makeProcessor()
+        XCTAssertTrue(WebViewBridge.attach(
+            webView,
+            allowedOrigins: ["https://Shop.MetaRouter.com:443"],
+            processor: processor
+        ))
+        let script = webView.configuration.userContentController.userScripts[0].source
+        XCTAssertTrue(script.contains(#"["https://shop.metarouter.com"]"#))
+        XCTAssertFalse(script.contains("Shop.MetaRouter.com"))
+    }
+
+    @MainActor
+    func testSecondAttachOnASharedConfigurationIsRefusedWithoutClobberingTheFirst() {
+        let configuration = WKWebViewConfiguration()
+        let webViewA = WKWebView(frame: .zero, configuration: configuration)
+        let webViewB = WKWebView(frame: .zero, configuration: configuration)
+        let (_, processor) = makeProcessor()
+
+        XCTAssertTrue(WebViewBridge.attach(
+            webViewA, allowedOrigins: ["https://a.metarouter.com"], processor: processor
+        ))
+        // Registration lives on the shared controller: re-registering for B would
+        // silently replace A's handler and allowlist, dropping all of A's events.
+        XCTAssertFalse(WebViewBridge.attach(
+            webViewB, allowedOrigins: ["https://b.metarouter.com"], processor: processor
+        ))
+
+        let scripts = configuration.userContentController.userScripts
+        XCTAssertEqual(scripts.count, 1)
+        XCTAssertTrue(scripts[0].source.contains("a.metarouter.com"))
+        XCTAssertFalse(scripts[0].source.contains("b.metarouter.com"))
+    }
+
+    @MainActor
     func testSecondAttachOnTheSameWebViewIsRejected() {
         let webView = WKWebView()
         let (_, processor) = makeProcessor()

@@ -26,6 +26,12 @@ internal enum WebViewBridge {
     // this bookkeeping, and a duplicate attach warns instead of re-registering.
     private static let attached = NSHashTable<WKWebView>.weakObjects()
 
+    // Registration actually lives on the WKUserContentController, which WebViews can
+    // share through a common WKWebViewConfiguration. Tracked separately so a second
+    // attach on a shared configuration is refused instead of silently replacing the
+    // first attach's handler and allowlist.
+    private static let attachedControllers = NSHashTable<WKUserContentController>.weakObjects()
+
     /// - Returns: true if the attach was accepted and registration ran.
     @discardableResult
     static func attach(
@@ -50,15 +56,31 @@ internal enum WebViewBridge {
             )
             return false
         }
+        let origins = normalizeOriginRules(allowedOrigins)
         if attached.contains(webView) {
             Logger.warn("attachWebView ignored: this WebView is already attached.")
+            return false
+        }
+        let controller = webView.configuration.userContentController
+        if attachedControllers.contains(controller) {
+            // A shared WKWebViewConfiguration is already bridged: its handler and
+            // document-start script live on the controller and cover this WebView
+            // too, under the FIRST attach's allowlist. Re-registering would silently
+            // replace that allowlist for every sharing WebView — refuse instead.
+            Logger.warn(
+                "attachWebView ignored: this WebView shares a WKWebViewConfiguration "
+                    + "whose bridge is already registered — the existing origin allowlist "
+                    + "applies. Give each WebView its own configuration to attach with "
+                    + "different origins."
+            )
             return false
         }
         attached.add(webView)
 
         do {
-            try register(webView, allowedOrigins: allowedOrigins, processor: processor)
-            Logger.log("WebView bridge attached (origins=\(allowedOrigins))")
+            try register(webView, allowedOrigins: origins, processor: processor)
+            attachedControllers.add(controller)
+            Logger.log("WebView bridge attached (origins=\(origins))")
         } catch {
             // A registration failure must not crash the host app — the failure mode is
             // no webview capture, logged. Un-track so a retry works.
@@ -67,6 +89,22 @@ internal enum WebViewBridge {
             return false
         }
         return true
+    }
+
+    /// Scheme and host are case-insensitive and default ports are implied, but both
+    /// origin checks (wrapper `location.origin`, native frame origin) compare exact
+    /// canonical strings — an entry like "https://Shop.Example.com:443" would pass
+    /// validation yet never match anything, leaving the bridge silently inert.
+    static func normalizeOriginRules(_ rules: [String]) -> [String] {
+        return rules.map { rule in
+            var origin = rule.lowercased()
+            if origin.hasPrefix("https://"), origin.hasSuffix(":443") {
+                origin = String(origin.dropLast(4))
+            } else if origin.hasPrefix("http://"), origin.hasSuffix(":80") {
+                origin = String(origin.dropLast(3))
+            }
+            return origin
+        }
     }
 
     private static func register(
