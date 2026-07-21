@@ -28,7 +28,32 @@ final class BridgeWrapperScriptTests: XCTestCase {
         let script = try BridgeWrapperScript.build(allowedOrigins: origins)
 
         XCTAssertTrue(script.contains("window.\(BridgeWrapperScript.nativeChannelName)"))
-        XCTAssertTrue(script.contains("channel.postMessage(JSON.stringify(envelope))"))
+        XCTAssertTrue(script.contains("channel.postMessage(payload)"))
+    }
+
+    func testStringifyIsGuardedAndCoercesUnserializableProperties() throws {
+        let script = try BridgeWrapperScript.build(allowedOrigins: origins)
+
+        // A circular reference or BigInt in object properties would otherwise throw a
+        // TypeError out of track()/page() into the page's own calling code.
+        XCTAssertTrue(script.contains("payload = JSON.stringify(envelope);"))
+        XCTAssertTrue(script.contains("envelope.properties = String(props);"))
+        XCTAssertFalse(script.contains("channel.postMessage(JSON.stringify(envelope))"))
+    }
+
+    func testCoercedStringPropertiesAreRejectedByTheParserAsMalformedPayload() throws {
+        // The wrapper's stringify fallback sends properties as a coerced string; this
+        // pins the native half of that contract — a coded error reply, id echoed.
+        let result = BridgeEnvelopeParser.parse(
+            #"{"version":1,"messageId":"m-1","type":"track","name":"x","properties":"[object Object]"}"#
+        )
+
+        guard case .invalid(let invalid) = result else {
+            XCTFail("expected Invalid, got \(result)")
+            return
+        }
+        XCTAssertEqual(invalid.code, .malformedPayload)
+        XCTAssertEqual(invalid.messageId, "m-1")
     }
 
     /// The one transport line that differs from Android: the shim posts through
