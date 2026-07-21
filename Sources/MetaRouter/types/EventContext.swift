@@ -124,6 +124,32 @@ public struct EventContext: Codable, Sendable {
     }
 }
 
+/// Web page facts for events that originate inside a webview. Only present on
+/// bridge-sourced events — native events have no page to describe. Matches the
+/// web SDK's context.page block so downstream config treats webview traffic the
+/// same as browser traffic.
+public struct PageContext: Codable, Sendable, Equatable {
+    public let url: String?
+    public let path: String?
+    public let search: String?
+    public let title: String?
+    public let referrer: String?
+
+    public init(
+        url: String? = nil,
+        path: String? = nil,
+        search: String? = nil,
+        title: String? = nil,
+        referrer: String? = nil
+    ) {
+        self.url = url
+        self.path = path
+        self.search = search
+        self.title = title
+        self.referrer = referrer
+    }
+}
+
 /// Protocol for context collection
 public protocol ContextProvider: Sendable {
     /// Collects and returns the current event context
