@@ -16,14 +16,20 @@ internal final class BridgeDedupStore: @unchecked Sendable {
     static let defaultMaxEntries = 1_000
     static let defaultTtlMillis: Int64 = 5 * 60 * 1000
 
+    // The tick→nanosecond scaling factors are process-constant; fetch once, not on
+    // every clock read on the message path.
+    private static let timebase: mach_timebase_info_data_t = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return info
+    }()
+
     /// Monotonic: immune to wall-clock jumps (NTP, user time changes), and — unlike
     /// `ProcessInfo.systemUptime` or `mach_absolute_time`, which pause in deep sleep —
     /// `mach_continuous_time` is documented to keep incrementing while the device is
     /// asleep, so the window measures real elapsed time, which is what a redelivery
     /// window means.
     static func continuousClockMillis() -> Int64 {
-        var timebase = mach_timebase_info_data_t()
-        mach_timebase_info(&timebase)
         let nanos = mach_continuous_time() * UInt64(timebase.numer) / UInt64(timebase.denom)
         return Int64(nanos / 1_000_000)
     }
