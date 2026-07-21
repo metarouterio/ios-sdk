@@ -65,13 +65,18 @@ internal enum BridgeEnvelopeParser {
     // bounded in bytes, not just entry count — 1000 retained near-64KB ids would be ~64MB.
     static let maxMessageIdChars = 256
 
+    // Shared: JSONDecoder is stateless across decode calls and constructing one per
+    // message is measurable waste on the message path (matches the codebase's shared
+    // coder convention).
+    private static let jsonDecoder = JSONDecoder()
+
     static func parse(_ raw: String) -> BridgeParseResult {
-        // The cap is a UTF-8 *byte* budget, not a char budget.
-        // Fast path: a String's UTF-8 length is always >= its character count, so an
-        // over-length string is definitely oversized and short-circuits before the full
-        // UTF-8 walk. Precise path: exact UTF-8 wire size for the plausible range, where
-        // one character may be several bytes.
-        if raw.count > maxEnvelopeBytes || raw.utf8.count > maxEnvelopeBytes {
+        // The cap is a UTF-8 *byte* budget, not a char budget — a multi-byte payload
+        // must not sneak under the limit because it has few characters. (No char-count
+        // fast path here, unlike the Kotlin SDK: its `.length` is O(1) UTF-16 units,
+        // while Swift's `.count` walks grapheme clusters and costs more than the byte
+        // length it would short-circuit.)
+        if raw.utf8.count > maxEnvelopeBytes {
             return .invalid(.init(
                 code: .payloadTooLarge,
                 message: "envelope exceeds \(maxEnvelopeBytes) bytes"
@@ -80,7 +85,7 @@ internal enum BridgeEnvelopeParser {
 
         let rootValue: CodableValue
         do {
-            rootValue = try JSONDecoder().decode(CodableValue.self, from: Data(raw.utf8))
+            rootValue = try jsonDecoder.decode(CodableValue.self, from: Data(raw.utf8))
         } catch {
             return .invalid(.init(
                 code: .malformedJson,
