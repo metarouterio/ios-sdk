@@ -76,7 +76,9 @@ internal struct BridgeReply: Sendable, Equatable {
         )
     }
 
-    private static func jsonString(_ value: String) -> String {
+    /// Internal because the reply-delivery script embeds the serialized reply as a JS
+    /// string literal, and JSON string escaping is exactly the escaping JS needs.
+    static func jsonString(_ value: String) -> String {
         var out = "\""
         for scalar in value.unicodeScalars {
             switch scalar {

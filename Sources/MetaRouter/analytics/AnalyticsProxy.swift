@@ -1,9 +1,26 @@
 import Foundation
+import WebKit
 
 internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible,
     CustomDebugStringConvertible, Sendable
 {
     private let state = ProxyState()
+
+    // The bridge is owned here, not by a client: clients are disposable (reset()
+    // creates a new one) while attached WebViews live on, and WebKit retains their
+    // message handlers for the WebView's lifetime. The sink resolves "the current
+    // client" at delivery time — a webview attached before init, or surviving a
+    // reset/re-init cycle, delivers to whichever client is bound when its events
+    // arrive, and events arriving with no ready client are NAKed not_ready instead
+    // of silently lost.
+    private let bridgeClient = BridgeClientBox()
+    private let bridgeProcessor: BridgeMessageProcessor
+
+    init() {
+        bridgeProcessor = BridgeMessageProcessor(
+            sink: ProxyBridgeSink(box: bridgeClient)
+        )
+    }
 
     public var description: String {
         return "MetaRouter.Analytics"
@@ -13,21 +30,36 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         return "MetaRouter.Analytics(proxy)"
     }
 
+    // bind/unbind publish the client to the bridge's synchronous mirror BEFORE the
+    // actor call, so bridge events racing a bind resolve the new client rather than
+    // NAKing not_ready after the SDK is in fact ready.
     internal func bind(_ real: AnalyticsInterface) {
+        bridgeClient.set(real)
         Task { await state.bind(real) }
     }
 
     internal func unbind() {
+        bridgeClient.clear()
         Task { await state.unbind() }
     }
 
     // Awaitable helpers for barrier APIs
     func _bindAndReplay(_ real: any AnalyticsInterface) async {
+        bridgeClient.set(real)
         await state.bind(real)
     }
 
     func _unbindAndClear() async {
+        bridgeClient.clear()
         await state.unbind()
+    }
+
+    @MainActor
+    public func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
+        // Registers immediately regardless of bind state — the WebView registrations
+        // only apply to page loads that start afterwards, so deferring to bind-replay
+        // would lose the wrapper on the host's first load.
+        WebViewBridge.attach(webView, allowedOrigins: allowedOrigins, processor: bridgeProcessor)
     }
 
     public func track(_ event: String, properties: [String: Any]?) {
@@ -115,6 +147,41 @@ extension AnalyticsProxy {
     // Internal helper to seed debug info prior to binding
     internal func setBootstrapDebugInfo(writeKey: String, host: String) {
         Task { await state.setBootstrapDebugInfo(writeKey: writeKey, host: host) }
+    }
+}
+
+/// Synchronous mirror of the actor-held bound client. The bridge sink answers on the
+/// main thread in the middle of a message delivery and cannot await actor isolation,
+/// so bind/unbind also publish the client here — the same role Android's
+/// AtomicReference read fills.
+private final class BridgeClientBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var client: (any AnalyticsInterface)?
+
+    func set(_ c: any AnalyticsInterface) {
+        lock.lock()
+        defer { lock.unlock() }
+        client = c
+    }
+
+    func clear() {
+        lock.lock()
+        defer { lock.unlock() }
+        client = nil
+    }
+
+    func get() -> (any AnalyticsInterface)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return client
+    }
+}
+
+private struct ProxyBridgeSink: BridgeEventSink {
+    let box: BridgeClientBox
+
+    func enqueue(_ envelope: BridgeEnvelope) -> Bool {
+        (box.get() as? AnalyticsClient)?.enqueueBridgeEvent(envelope) ?? false
     }
 }
 

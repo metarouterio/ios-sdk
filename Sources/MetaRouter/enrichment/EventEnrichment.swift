@@ -18,8 +18,14 @@ public final class EventEnrichmentService: Sendable {
     public func enrichEvent(
         _ event: EventWithIdentity
     ) async -> EnrichedEventPayload {
-        let context = await contextProvider.getContext()
+        var context = await contextProvider.getContext()
         let messageId = MessageIdGenerator.generate()
+
+        // Bridge-sourced events carry their page facts on the event; native events
+        // leave it nil and context.page stays absent, matching web SDK output.
+        if let page = event.page {
+            context.page = page
+        }
 
         return EnrichedEventPayload(
             type: event.type,
@@ -53,7 +59,8 @@ public final class EventEnrichmentService: Sendable {
             properties: baseEvent.properties,
             traits: baseEvent.traits,
             integrations: baseEvent.integrations,
-            timestamp: timestamp
+            timestamp: timestamp,
+            page: baseEvent.page
         )
 
         return await enrichEvent(eventWithIdentity)

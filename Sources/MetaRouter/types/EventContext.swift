@@ -100,6 +100,9 @@ public struct EventContext: Codable, Sendable {
     public let locale: String
     public let timezone: String
     public let additional: [String: CodableValue]
+    /// Present only on bridge-sourced events — set by enrichment from the event's
+    /// page facts; native events have no page to describe and omit the key entirely.
+    public var page: PageContext?
 
     public init(
         app: AppContext,
@@ -110,7 +113,8 @@ public struct EventContext: Codable, Sendable {
         network: NetworkContext? = nil,
         locale: String,
         timezone: String,
-        additional: [String: CodableValue] = [:]
+        additional: [String: CodableValue] = [:],
+        page: PageContext? = nil
     ) {
         self.app = app
         self.device = device
@@ -121,6 +125,7 @@ public struct EventContext: Codable, Sendable {
         self.locale = locale
         self.timezone = timezone
         self.additional = additional
+        self.page = page
     }
 }
 

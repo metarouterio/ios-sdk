@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 
 /// Injectable dependencies for testing. All fields optional — defaults to production implementations.
@@ -37,8 +38,15 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var initTask: Task<Void, Never>?
     private let lifecycleCoordinator: LifecycleCoordinator?
 
+    // One processor for all attached webviews: bridge messageIds are UUIDs, so a
+    // shared dedup store cannot cross-drop between webviews, and sharing keeps the
+    // memory bound per client rather than per webview.
+    private let bridgeSink = ClientBridgeSink()
+    private let bridgeProcessor: BridgeMessageProcessor
+
     private init(options: InitOptions, deps: AnalyticsDependencies = .production) {
         self.lifecycleState = .initializing
+        self.bridgeProcessor = BridgeMessageProcessor(sink: bridgeSink)
 
         self.options = options
         // Snapshot bundle metadata once — used by both DeviceContextProvider (per-event
@@ -173,6 +181,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                 await self.dispatcher.drainDiskStoreToNetwork()
             }
         }
+
+        // Last: the sink needs self, and self is only safe to hand out once every
+        // stored property above is initialized.
+        self.bridgeSink.client = self
     }
 
     private func handleForeground() {
@@ -528,5 +540,70 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         Task {
             await coordinator.recordOpenedURL(url, sourceApplication: sourceApplication)
         }
+    }
+
+    /// Bridge sink: a validated, deduplicated webview envelope enters the normal event
+    /// path here. The native messageId, timestamp, identity, and device context are all
+    /// applied by the existing enrichment — the envelope only contributes what native
+    /// cannot know: the event itself and the page it happened on.
+    ///
+    /// Returns whether the event entered the delivery path — the same path native
+    /// events take, including its downstream queue-capacity policy — so the bridge's
+    /// ack never claims delivery for an event the client refused.
+    internal func enqueueBridgeEvent(_ envelope: BridgeEnvelope) -> Bool {
+        guard lifecycleState == .ready, !disabled else {
+            Logger.warn("Cannot enqueue bridge event - SDK not ready (state: \(lifecycleState.rawValue))")
+            return false
+        }
+        Task {
+            let enriched = await enrichmentService.enrichEvent(BaseEvent(
+                type: envelope.type.rawValue,
+                event: envelope.name,
+                properties: envelope.properties,
+                page: envelope.page
+            ))
+            await dispatcher.offer(enriched)
+        }
+        return true
+    }
+
+    /// Bridge attach for direct-client usage (`AnalyticsClient.initialize()`). The
+    /// sink enqueues to THIS client instance, which is correct here: a directly
+    /// created client is caller-owned and is never swapped by `reset()` (that only
+    /// replaces the proxy's client). Do NOT mirror this in the proxy path — there the
+    /// handler must resolve the live client at delivery, since it outlives client
+    /// swaps.
+    @MainActor
+    public func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
+        // No lifecycle gate: attach needs nothing from initialized state (the sink's
+        // enqueue has its own READY check), and gating would silently drop attaches
+        // during init — breaking the attach-before-load contract.
+        WebViewBridge.attach(webView, allowedOrigins: allowedOrigins, processor: bridgeProcessor)
+    }
+}
+
+/// Bridge sink for direct-client usage. Holds the client weakly: WebKit retains the
+/// message handler (→ processor → sink) for the WebView's lifetime, and a strong
+/// client reference here would pin a discarded client in memory. A dead client reads
+/// as nil and the message NAKs not_ready — never a silent drop.
+private final class ClientBridgeSink: BridgeEventSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var _client: AnalyticsClient?
+
+    var client: AnalyticsClient? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _client
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _client = newValue
+        }
+    }
+
+    func enqueue(_ envelope: BridgeEnvelope) -> Bool {
+        client?.enqueueBridgeEvent(envelope) ?? false
     }
 }

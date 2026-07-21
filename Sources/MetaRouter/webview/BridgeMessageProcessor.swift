@@ -17,8 +17,11 @@ internal protocol BridgeEventSink {
 /// Rejections are logged natively as well as replied — page JS consoles are rarely
 /// watched in production, so the native log is the primary debugging surface for a
 /// misbehaving integration.
-internal final class BridgeMessageProcessor {
+internal final class BridgeMessageProcessor: @unchecked Sendable {
 
+    // @unchecked: both refs are immutable and the store locks internally; the sink
+    // protocol carries no Sendable bound so sink implementations own their thread
+    // safety. process() itself is single-thread-confined regardless (see below).
     private let sink: BridgeEventSink
     private let dedupStore: BridgeDedupStore
 
