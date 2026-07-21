@@ -54,6 +54,26 @@ final class BridgeEventPlumbingTests: XCTestCase {
         XCTAssertFalse(json.contains("\"page\""))
     }
 
+    func testBridgedPageEventCarriesItsNameInTheEventField() async {
+        // Bridged page events put the name in `event` with no properties["name"] —
+        // the shape the other MetaRouter SDKs emit for page(). The iOS-native
+        // createPageEvent instead writes properties["name"] with a nil `event`; that
+        // pre-existing divergence is pinned here so a change to either side is a
+        // deliberate one, not an accident.
+        let bridged = await enrichment.enrichEvent(BaseEvent(
+            type: EventType.page.rawValue,
+            event: "Checkout",
+            properties: [:],
+            page: PageContext(url: "https://www.metarouter.com/checkout")
+        ))
+        XCTAssertEqual(bridged.event, "Checkout")
+        XCTAssertNil(bridged.properties?["name"])
+
+        let native = await enrichment.createPageEvent(name: "Checkout")
+        XCTAssertNil(native.event)
+        XCTAssertEqual(native.properties?["name"]?.stringValue, "Checkout")
+    }
+
     func testIdentityAndMessageIdComeFromNativeEnrichmentNotTheEnvelope() async {
         let enriched = await enrichment.enrichEvent(BaseEvent(
             type: EventType.track.rawValue,
