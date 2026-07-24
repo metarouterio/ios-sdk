@@ -34,8 +34,12 @@ internal final class BridgeMessageProcessor {
     func process(_ raw: String) -> BridgeReply {
         switch BridgeEnvelopeParser.parse(raw) {
         case .invalid(let invalid):
+            // The reply must stay complete — that is the contract — but the log need
+            // not: for unknown_type the message embeds page-controlled text bounded
+            // only by the envelope cap, and a hostile page should not get to write
+            // 64KB lines into a customer's device log.
             Logger.warn(
-                "WebView bridge message rejected (\(invalid.code.rawValue)): \(invalid.message)"
+                "WebView bridge message rejected (\(invalid.code.rawValue)): \(String(invalid.message.prefix(200)))"
             )
             return BridgeReply.error(invalid)
 
