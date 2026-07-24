@@ -61,9 +61,11 @@ internal enum BridgeEnvelopeParser {
     /// (BatchLimitBytes = 500 KiB) are the dispatcher's concern, absorbed by its 413 backoff.
     static let maxEnvelopeBytes = 64 * 1024
 
-    // UUIDs are 36 chars; a generous ceiling keeps the dedup store's aggregate memory
-    // bounded in bytes, not just entry count — 1000 retained near-64KB ids would be ~64MB.
-    static let maxMessageIdChars = 256
+    // UUIDs are 36 ASCII bytes; a generous ceiling keeps the dedup store's aggregate
+    // memory bounded in bytes, not just entry count — 1000 retained near-64KB ids would
+    // be ~64MB. Measured in UTF-8 bytes deliberately: a character count bounds nothing
+    // here, since one grapheme cluster can carry hundreds of combining marks.
+    static let maxMessageIdBytes = 256
 
     // Shared: JSONDecoder is stateless across decode calls and constructing one per
     // message is measurable waste on the message path (matches the codebase's shared
@@ -72,11 +74,14 @@ internal enum BridgeEnvelopeParser {
 
     static func parse(_ raw: String) -> BridgeParseResult {
         // The cap is a UTF-8 *byte* budget, not a char budget — a multi-byte payload
-        // must not sneak under the limit because it has few characters. (No char-count
-        // fast path here, unlike the Kotlin SDK: its `.length` is O(1) UTF-16 units,
-        // while Swift's `.count` walks grapheme clusters and costs more than the byte
-        // length it would short-circuit.)
-        if raw.utf8.count > maxEnvelopeBytes {
+        // must not sneak under the limit because it has few characters. Encoded once,
+        // measured on the result: strings off WKScriptMessage are lazily-bridged
+        // NSStrings, so a separate utf8.count would walk the string a second time.
+        // (No char-count fast path here, unlike the Kotlin SDK: its `.length` is O(1)
+        // UTF-16 units, while Swift's `.count` walks grapheme clusters and costs more
+        // than the byte length it would short-circuit.)
+        let data = Data(raw.utf8)
+        if data.count > maxEnvelopeBytes {
             return .invalid(.init(
                 code: .payloadTooLarge,
                 message: "envelope exceeds \(maxEnvelopeBytes) bytes"
@@ -85,7 +90,7 @@ internal enum BridgeEnvelopeParser {
 
         let rootValue: CodableValue
         do {
-            rootValue = try jsonDecoder.decode(CodableValue.self, from: Data(raw.utf8))
+            rootValue = try jsonDecoder.decode(CodableValue.self, from: data)
         } catch {
             return .invalid(.init(
                 code: .malformedJson,
@@ -108,12 +113,12 @@ internal enum BridgeEnvelopeParser {
                 message: "messageId is required"
             ))
         }
-        if messageId.count > maxMessageIdChars {
+        if messageId.utf8.count > maxMessageIdBytes {
             // Deliberately not echoing the oversized id back — the reply would amplify
             // the same bytes straight back to the page.
             return .invalid(.init(
                 code: .malformedPayload,
-                message: "messageId exceeds \(maxMessageIdChars) chars"
+                message: "messageId exceeds \(maxMessageIdBytes) bytes"
             ))
         }
 

@@ -35,9 +35,11 @@ final class BridgeWrapperScriptTests: XCTestCase {
         let script = try BridgeWrapperScript.build(allowedOrigins: origins)
 
         // A circular reference or BigInt in object properties would otherwise throw a
-        // TypeError out of track()/page() into the page's own calling code.
+        // TypeError out of track()/page() into the page's own calling code — and so
+        // would the String() coercion itself on a value with no primitive path (a
+        // circular Object.create(null)), hence the inner guard.
         XCTAssertTrue(script.contains("payload = JSON.stringify(envelope);"))
-        XCTAssertTrue(script.contains("envelope.properties = String(props);"))
+        XCTAssertTrue(script.contains("try { envelope.properties = String(props); } catch (e2) { envelope.properties = 'unserializable'; }"))
         XCTAssertFalse(script.contains("channel.postMessage(JSON.stringify(envelope))"))
     }
 

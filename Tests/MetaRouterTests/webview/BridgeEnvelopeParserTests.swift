@@ -4,7 +4,7 @@ import XCTest
 final class BridgeEnvelopeParserTests: XCTestCase {
 
     // Full envelopes exactly as the injected wrapper produces them, every field populated.
-    private let validTrack = #"{"version":1,"messageId":"9b2f2c4e-8b1a-4d7e-9c3f-2e6a1d5b8f01","type":"track","name":"product_viewed","properties":{"sku":"SKU-123","qty":2,"price":19.99},"sentAt":"2026-07-09T14:03:22.114Z","page":{"url":"https://www.metarouter.com/products","title":"Products","referrer":"https://www.metarouter.com/"},"source":{"producer":"wrapper","wrapperVersion":"1.0.0"}}"#
+    private let validTrack = #"{"version":1,"messageId":"9b2f2c4e-8b1a-4d7e-9c3f-2e6a1d5b8f01","type":"track","name":"product_viewed","properties":{"sku":"SKU-123","qty":2,"price":19.99,"flag":true},"sentAt":"2026-07-09T14:03:22.114Z","page":{"url":"https://www.metarouter.com/products","title":"Products","referrer":"https://www.metarouter.com/"},"source":{"producer":"wrapper","wrapperVersion":"1.0.0"}}"#
 
     private let validPage = #"{"version":1,"messageId":"c41d09aa-3e02-4f4b-b0d7-77f21c9d54c2","type":"page","name":"page_view","properties":{"language":"en"},"sentAt":"2026-07-09T14:02:59.801Z","page":{"url":"https://www.metarouter.com/detail","title":"Product details","referrer":"https://www.metarouter.com/products"},"source":{"producer":"wrapper","wrapperVersion":"1.0.0"}}"#
 
@@ -28,6 +28,9 @@ final class BridgeEnvelopeParserTests: XCTestCase {
         XCTAssertEqual(envelope.type, .track)
         XCTAssertEqual(envelope.name, "product_viewed")
         XCTAssertEqual(envelope.properties["sku"]?.stringValue, "SKU-123")
+        // Bools stay bools — the JSONDecoder-over-JSONSerialization choice exists for
+        // this line (NSNumber bridging would silently turn true into 1).
+        XCTAssertEqual(envelope.properties["flag"]?.boolValue, true)
         XCTAssertEqual(envelope.sentAt, "2026-07-09T14:03:22.114Z")
         XCTAssertEqual(envelope.page?.url, "https://www.metarouter.com/products")
         XCTAssertEqual(envelope.page?.title, "Products")
@@ -140,7 +143,7 @@ final class BridgeEnvelopeParserTests: XCTestCase {
     }
 
     func testOversizedMessageIdIsRejectedWithoutEchoingItBack() throws {
-        let hugeId = String(repeating: "x", count: BridgeEnvelopeParser.maxMessageIdChars + 1)
+        let hugeId = String(repeating: "x", count: BridgeEnvelopeParser.maxMessageIdBytes + 1)
         let error = try XCTUnwrap(
             invalid(BridgeEnvelopeParser.parse(
                 #"{"version":1,"messageId":"\#(hugeId)","type":"track","name":"x"}"#
@@ -155,7 +158,7 @@ final class BridgeEnvelopeParserTests: XCTestCase {
     }
 
     func testMessageIdAtExactlyTheCapIsAccepted() throws {
-        let maxId = String(repeating: "x", count: BridgeEnvelopeParser.maxMessageIdChars)
+        let maxId = String(repeating: "x", count: BridgeEnvelopeParser.maxMessageIdBytes)
         let envelope = try XCTUnwrap(
             valid(BridgeEnvelopeParser.parse(
                 #"{"version":1,"messageId":"\#(maxId)","type":"track","name":"x"}"#
@@ -164,6 +167,24 @@ final class BridgeEnvelopeParserTests: XCTestCase {
         )
 
         XCTAssertEqual(envelope.messageId, maxId)
+    }
+
+    func testMessageIdCapIsMeasuredInBytesNotCharacters() throws {
+        // 100 characters of 3-byte "€" = 300 UTF-8 bytes: under the cap by character
+        // count, over it by bytes. A character count bounds nothing — one grapheme
+        // cluster can carry hundreds of combining marks — and the dedup store's memory
+        // ceiling depends on the byte bound being real.
+        let id = String(repeating: "€", count: 100)
+        let error = try XCTUnwrap(
+            invalid(BridgeEnvelopeParser.parse(
+                #"{"version":1,"messageId":"\#(id)","type":"track","name":"x"}"#
+            )),
+            "expected Invalid"
+        )
+
+        XCTAssertEqual(error.code, .malformedPayload)
+        XCTAssertNil(error.messageId)
+        XCTAssertFalse(error.message.contains(id))
     }
 
     func testPagePathAndSearchAreParsed() throws {
