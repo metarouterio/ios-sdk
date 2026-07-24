@@ -86,6 +86,29 @@ final class BridgeDedupStoreTests: XCTestCase {
         XCTAssertEqual(store.size(), 10)
     }
 
+    func testConcurrentMarkForgetAndSizeKeepTheStoreCoherent() {
+        // The lock exists because messages arrive on the WebView's thread while the
+        // SDK may probe from background workers — every other test here is
+        // single-threaded, so this is the one that actually exercises it (and gives
+        // TSan something to chew on). Assertions are invariants, not outcomes: the
+        // interleaving is nondeterministic by design.
+        let store = BridgeDedupStore(maxEntries: 64, ttlMillis: 1_000_000, clock: { 0 })
+
+        DispatchQueue.concurrentPerform(iterations: 2_000) { i in
+            let id = "m-\(i % 100)"
+            _ = store.markIfNew(id)
+            if i % 3 == 0 {
+                store.forget(id)
+            }
+            _ = store.size()
+        }
+
+        XCTAssertLessThanOrEqual(store.size(), 64)
+        // The store still functions after the hammering: a fresh id is new exactly once.
+        XCTAssertTrue(store.markIfNew("post-hammer"))
+        XCTAssertFalse(store.markIfNew("post-hammer"))
+    }
+
     func testExpiredEntryReSightingMovesItToTheBackOfTheEvictionOrder() {
         let store = makeStore(maxEntries: 2, ttlMillis: 1_000)
 
