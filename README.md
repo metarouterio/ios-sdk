@@ -821,12 +821,13 @@ Each bridge message carries a producer-minted ID used to drop duplicate deliveri
 
 ### Lifecycle
 
-Attachment is per-WebView and lives as long as the WebView does:
+Attachment registers on the WebView's configuration (its `WKUserContentController`) and lives as long as that configuration does:
 
 - Attaching before SDK initialization completes is safe — registration happens immediately, so the first page load is captured.
-- `reset()` + re-initialization does **not** require re-attaching: an attached WebView keeps delivering to the current client.
+- `MetaRouter.Analytics.reset()` + re-initialization does **not** require re-attaching: an attached WebView keeps delivering to whichever client is currently bound. (The instance method `analytics.reset()` clears state without swapping the client, so it never affects attachment.)
 - A page loaded *before* attach is never captured — that page's JS world has no bridge. Attach first, then load.
-- Destroying the WebView tears everything down; there is no detach API — attachment is deliberately WebView-scoped, matching the bridge's behavior across the MetaRouter mobile SDKs.
+- **WebViews sharing one `WKWebViewConfiguration` share one bridge registration — and one origin allowlist.** The first attach wins: a second `attachWebView` on a sibling WebView is refused with a warning, and the sibling is bridged under the first attach's origins. Origin scoping is the security boundary, and sharing a configuration shares it — give each WebView its own configuration if they need different allowlists.
+- Destroying the WebView (and with it the configuration) tears everything down; there is no detach API — matching the bridge's behavior across the MetaRouter mobile SDKs.
 
 ### Debugging
 
