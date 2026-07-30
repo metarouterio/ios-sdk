@@ -9,8 +9,11 @@ public enum MetaRouter {
 
     // Synchronous-binding initializer for deterministic testing/flows that require immediate binding
     public static func initializeAndWait(with options: InitOptions) async -> AnalyticsInterface {
-        proxy.setBootstrapDebugInfo(writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
-        let real = AnalyticsClient.initialize(options: options)
+        guard passesConfigGate(options) else {
+            await disableSession()
+            return proxy
+        }
+        let real = AnalyticsClient.initialize(options: options.discardingConfigCallback())
         await store.set(real)
         await proxy._bindAndReplay(real)
         return proxy
@@ -19,9 +22,12 @@ public enum MetaRouter {
    @discardableResult
     public static func createAnalyticsClient(with options: InitOptions) -> AnalyticsInterface {
         // Return the proxy immediately; bind happens async (proxy queues pre-bind calls)
-        proxy.setBootstrapDebugInfo(writeKey: options.writeKey, host: options.ingestionHost.absoluteString)
+        guard passesConfigGate(options) else {
+            Task { await disableSession() }
+            return proxy
+        }
         Task {
-            let real = AnalyticsClient.initialize(options: options)
+            let real = AnalyticsClient.initialize(options: options.discardingConfigCallback())
             if await store.setIfNil(real) {
                 proxy.bind(real)
             } else {
@@ -29,6 +35,34 @@ public enum MetaRouter {
             }
         }
         return proxy
+    }
+
+    /// The release half of the invalid-config contract: construction recorded the
+    /// verdict, this is where it takes effect. On invalid config no client is created —
+    /// the proxy is still returned so call sites never see nil, and the SDK is inert
+    /// for the session, mirroring the 401/403/404 graceful-disable for local config.
+    /// Log and callback fire synchronously on the caller's thread.
+    private static func passesConfigGate(_ options: InitOptions) -> Bool {
+        proxy.setBootstrapDebugInfo(
+            writeKey: options.writeKey,
+            host: options.ingestionHost.absoluteString,
+            configError: options.configError?.description
+        )
+        guard let error = options.configError else { return true }
+        Logger.error("MetaRouter disabled for this session — \(error.description)")
+        options.onConfigError?(error)
+        return false
+    }
+
+    /// An initialize call with invalid config disables the whole session, even a
+    /// re-initialize over a previously valid client: silently keeping the stale
+    /// client running would mask the config error (a bound client also shadows the
+    /// bootstrap debug info that reports it). Fail visible, not quiet. Marking the
+    /// proxy disabled also resolves any suspended awaiters — no bind is coming.
+    private static func disableSession() async {
+        await proxy._unbindAndClear()
+        await store.clear()
+        await proxy._markConfigDisabled()
     }
 
     public enum Analytics {

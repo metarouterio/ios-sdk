@@ -60,9 +60,10 @@ internal enum WebViewBridge {
             )
             return false
         }
-        let insecure = origins.filter {
-            $0.hasPrefix("http://") && $0 != "http://localhost" && !$0.hasPrefix("http://localhost:")
-                && $0 != "http://127.0.0.1" && !$0.hasPrefix("http://127.0.0.1:")
+        let insecure = origins.filter { origin in
+            // Origins here already passed the rule pattern, so URL parsing cannot fail
+            // in practice; an unparseable http rule warns rather than slipping through.
+            origin.hasPrefix("http://") && !LoopbackHost.isLoopback(URL(string: origin)?.host ?? "")
         }
         if !insecure.isEmpty {
             // A cleartext origin is spoofable in transit, and the frame-origin check
