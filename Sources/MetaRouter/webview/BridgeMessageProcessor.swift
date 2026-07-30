@@ -17,8 +17,11 @@ internal protocol BridgeEventSink {
 /// Rejections are logged natively as well as replied — page JS consoles are rarely
 /// watched in production, so the native log is the primary debugging surface for a
 /// misbehaving integration.
-internal final class BridgeMessageProcessor {
+internal final class BridgeMessageProcessor: @unchecked Sendable {
 
+    // @unchecked: both refs are immutable and the store locks internally; the sink
+    // protocol carries no Sendable bound so sink implementations own their thread
+    // safety. process() itself is single-thread-confined regardless (see below).
     private let sink: BridgeEventSink
     private let dedupStore: BridgeDedupStore
 
@@ -59,7 +62,10 @@ internal final class BridgeMessageProcessor {
             // a producer retry is not misread as a duplicate of a message that
             // was in fact lost.
             dedupStore.forget(envelope.messageId)
-            Logger.warn(
+            // Debug-gated: rejection here means not_ready, an expected retryable
+            // state — unlike the malformed-input warn above, it is not actionable
+            // and must not flood a customer's device log during the init window.
+            Logger.log(
                 "WebView bridge event not accepted (messageId=\(envelope.messageId))"
             )
             return BridgeReply.error(

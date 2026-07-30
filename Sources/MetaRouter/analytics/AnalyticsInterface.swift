@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 public protocol AnalyticsInterface: AnyObject, Sendable {
     func track(_ event: String, properties: [String: Any]?)
@@ -34,4 +35,28 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// using `launchOptions[.url]` / `[.sourceApplication]`. One-shot — cleared
     /// after the next emit.
     func recordOpenedURL(_ url: URL, sourceApplication: String?)
+
+    /// Attach the webview event bridge to a host-owned WebView.
+    ///
+    /// Pages loaded from `allowedOrigins` get a `window.metarouterBridge` object with
+    /// `track(name, properties)` and `page(name, properties)` methods. Calls are
+    /// enveloped in the page, validated and deduplicated natively, enriched with the
+    /// device's identity and context, and delivered through the normal event queue —
+    /// webview activity and native activity arrive as one user.
+    ///
+    /// Call this when the WebView is created, **before** `load(_:)` — the
+    /// registrations only apply to page loads that start afterwards. The SDK never
+    /// discovers webviews on its own: the host owns the WebView, this call is the
+    /// explicit hand-off. Main-actor-isolated because WebView configuration is
+    /// main-thread work; create the WebView and attach in the same place.
+    ///
+    /// Origins must be explicit (`https://host[:port]`); the wildcard `"*"` is
+    /// rejected, since origin scoping is what keeps arbitrary pages from injecting
+    /// events into the native queue.
+    ///
+    /// - Parameters:
+    ///   - webView: The host-owned WebView to bridge
+    ///   - allowedOrigins: Explicit page origins allowed to produce events
+    @MainActor
+    func attachWebView(_ webView: WKWebView, allowedOrigins: [String])
 }

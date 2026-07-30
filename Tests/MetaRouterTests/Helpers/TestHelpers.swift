@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 @testable import MetaRouter
 
@@ -159,6 +160,11 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
     func recordOpenedURL(_ url: URL, sourceApplication: String?) {
         recordCall(.recordOpenedURL(url: url, sourceApplication: sourceApplication))
     }
+
+    @MainActor
+    func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
+        recordCall(.attachWebView(allowedOrigins: allowedOrigins))
+    }
 }
 
 // Analytics Call Recording
@@ -180,6 +186,7 @@ enum AnalyticsCall: Equatable {
     case clearAdvertisingId
     case setTracing(enabled: Bool)
     case recordOpenedURL(url: URL, sourceApplication: String?)
+    case attachWebView(allowedOrigins: [String])
 }
 
 // CodableValue Test Extensions

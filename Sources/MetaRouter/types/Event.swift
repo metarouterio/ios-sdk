@@ -11,6 +11,8 @@ public struct BaseEvent: Codable, Sendable {
     public let traits: [String: CodableValue]?
     public let integrations: [String: CodableValue]?
     public let timestamp: String?
+    /// Set only by the webview bridge — carries the page facts into context.page.
+    public let page: PageContext?
 
     public init(
         type: String,
@@ -21,7 +23,8 @@ public struct BaseEvent: Codable, Sendable {
         properties: [String: CodableValue]? = nil,
         traits: [String: CodableValue]? = nil,
         integrations: [String: CodableValue]? = nil,
-        timestamp: String? = nil
+        timestamp: String? = nil,
+        page: PageContext? = nil
     ) {
         self.type = type
         self.event = event
@@ -32,6 +35,7 @@ public struct BaseEvent: Codable, Sendable {
         self.traits = traits
         self.integrations = integrations
         self.timestamp = timestamp
+        self.page = page
     }
 }
 
@@ -46,6 +50,8 @@ public struct EventWithIdentity: Codable, Sendable {
     public let traits: [String: CodableValue]?
     public let integrations: [String: CodableValue]?
     public let timestamp: String
+    /// Set only by the webview bridge — carries the page facts into context.page.
+    public let page: PageContext?
 
     public init(
         type: String,
@@ -56,7 +62,8 @@ public struct EventWithIdentity: Codable, Sendable {
         properties: [String: CodableValue]? = nil,
         traits: [String: CodableValue]? = nil,
         integrations: [String: CodableValue]? = nil,
-        timestamp: String
+        timestamp: String,
+        page: PageContext? = nil
     ) {
         self.type = type
         self.event = event
@@ -67,6 +74,7 @@ public struct EventWithIdentity: Codable, Sendable {
         self.traits = traits
         self.integrations = integrations
         self.timestamp = timestamp
+        self.page = page
     }
 }
 
