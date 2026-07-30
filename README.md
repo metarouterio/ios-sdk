@@ -20,6 +20,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 - [Debugging](#debugging)
 - [Identity Persistence](#identity-persistence)
 - [Lifecycle Events](#lifecycle-events)
+- [WebView Bridge](#webview-bridge)
 - [Event Queue Persistence](#event-queue-persistence)
 - [Advertising ID (IDFA)](#advertising-id-idfa)
 - [Using the alias() Method](#using-the-alias-method)
@@ -248,6 +249,7 @@ The analytics client provides the following methods:
 - `getDebugInfo() async`: Get current debug information
 - `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
 - `recordOpenedURL(_ url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. Mirrors UIKit's `application(_:open:options:)` shape. See [Lifecycle Events](#lifecycle-events) for wiring
+- `attachWebView(_ webView: WKWebView, allowedOrigins: [String])`: Capture track/page events emitted by pages inside a host-owned WebView. Main-actor-isolated. See [WebView Bridge](#webview-bridge) for wiring details
 
 ### Testing APIs
 
@@ -764,6 +766,80 @@ MetaRouter.Analytics.shared.recordOpenedURL(
 ```
 
 The SDK does not auto-instrument deep-link capture (no method swizzling, no `UIApplicationDelegate` proxy). Manual forwarding keeps integration explicit, avoids conflicts with other SDKs that swizzle (Firebase, Adjust, AppsFlyer, Branch), and gives the host control over what data is captured.
+
+## WebView Bridge
+
+Hybrid apps render some screens as web content inside a WebView. Without extra work that activity is invisible to MetaRouter — or worse, double-tracked by an in-page analytics setup on a separate identity. The webview bridge captures events fired by page JavaScript and delivers them through the native SDK, so webview and native activity arrive at your cluster as **one user, one pipeline**: native identity, device context, and the page's own facts on every event.
+
+### Attaching
+
+The SDK never discovers WebViews on its own — the host attaches each one explicitly, at creation time, **before** `load(_:)` (the registrations only affect page loads that start afterwards). `attachWebView` is main-actor-isolated, so call it where you configure the WebView:
+
+```swift
+let webView = WKWebView()
+MetaRouter.Analytics.shared.attachWebView(webView, allowedOrigins: ["https://www.example.com"])
+webView.load(URLRequest(url: URL(string: "https://www.example.com/checkout")!))
+```
+
+Origins must be explicit `scheme://host[:port]` rules — no wildcards, paths, or trailing slashes. Origin scoping is the bridge's security boundary: it is what keeps arbitrary pages (ads, redirects) loaded in the same WebView from injecting events into your event stream. WebKit does not scope message channels to origins the way Android's platform API does, so the SDK enforces the allowlist itself, in two places: the injected wrapper defines nothing on non-allowlisted pages, and the native handler independently checks every message's frame origin — a message from a non-allowlisted frame is ignored without a reply.
+
+### What the page sees
+
+Pages loaded from an allowed origin get a `window.metarouterBridge` object with two methods. Properties may be a plain object or a JSON string of one:
+
+```js
+window.metarouterBridge.page('page_view', { section: 'checkout' });
+window.metarouterBridge.track('product_viewed', JSON.stringify({ sku: 'SKU-123' }));
+```
+
+A typical integration is a small shim in the page's tag manager, branching page views to `page()` and everything else to `track()`:
+
+```js
+function logEvent(name, params) {
+  var value = JSON.stringify(params);
+  if (!window.metarouterBridge) return; // origin not allowed, or attached after load
+  if (name === 'page_view') {
+    window.metarouterBridge.page(name, value);
+  } else {
+    window.metarouterBridge.track(name, value);
+  }
+}
+```
+
+The page-visible surface is identical across the MetaRouter mobile SDKs, so one tag-manager integration serves both platforms.
+
+### What arrives at the cluster
+
+Bridged events go through the same enrichment as native events. The page contributes only what native cannot know; native contributes everything durable:
+
+| From the page (stamped at call time) | From the SDK (merged at receipt) |
+|---|---|
+| event type (`track`/`page`), name, properties | `anonymousId` / `userId`, device + app context |
+| `context.page` — url, path, search, title, referrer | `messageId`, `timestamp` |
+
+Each bridge message carries a producer-minted ID used to drop duplicate deliveries (bounded window). The page receives an ack or a coded error for every message on the underlying channel — malformed input is rejected, never silently dropped, and events arriving while the SDK cannot accept them are answered `not_ready` rather than acked.
+
+### Lifecycle
+
+Attachment registers on the WebView's configuration (its `WKUserContentController`) and lives as long as that configuration does:
+
+- Attaching before SDK initialization completes is safe — registration happens immediately, so the first page load is captured.
+- `MetaRouter.Analytics.reset()` + re-initialization does **not** require re-attaching: an attached WebView keeps delivering to whichever client is currently bound. (The instance method `analytics.reset()` clears state without swapping the client, so it never affects attachment.)
+- A page loaded *before* attach is never captured — that page's JS world has no bridge. Attach first, then load.
+- **WebViews sharing one `WKWebViewConfiguration` share one bridge registration — and one origin allowlist.** The first attach wins: a second `attachWebView` on a sibling WebView is refused with a warning, and the sibling is bridged under the first attach's origins. Origin scoping is the security boundary, and sharing a configuration shares it — give each WebView its own configuration if they need different allowlists.
+- Destroying the WebView (and with it the configuration) tears everything down; there is no detach API — matching the bridge's behavior across the MetaRouter mobile SDKs.
+
+### Debugging
+
+- SDK logs (enable with `debug: true` or `enableDebugLogging()`) show attach confirmations, rejected messages with their error codes, and duplicate drops — the primary debugging surface.
+- From Safari's Develop menu (device or simulator → your app's WebView), check `typeof window.metarouterBridge` to verify injection, and read the native replies live with `window.__metaRouterNativeChannel.onmessage = e => console.log(e.data)`.
+- To exercise the bridge against a local test page without hosting it, load the HTML with `loadHTMLString(_:baseURL:)` and an https `baseURL` — WebKit gives the document that base URL's security origin, so the allowlist behaves exactly as it does against a production domain.
+
+### Why no auto-attach?
+
+- **The host owns the WebView.** Auto-discovering WebViews would require instrumentation the SDK deliberately avoids, and would capture WebViews (login pages, third-party content) the host never intended to track.
+- **Origins are a policy decision.** Only the host knows which origins are its own content; a default allowlist would be either useless or unsafe.
+- **Timing is load-bearing.** Registrations only affect subsequent page loads, so the attach point must sit in the host's WebView-creation path — exactly where an explicit call naturally lives.
 
 ## Event Queue Persistence
 
