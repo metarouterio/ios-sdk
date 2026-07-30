@@ -43,7 +43,11 @@ internal enum WebViewBridge {
             Logger.warn("attachWebView called with no allowed origins — ignoring.")
             return false
         }
-        let invalid = allowedOrigins.filter {
+        // Normalize BEFORE validating: the pattern is case-sensitive, so a
+        // case-variant scheme would otherwise be rejected as a format problem the
+        // host doesn't have — and everything downstream reasons about one list.
+        let origins = normalizeOriginRules(allowedOrigins)
+        let invalid = origins.filter {
             $0.range(of: originRule, options: .regularExpression) == nil
         }
         if !invalid.isEmpty {
@@ -56,7 +60,19 @@ internal enum WebViewBridge {
             )
             return false
         }
-        let origins = normalizeOriginRules(allowedOrigins)
+        let insecure = origins.filter {
+            $0.hasPrefix("http://") && $0 != "http://localhost" && !$0.hasPrefix("http://localhost:")
+                && $0 != "http://127.0.0.1" && !$0.hasPrefix("http://127.0.0.1:")
+        }
+        if !insecure.isEmpty {
+            // A cleartext origin is spoofable in transit, and the frame-origin check
+            // then trusts an attacker-influenceable value. Fine for local development;
+            // warn (not reject) so a misconfigured production allowlist is visible.
+            Logger.warn(
+                "attachWebView: cleartext origin rules \(insecure) — use https origins "
+                    + "outside local development."
+            )
+        }
         if attached.contains(webView) {
             Logger.warn("attachWebView ignored: this WebView is already attached.")
             return false
@@ -118,14 +134,20 @@ internal enum WebViewBridge {
             allowedOrigins: Set(allowedOrigins)
         )
 
+        // Build the script FIRST: it is the only step here that can throw, and the
+        // un-track-on-failure retry promise in attach() holds only if a failed
+        // registration leaves the controller untouched.
+        let script = try BridgeWrapperScript.build(allowedOrigins: allowedOrigins)
+
         // Remove-then-add: registering a duplicate handler name raises an uncatchable
         // NSException inside WebKit, and two WebViews sharing one WKWebViewConfiguration
         // would hit it even though each WebView is only attached once. Removal is the
-        // API Android lacks (there the duplicate-name throw is caught instead).
+        // API Android lacks (there the duplicate-name throw is caught instead). The
+        // channel name is SDK-reserved: a host handler registered under it would be
+        // silently replaced here.
         controller.removeScriptMessageHandler(forName: BridgeWrapperScript.nativeChannelName)
         controller.add(handler, name: BridgeWrapperScript.nativeChannelName)
 
-        let script = try BridgeWrapperScript.build(allowedOrigins: allowedOrigins)
         // forMainFrameOnly false: allowlisted iframes may produce events, matching
         // Android's behavior; the handler checks every message's frame origin, so a
         // non-allowlisted iframe gets neither the wrapper nor a listening ear.

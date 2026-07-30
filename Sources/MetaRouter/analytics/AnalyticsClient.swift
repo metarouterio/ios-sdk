@@ -547,12 +547,14 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     /// applied by the existing enrichment — the envelope only contributes what native
     /// cannot know: the event itself and the page it happened on.
     ///
-    /// Returns whether the event entered the delivery path — the same path native
-    /// events take, including its downstream queue-capacity policy — so the bridge's
-    /// ack never claims delivery for an event the client refused.
+    /// Returns whether the event was accepted for enrichment and dispatch — false NAKs
+    /// `not_ready`, un-records the id from dedup, and the producer's retry works.
     internal func enqueueBridgeEvent(_ envelope: BridgeEnvelope) -> Bool {
         guard lifecycleState == .ready, !disabled else {
-            Logger.warn("Cannot enqueue bridge event - SDK not ready (state: \(lifecycleState.rawValue))")
+            // Debug-gated: not_ready is an expected, retryable state (init window,
+            // post-reset), and a page firing in a loop must not flood a customer's
+            // device log with warnings.
+            Logger.log("Cannot enqueue bridge event - SDK not ready (state: \(lifecycleState.rawValue))")
             return false
         }
         Task {

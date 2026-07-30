@@ -89,11 +89,14 @@ final class WebViewBridgeTests: XCTestCase {
             ["http://localhost:8080", "https://x.com:8443"]
         )
 
+        // End-to-end through attach, with the case variance on the SCHEME: rules are
+        // normalized before validation, so a case-variant scheme must register rather
+        // than being rejected as a format problem the host doesn't have.
         let webView = WKWebView()
         let (_, processor) = makeProcessor()
         XCTAssertTrue(WebViewBridge.attach(
             webView,
-            allowedOrigins: ["https://Shop.MetaRouter.com:443"],
+            allowedOrigins: ["HTTPS://Shop.MetaRouter.com:443"],
             processor: processor
         ))
         let script = webView.configuration.userContentController.userScripts[0].source
