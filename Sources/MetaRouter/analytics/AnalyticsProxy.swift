@@ -60,6 +60,10 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         await state.markConfigDisabled()
     }
 
+    func _clearConfigDisabled() async {
+        await state.clearConfigDisabled()
+    }
+
     @MainActor
     public func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
         // Registers immediately regardless of bind state — the WebView registrations
@@ -236,6 +240,17 @@ private actor ProxyState {
     func unbind() {
         real = nil
         queue.removeAll()
+        // reset() tears down a session without refusing one. Leaving the flag set
+        // would make every later awaiting call resolve degraded for a session that
+        // was never gated. disableSession() marks it again after this returns.
+        configDisabled = false
+    }
+
+    /// Clears the refusal ahead of a bind that is still being built, so callers
+    /// awaiting in the pre-bind window suspend for the incoming client instead of
+    /// resolving degraded against the previous session's verdict.
+    func clearConfigDisabled() {
+        configDisabled = false
     }
 
     func markConfigDisabled() {

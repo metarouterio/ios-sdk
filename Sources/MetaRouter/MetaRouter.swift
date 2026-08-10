@@ -13,6 +13,7 @@ public enum MetaRouter {
             await disableSession()
             return proxy
         }
+        await proxy._clearConfigDisabled()
         let real = AnalyticsClient.initialize(options: options.discardingConfigCallback())
         await store.set(real)
         await proxy._bindAndReplay(real)
@@ -27,6 +28,7 @@ public enum MetaRouter {
             return proxy
         }
         Task {
+            await proxy._clearConfigDisabled()
             let real = AnalyticsClient.initialize(options: options.discardingConfigCallback())
             if await store.setIfNil(real) {
                 proxy.bind(real)

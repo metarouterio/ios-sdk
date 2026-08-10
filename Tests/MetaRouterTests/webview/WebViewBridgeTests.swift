@@ -71,6 +71,21 @@ final class WebViewBridgeTests: XCTestCase {
     }
 
     @MainActor
+    func testAttachAcceptsBracketedIPv6LoopbackOrigins() {
+        let webView = WKWebView()
+        let (_, processor) = makeProcessor()
+
+        // The IPv6 loopback is a normal local-development origin. It has to clear the
+        // rule pattern to reach the loopback check, or the cleartext-http allowance
+        // for ::1 never applies to the bridge at all.
+        XCTAssertTrue(WebViewBridge.attach(webView, allowedOrigins: ["http://[::1]:3000"], processor: processor))
+
+        // A bracketed literal is still a host, not a licence to skip the format rules.
+        let other = WKWebView()
+        XCTAssertFalse(WebViewBridge.attach(other, allowedOrigins: ["http://[::1]:3000/path"], processor: processor))
+    }
+
+    @MainActor
     func testOriginRulesAreNormalizedSoCaseAndDefaultPortVariantsMatch() {
         // Scheme/host case and explicit default ports pass validation but would never
         // match the canonical origin the page reports — normalized at attach so the

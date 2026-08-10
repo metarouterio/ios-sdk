@@ -338,4 +338,28 @@ final class InitOptionsTests: XCTestCase {
 
         await MetaRouter.Analytics.resetAndWait()
     }
+
+    func testResetClearsTheConfigRefusalSoTheNextSessionCanBind() async {
+        await MetaRouter.Analytics.resetAndWait()
+        let (invalid, _) = withCapturedAsserts {
+            InitOptions(writeKey: "", ingestionHost: "https://example.com")
+        }
+        _ = await MetaRouter.Analytics.initializeAndWait(with: invalid)
+
+        // reset() ends the refused session. The refusal must not survive it: a
+        // following valid init has to produce a live client, and awaiting APIs must
+        // resolve against that client rather than the previous session's verdict.
+        await MetaRouter.Analytics.resetAndWait()
+
+        let valid = InitOptions(writeKey: "wk", ingestionHost: "https://example.com")
+        let analytics = await MetaRouter.Analytics.initializeAndWait(with: valid)
+
+        let anonymousId = await analytics.getAnonymousId()
+        XCTAssertFalse(anonymousId.isEmpty, "recovered session must resolve a real anonymousId, not the degraded empty string")
+
+        let info = await analytics.getDebugInfo()
+        XCTAssertNil(info["configError"], "stale config error must not follow a reset into a healthy session")
+
+        await MetaRouter.Analytics.resetAndWait()
+    }
 }

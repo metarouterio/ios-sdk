@@ -18,8 +18,10 @@ import WebKit
 internal enum WebViewBridge {
 
     // Origin rules must be scheme://host[:port] — anything else (paths, trailing
-    // slashes, wildcards) silently never matches the exact-origin checks.
-    private static let originRule = "^https?://[A-Za-z0-9.-]+(:\\d+)?$"
+    // slashes, wildcards) silently never matches the exact-origin checks. The host
+    // alternation carries bracketed IPv6 literals so http://[::1]:3000 reaches the
+    // loopback check below instead of being rejected as a malformed rule.
+    private static let originRule = "^https?://([A-Za-z0-9.-]+|\\[[0-9A-Fa-f:]+\\])(:\\d+)?$"
 
     // WebKit retains the registered handler for the userContentController's lifetime;
     // tracking attached WebViews weakly means a destroyed WebView is never pinned by
