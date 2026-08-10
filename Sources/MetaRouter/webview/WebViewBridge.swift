@@ -18,8 +18,10 @@ import WebKit
 internal enum WebViewBridge {
 
     // Origin rules must be scheme://host[:port] — anything else (paths, trailing
-    // slashes, wildcards) silently never matches the exact-origin checks.
-    private static let originRule = "^https?://[A-Za-z0-9.-]+(:\\d+)?$"
+    // slashes, wildcards) silently never matches the exact-origin checks. The host
+    // alternation carries bracketed IPv6 literals so http://[::1]:3000 reaches the
+    // loopback check below instead of being rejected as a malformed rule.
+    private static let originRule = "^https?://([A-Za-z0-9.-]+|\\[[0-9A-Fa-f:]+\\])(:\\d+)?$"
 
     // WebKit retains the registered handler for the userContentController's lifetime;
     // tracking attached WebViews weakly means a destroyed WebView is never pinned by
@@ -60,9 +62,10 @@ internal enum WebViewBridge {
             )
             return false
         }
-        let insecure = origins.filter {
-            $0.hasPrefix("http://") && $0 != "http://localhost" && !$0.hasPrefix("http://localhost:")
-                && $0 != "http://127.0.0.1" && !$0.hasPrefix("http://127.0.0.1:")
+        let insecure = origins.filter { origin in
+            // Origins here already passed the rule pattern, so URL parsing cannot fail
+            // in practice; an unparseable http rule warns rather than slipping through.
+            origin.hasPrefix("http://") && !LoopbackHost.isLoopback(URL(string: origin)?.host ?? "")
         }
         if !insecure.isEmpty {
             // A cleartext origin is spoofable in transit, and the frame-origin check
