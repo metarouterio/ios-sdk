@@ -7,20 +7,31 @@ final class EventEnrichmentTests: XCTestCase {
     var enrichmentService: EventEnrichmentService!
     var mockContextProvider: MockContextProvider!
     var mockIdentityManager: IdentityManager!
+    private var sessionSuiteName: String!
+    private var sessionDefaults: UserDefaults!
 
     override func setUp() async throws {
         try await super.setUp()
         mockContextProvider = MockContextProvider()
         mockIdentityManager = IdentityManager(writeKey: "test-write-key", host: "https://test.com")
         await mockIdentityManager.initialize()
+        // Internal init with suite-isolated session storage: the public
+        // convenience init would mint sessions into UserDefaults.standard,
+        // polluting the developer's real defaults across test runs.
+        sessionSuiteName = "com.metarouter.test.enrichmentSession.\(UUID().uuidString)"
+        sessionDefaults = UserDefaults(suiteName: sessionSuiteName)
         enrichmentService = EventEnrichmentService(
             contextProvider: mockContextProvider,
             identityManager: mockIdentityManager,
-            writeKey: "test-write-key"
+            writeKey: "test-write-key",
+            sessionManager: SessionManager(storage: SessionStorage(userDefaults: sessionDefaults))
         )
     }
 
     override func tearDown() {
+        sessionDefaults.removePersistentDomain(forName: sessionSuiteName)
+        sessionDefaults = nil
+        sessionSuiteName = nil
         enrichmentService = nil
         mockContextProvider = nil
         mockIdentityManager = nil

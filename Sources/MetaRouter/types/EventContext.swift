@@ -103,6 +103,15 @@ public struct EventContext: Codable, Sendable {
     /// Present only on bridge-sourced events — set by enrichment from the event's
     /// page facts; native events have no page to describe and omit the key entirely.
     public var page: PageContext?
+    /// Session (and future provider) values keyed by provider name, set per event
+    /// by enrichment — the mobile counterpart of the web SDK's `context.providers`
+    /// block, so pipeline mappings read one path from both platforms. Session
+    /// values change over the app's lifetime, so this is `var` and assigned at
+    /// enrichment time like `page`, never captured in the provider's cached
+    /// context. Optional is load-bearing: enriched events are JSON-persisted to
+    /// disk, and a decoder that requires this key would silently discard every
+    /// event queued by a build that predates it.
+    public var providers: [String: [String: CodableValue]]?
 
     public init(
         app: AppContext,
@@ -114,7 +123,8 @@ public struct EventContext: Codable, Sendable {
         locale: String,
         timezone: String,
         additional: [String: CodableValue] = [:],
-        page: PageContext? = nil
+        page: PageContext? = nil,
+        providers: [String: [String: CodableValue]]? = nil
     ) {
         self.app = app
         self.device = device
@@ -126,6 +136,7 @@ public struct EventContext: Codable, Sendable {
         self.timezone = timezone
         self.additional = additional
         self.page = page
+        self.providers = providers
     }
 }
 
