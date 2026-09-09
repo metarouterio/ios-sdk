@@ -129,6 +129,10 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         return await state.getAnonymousId()
     }
 
+    public func getSessionId() async -> String? {
+        return await state.getSessionId()
+    }
+
     public func getDebugInfo() async -> [String: CodableValue] {
         return await state.getDebugInfo()
     }
@@ -297,6 +301,17 @@ private actor ProxyState {
         // normal operation still awaits initialization and never returns empty.
         guard let client = await awaitClient() else { return "" }
         return await client.getAnonymousId()
+    }
+
+    func getSessionId() async -> String? {
+        // No await-for-bind, unlike getAnonymousId: sessions are minted by
+        // events, so before a client is bound "nil — no session yet" is the
+        // correct, documented answer. Suspending here would turn a prompt
+        // diagnostic read into a process-lifetime hang whenever initialize()
+        // is never called (or a reset() is never followed by one). The same
+        // nil also serves the config-disabled session without a sentinel.
+        guard let client = real else { return nil }
+        return await client.getSessionId()
     }
 
     func getDebugInfo() async -> [String: CodableValue] {

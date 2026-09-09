@@ -15,6 +15,8 @@ internal struct AnalyticsDependencies: Sendable {
     var networkMonitor: NetworkReachability?
     var lifecycleStorage: LifecycleStorage?
     var identityStorage: IdentityStorage?
+    var sessionStorage: SessionStorage?
+    var sessionManager: SessionManager?
     var appContext: AppContext?
     /// Override the initial app foreground state read at cold launch.
     /// Tests pass `.active` / `.background` directly to skip the UIKit probe.
@@ -29,6 +31,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private let options: InitOptions
     private let contextProvider: ContextProvider
     private let identityManager: IdentityManager
+    private let sessionManager: SessionManager
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
     private let networkMonitor: NetworkReachability?
@@ -59,10 +62,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
         )
+        // The client and the enrichment service must share ONE SessionManager:
+        // enrichment touches it per event, and the client reads it for
+        // diagnostics — a second instance would report a different session
+        // than the one being stamped.
+        self.sessionManager = deps.sessionManager ?? SessionManager(
+            storage: deps.sessionStorage ?? SessionStorage(),
+            timeoutMinutes: options.sessionTimeoutMinutes
+        )
         self.enrichmentService = deps.enrichmentService ?? EventEnrichmentService(
             contextProvider: self.contextProvider,
             identityManager: self.identityManager,
-            writeKey: options.writeKey
+            writeKey: options.writeKey,
+            sessionManager: self.sessionManager
         )
 
         let diskStore = DiskStorage()
@@ -101,8 +113,22 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
         let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
         let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
-        
+
         self.networkMonitor = monitor
+
+        // Installed synchronously and BEFORE any Task this initializer spawns:
+        // the init task's cold-launch lifecycle events (and the first pre-bind
+        // buffered event replayed at bind) can mint the install's first session
+        // as soon as those tasks are scheduled — an install that runs after any
+        // spawn point can lose that mint's fire and silently drop the first
+        // `Session Started`, which never recurs for the session. The event
+        // rides the normal track path, so it is enriched and stamped with the
+        // session it announces.
+        if options.fireSessionStarted {
+            sessionManager.onSessionStart.set { [weak self] _ in
+                self?.track(SessionEventNames.sessionStarted)
+            }
+        }
 
         // Enable debug logging if requested
         if options.debug {
@@ -386,6 +412,13 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         return await identityManager.getOrCreateAnonymousId()
     }
 
+    public func getSessionId() async -> String? {
+        // peek, not touch: a diagnostic read is not user activity and must not
+        // extend the inactivity window. Nil until the first event of the
+        // process has been enriched — sessions are minted by events, not reads.
+        return await sessionManager.peek()?.sessionId
+    }
+
     public func getDebugInfo() async -> [String: CodableValue] {
         // Mask writeKey to show only last 4 characters
         let maskedKey = options.writeKey.count > 4 
@@ -427,7 +460,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         if let gid = groupId {
             info["groupId"] = .string(gid)
         }
-        
+        if let session = await sessionManager.peek() {
+            info["sessionId"] = .string(session.sessionId)
+            info["sessionCount"] = .int(session.sessionCount)
+        }
+
         return info
     }
 

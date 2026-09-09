@@ -8,7 +8,9 @@ final class CompilationTests: XCTestCase {
         // and that you can call track() without properties
 
         let options = InitOptions(writeKey: "test-key", ingestionHost: "https://test.example.com")
-        let client = AnalyticsClient.initialize(options: options)
+        let sessionIso = SessionIsolatedDefaults(label: "compilation")
+        defer { sessionIso.cleanUp() }
+        let client = AnalyticsClient.initialize(options: options, deps: sessionIso.deps)
 
         // This should compile without any issues
         client.track("event_name")

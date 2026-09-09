@@ -4,17 +4,21 @@ import XCTest
 final class AnalyticsClientTests: XCTestCase {
     private var client: AnalyticsClient!
     private var options: InitOptions!
+    private var sessionIso: SessionIsolatedDefaults!
 
     override func setUp() {
         super.setUp()
         options = TestDataFactory.makeInitOptions()
-        client = AnalyticsClient.initialize(options: options)
+        sessionIso = SessionIsolatedDefaults(label: "analyticsClient")
+        client = AnalyticsClient.initialize(options: options, deps: sessionIso.deps)
 
         // Reset logger state for each test
         Logger.setDebugLogging(false)
     }
 
     override func tearDown() {
+        sessionIso.cleanUp()
+        sessionIso = nil
         client = nil
         options = nil
         Logger.setDebugLogging(false)
@@ -27,8 +31,8 @@ final class AnalyticsClientTests: XCTestCase {
     }
 
     func testInitializeCreatesNewClient() {
-        let client1 = AnalyticsClient.initialize(options: options)
-        let client2 = AnalyticsClient.initialize(options: options)
+        let client1 = AnalyticsClient.initialize(options: options, deps: sessionIso.deps)
+        let client2 = AnalyticsClient.initialize(options: options, deps: sessionIso.deps)
 
         XCTAssertFalse(client1 === client2, "Each initialize call should create a new client")
     }
@@ -456,7 +460,7 @@ final class AnalyticsClientTests: XCTestCase {
 
     func testSetAdvertisingIdImmediatelyAfterInitialization() async {
         let newOptions = TestDataFactory.makeInitOptions()
-        let newClient = AnalyticsClient.initialize(options: newOptions)
+        let newClient = AnalyticsClient.initialize(options: newOptions, deps: sessionIso.deps)
 
         let validUUID = UUID().uuidString
         newClient.setAdvertisingId(validUUID)
@@ -586,6 +590,7 @@ final class AnalyticsClientTests: XCTestCase {
 
         var deps = AnalyticsDependencies()
         deps.identityManager = identityManager
+        deps.sessionStorage = sessionIso.sessionStorage
         let testClient = AnalyticsClient.initialize(options: options, deps: deps)
 
         let clientAnonymousId = await testClient.getAnonymousId()
@@ -614,7 +619,8 @@ final class AnalyticsClientTests: XCTestCase {
 
     func testGetDebugInfoIncludesNetworkStatus() async {
         let stubMonitor = StubNetworkMonitor(status: .connected)
-        let deps = AnalyticsDependencies(networkMonitor: stubMonitor)
+        var deps = sessionIso.deps
+        deps.networkMonitor = stubMonitor
         let networkClient = AnalyticsClient.initialize(options: options, deps: deps)
         try? await Task.sleep(nanoseconds: 100_000_000)
 
@@ -628,7 +634,8 @@ final class AnalyticsClientTests: XCTestCase {
 
     func testGetDebugInfoReflectsDisconnectedStatus() async {
         let stubMonitor = StubNetworkMonitor(status: .disconnected)
-        let deps = AnalyticsDependencies(networkMonitor: stubMonitor)
+        var deps = sessionIso.deps
+        deps.networkMonitor = stubMonitor
         let networkClient = AnalyticsClient.initialize(options: options, deps: deps)
         try? await Task.sleep(nanoseconds: 100_000_000)
 
@@ -642,8 +649,9 @@ final class AnalyticsClientTests: XCTestCase {
 
     func testSDKFunctionsNormallyWithNilNetworkMonitor() async {
         // When no networkMonitor is provided, it defaults to real NetworkMonitor.
-        // Here we verify the client works with standard init (no DI).
-        let normalClient = AnalyticsClient.initialize(options: options)
+        // Session storage is the one isolated dep (keeps test sessions out of
+        // UserDefaults.standard); networkMonitor still takes its production default.
+        let normalClient = AnalyticsClient.initialize(options: options, deps: sessionIso.deps)
         normalClient.track("test_event")
         try? await Task.sleep(nanoseconds: 100_000_000)
 

@@ -20,6 +20,14 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     func alias(_ newUserId: String)
     func enableDebugLogging()
     func getAnonymousId() async -> String
+
+    /// The id of the current analytics session, or nil before the first event
+    /// of the process has been enriched. Sessions are minted by events —
+    /// reading the id is not activity and never extends or starts one, so a
+    /// diagnostics poller cannot keep a session alive. The same value is
+    /// stamped on every outbound event at `context.providers.metarouter.sessionID`.
+    func getSessionId() async -> String?
+
     func getDebugInfo() async -> [String: CodableValue]
     func flush()
     func reset()

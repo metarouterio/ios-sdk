@@ -26,6 +26,13 @@ public struct InitOptions: Sendable {
     public let maxQueueEvents: Int
     public let maxDiskEvents: Int
     public let trackLifecycleEvents: Bool
+    /// Minutes of inactivity after which the next event starts a new session.
+    /// Session stamping itself is always on; this only tunes the window.
+    public let sessionTimeoutMinutes: Int
+    /// When true, a `Session Started` track event is emitted each time a new
+    /// session is minted. Off by default so upgrading never changes a
+    /// customer's event volume — matching the web SDK's `fireSessionStarted`.
+    public let fireSessionStarted: Bool
 
     /// Non-nil when construction received invalid config. The SDK never crashes the
     /// host over local config in release — `initialize(with:)` sees this, logs an
@@ -66,6 +73,8 @@ public struct InitOptions: Sendable {
         maxQueueEvents: Int = 2000,
         maxDiskEvents: Int = 10000,
         trackLifecycleEvents: Bool = false,
+        sessionTimeoutMinutes: Int = 30,
+        fireSessionStarted: Bool = false,
         onConfigError: (@Sendable (ConfigError) -> Void)? = nil
     ) {
         // One normalization site: the String initializer owns trimming and the
@@ -78,6 +87,8 @@ public struct InitOptions: Sendable {
             maxQueueEvents: maxQueueEvents,
             maxDiskEvents: maxDiskEvents,
             trackLifecycleEvents: trackLifecycleEvents,
+            sessionTimeoutMinutes: sessionTimeoutMinutes,
+            fireSessionStarted: fireSessionStarted,
             onConfigError: onConfigError
         )
     }
@@ -90,6 +101,8 @@ public struct InitOptions: Sendable {
         maxQueueEvents: Int = 2000,
         maxDiskEvents: Int = 10000,
         trackLifecycleEvents: Bool = false,
+        sessionTimeoutMinutes: Int = 30,
+        fireSessionStarted: Bool = false,
         onConfigError: (@Sendable (ConfigError) -> Void)? = nil
     ) {
         var host = ingestionHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -105,6 +118,8 @@ public struct InitOptions: Sendable {
             maxQueueEvents: maxQueueEvents,
             maxDiskEvents: maxDiskEvents,
             trackLifecycleEvents: trackLifecycleEvents,
+            sessionTimeoutMinutes: sessionTimeoutMinutes,
+            fireSessionStarted: fireSessionStarted,
             onConfigError: onConfigError
         )
     }
@@ -122,6 +137,8 @@ public struct InitOptions: Sendable {
         maxQueueEvents: Int,
         maxDiskEvents: Int,
         trackLifecycleEvents: Bool,
+        sessionTimeoutMinutes: Int,
+        fireSessionStarted: Bool,
         onConfigError: (@Sendable (ConfigError) -> Void)?
     ) {
         var error: ConfigError?
@@ -164,6 +181,9 @@ public struct InitOptions: Sendable {
         if maxDiskEvents < 0 {
             Logger.warn("maxDiskEvents (\(maxDiskEvents)) clamped to 0 — use 0 to disable disk persistence")
         }
+        if sessionTimeoutMinutes < 1 {
+            Logger.warn("sessionTimeoutMinutes (\(sessionTimeoutMinutes)) clamped to 1")
+        }
 
         if let error {
             InitOptions.debugAssert("Invalid InitOptions: \(error.description)")
@@ -176,6 +196,8 @@ public struct InitOptions: Sendable {
         self.maxQueueEvents = max(1, maxQueueEvents)
         self.maxDiskEvents = max(0, maxDiskEvents)
         self.trackLifecycleEvents = trackLifecycleEvents
+        self.sessionTimeoutMinutes = max(1, sessionTimeoutMinutes)
+        self.fireSessionStarted = fireSessionStarted
         self.configError = error
         self.onConfigError = onConfigError
 
