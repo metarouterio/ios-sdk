@@ -2,15 +2,19 @@ import XCTest
 @testable import MetaRouter
 
 final class MetaRouterIntegrationTests: XCTestCase {
-    
+    private var sessionIso: SessionIsolatedDefaults!
+
     override func setUp() {
         super.setUp()
         // Reset MetaRouter state before each test
         MetaRouter.Analytics.reset()
         Logger.setDebugLogging(false)
+        sessionIso = SessionIsolatedDefaults(label: "metaRouterIntegration")
     }
-    
+
     override func tearDown() {
+        sessionIso.cleanUp()
+        sessionIso = nil
         MetaRouter.Analytics.reset()
         Logger.setDebugLogging(false)
         super.tearDown()
@@ -179,8 +183,8 @@ final class MetaRouterIntegrationTests: XCTestCase {
         let options2 = TestDataFactory.makeInitOptions(writeKey: "key2")
         
         // Create multiple AnalyticsClient instances directly
-        let directClient1 = AnalyticsClient.initialize(options: options1)
-        let directClient2 = AnalyticsClient.initialize(options: options2)
+        let directClient1 = AnalyticsClient.initialize(options: options1, deps: sessionIso.deps)
+        let directClient2 = AnalyticsClient.initialize(options: options2, deps: sessionIso.deps)
         
         XCTAssertFalse(directClient1 === directClient2, "Direct clients should be different instances")
         
@@ -204,8 +208,8 @@ final class MetaRouterIntegrationTests: XCTestCase {
         let options2 = TestDataFactory.makeInitOptions(writeKey: "key2")
         
         let proxy = AnalyticsProxy()
-        let client1 = AnalyticsClient.initialize(options: options1)
-        let client2 = AnalyticsClient.initialize(options: options2)
+        let client1 = AnalyticsClient.initialize(options: options1, deps: sessionIso.deps)
+        let client2 = AnalyticsClient.initialize(options: options2, deps: sessionIso.deps)
         
         // Bind to first client
         proxy.bind(client1)

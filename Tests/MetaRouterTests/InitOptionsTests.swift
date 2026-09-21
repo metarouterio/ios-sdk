@@ -208,6 +208,33 @@ final class InitOptionsTests: XCTestCase {
         XCTAssertTrue(output.contains("clamped"), "clamp should warn, got: \(output)")
     }
 
+    func testSessionTimeoutClampsToOneWithWarning() {
+        // Same clamp-with-warn policy as every other numeric field.
+        var options: InitOptions?
+        let output = captureStderrAndStdout {
+            options = InitOptions(
+                writeKey: "wk",
+                ingestionHost: URL(string: "https://example.com")!,
+                sessionTimeoutMinutes: 0
+            )
+        }
+
+        XCTAssertNil(options?.configError)
+        XCTAssertEqual(options?.sessionTimeoutMinutes, 1)
+        XCTAssertTrue(output.contains("clamped"), "clamp should warn, got: \(output)")
+    }
+
+    func testSessionDefaultsMatchWebParity() {
+        let options = InitOptions(
+            writeKey: "wk",
+            ingestionHost: URL(string: "https://example.com")!
+        )
+
+        XCTAssertEqual(options.sessionTimeoutMinutes, 30, "web session default is 30 minutes")
+        XCTAssertFalse(options.fireSessionStarted,
+                       "off by default so upgrading never changes a customer's event volume")
+    }
+
     func testCleartextHTTPWarnsButIsAccepted() {
         var options: InitOptions?
         let output = captureStderrAndStdout {

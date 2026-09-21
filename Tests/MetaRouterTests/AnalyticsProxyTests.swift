@@ -22,6 +22,49 @@ final class AnalyticsProxyTests: XCTestCase {
     func testProxyInitialization() {
         XCTAssertNotNil(proxy)
     }
+
+    /// Unlike getAnonymousId (which awaits a bind), getSessionId must resolve
+    /// nil promptly on an unbound proxy: "no session yet" is its documented
+    /// pre-init answer, and suspending would hang a diagnostics read for the
+    /// process lifetime when initialize() is never called. Raced against a
+    /// timeout so a regression to await-the-bind FAILS this test by name
+    /// instead of stalling the whole test process.
+    func testGetSessionIdResolvesNilPromptlyWhenUnbound() async {
+        enum Outcome { case value(String?), timedOut }
+        let proxy = self.proxy!
+
+        let outcome = await withTaskGroup(of: Outcome.self) { group -> Outcome in
+            group.addTask { .value(await proxy.getSessionId()) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                return .timedOut
+            }
+            let first = await group.next()!
+            group.cancelAll()
+            return first
+        }
+
+        switch outcome {
+        case .value(let sessionId):
+            XCTAssertNil(sessionId)
+        case .timedOut:
+            XCTFail("getSessionId suspended on an unbound proxy instead of resolving nil")
+        }
+    }
+
+    func testGetSessionIdForwardedWhenBound() async {
+        proxy.bind(mockClient)
+
+        // bind hops to the proxy actor asynchronously; nil here means "not
+        // bound yet", so poll until the forward lands.
+        var result: String?
+        for _ in 0..<50 {
+            result = await proxy.getSessionId()
+            if result != nil { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(result, "mock-session-id")
+    }
     
     // Binding Tests
     

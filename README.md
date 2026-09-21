@@ -20,6 +20,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 - [Debugging](#debugging)
 - [Identity Persistence](#identity-persistence)
 - [Lifecycle Events](#lifecycle-events)
+- [Session Tracking](#session-tracking)
 - [WebView Bridge](#webview-bridge)
 - [Event Queue Persistence](#event-queue-persistence)
 - [Advertising ID (IDFA)](#advertising-id-idfa)
@@ -242,7 +243,8 @@ The analytics client provides the following methods:
 - `alias(_ newUserId: String)`: Connect anonymous users to known user IDs. See [Using the alias() Method](#using-the-alias-method) for details
 - `setAdvertisingId(_ advertisingId: String?)`: Set the advertising identifier (IDFA) for ad tracking. See [Advertising ID](#advertising-id-idfa) section for usage and compliance requirements
 - `clearAdvertisingId()`: Clear the advertising identifier from storage and context. Useful for GDPR/CCPA compliance when users opt out of ad tracking
-- `getAnonymousId() async -> String`: Retrieve the device's anonymous ID. Awaits initialization internally so the returned value is always valid — never nil or empty
+- `getAnonymousId() async -> String`: Retrieve the device's anonymous ID. Awaits initialization internally, so on any initialized session the returned value is always valid. Returns `""` only when initialization was refused over invalid config (the degraded, never-hanging answer — see `onConfigError`)
+- `getSessionId() async -> String?`: The current analytics session id, or `nil` before the first event of the process. Reading it never starts or extends a session. See [Session Tracking](#session-tracking)
 - `flush()`: Flush events immediately
 - `reset()`: Reset analytics state and clear all stored data (includes clearing advertising ID)
 - `enableDebugLogging()`: Enable debug logging
@@ -766,6 +768,40 @@ MetaRouter.Analytics.shared.recordOpenedURL(
 ```
 
 The SDK does not auto-instrument deep-link capture (no method swizzling, no `UIApplicationDelegate` proxy). Manual forwarding keeps integration explicit, avoids conflicts with other SDKs that swizzle (Firebase, Adjust, AppsFlyer, Branch), and gives the host control over what data is captured.
+
+## Session Tracking
+
+Every event carries the analytics session it belongs to, stamped at enrichment as:
+
+```json
+"context": {
+  "providers": {
+    "metarouter": {
+      "sessionID": "1757400000000",
+      "sessionCount": 3
+    }
+  }
+}
+```
+
+This is the same path and shape the web SDK's MetaRouter session sync produces, so pipeline mappings (e.g. GA4 `session_id` / `session_number`) read one field from both platforms. `sessionID` is the epoch-millisecond timestamp of the session's first activity, as a string; `sessionCount` is the lifetime session ordinal for the install.
+
+Session stamping is **always on** — there is nothing to enable and no network cost. A session is minted lazily by the first event and ends after `sessionTimeoutMinutes` (default 30) of inactivity; the window slides, so steady activity keeps one session alive indefinitely. Any tracked, lifecycle, or webview-bridge event counts as activity. Sessions survive process restarts that happen inside the window, and survive `reset()` — a logout mid-session does not fragment the session.
+
+### Session Started event
+
+Optionally, the SDK emits a `Session Started` track event (no properties, matching web) each time a new session is minted:
+
+```swift
+let options = InitOptions(
+    writeKey: "YOUR_WRITE_KEY",
+    ingestionHost: "https://your-ingestion-host.com",
+    sessionTimeoutMinutes: 30,     // default
+    fireSessionStarted: true       // default false
+)
+```
+
+`fireSessionStarted` is off by default so upgrading the SDK never changes an app's event volume. Turn it on when a downstream destination needs an explicit session-start signal (GA4's `session_start`, for example).
 
 ## WebView Bridge
 
