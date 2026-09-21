@@ -16,24 +16,6 @@ internal final class BridgeDedupStore: @unchecked Sendable {
     static let defaultMaxEntries = 1_000
     static let defaultTtlMillis: Int64 = 5 * 60 * 1000
 
-    // The tick→nanosecond scaling factors are process-constant; fetch once, not on
-    // every clock read on the message path.
-    private static let timebase: mach_timebase_info_data_t = {
-        var info = mach_timebase_info_data_t()
-        mach_timebase_info(&info)
-        return info
-    }()
-
-    /// Monotonic: immune to wall-clock jumps (NTP, user time changes), and — unlike
-    /// `ProcessInfo.systemUptime` or `mach_absolute_time`, which pause in deep sleep —
-    /// `mach_continuous_time` is documented to keep incrementing while the device is
-    /// asleep, so the window measures real elapsed time, which is what a redelivery
-    /// window means.
-    static func continuousClockMillis() -> Int64 {
-        let nanos = mach_continuous_time() * UInt64(timebase.numer) / UInt64(timebase.denom)
-        return Int64(nanos / 1_000_000)
-    }
-
     private let maxEntries: Int
     private let ttlMillis: Int64
     /// Must be safe to call from any thread — the default is; test clocks run
@@ -51,7 +33,7 @@ internal final class BridgeDedupStore: @unchecked Sendable {
     init(
         maxEntries: Int = BridgeDedupStore.defaultMaxEntries,
         ttlMillis: Int64 = BridgeDedupStore.defaultTtlMillis,
-        clock: @escaping () -> Int64 = BridgeDedupStore.continuousClockMillis
+        clock: @escaping () -> Int64 = MonotonicClock.continuousMillis
     ) {
         precondition(maxEntries > 0, "maxEntries must be > 0")
         precondition(ttlMillis > 0, "ttlMillis must be > 0")
