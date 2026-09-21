@@ -6,11 +6,34 @@ public final class EventEnrichmentService: Sendable {
     private let contextProvider: ContextProvider
     private let identityManager: IdentityManager
     private let writeKey: String
+    private let sessionManager: SessionManager
 
-    public init(contextProvider: ContextProvider, identityManager: IdentityManager, writeKey: String) {
+    /// Standalone construction only. This creates its OWN session manager over
+    /// `UserDefaults.standard` with the default timeout — running one of these
+    /// beside a live `AnalyticsClient` means two managers racing the same
+    /// persisted `metarouter:session:*` keys: independent mints, a
+    /// double-incremented sessionCount, and events inside one real session
+    /// stamped with different sessionIDs. Anything with access to the client's
+    /// session manager must pass it via the internal initializer instead.
+    public convenience init(contextProvider: ContextProvider, identityManager: IdentityManager, writeKey: String) {
+        self.init(
+            contextProvider: contextProvider,
+            identityManager: identityManager,
+            writeKey: writeKey,
+            sessionManager: SessionManager(storage: SessionStorage())
+        )
+    }
+
+    internal init(
+        contextProvider: ContextProvider,
+        identityManager: IdentityManager,
+        writeKey: String,
+        sessionManager: SessionManager
+    ) {
         self.contextProvider = contextProvider
         self.identityManager = identityManager
         self.writeKey = writeKey
+        self.sessionManager = sessionManager
     }
 
     /// Enrich an event with identity, context, and metadata
@@ -26,6 +49,20 @@ public final class EventEnrichmentService: Sendable {
         if let page = event.page {
             context.page = page
         }
+
+        // Every enriched event is session activity, and this is the one funnel all
+        // event sources share (native calls, lifecycle events, the webview bridge),
+        // so touching here is what makes the session stamp universal. The key names
+        // and the epoch-ms string mirror the web SDK's generic MetaRouter session
+        // (`context.providers.metarouter`), so pipeline mappings read one shape
+        // from both platforms — renaming either side forks them.
+        let session = await sessionManager.touch()
+        context.providers = [
+            "metarouter": [
+                "sessionID": .string(session.sessionId),
+                "sessionCount": .int(session.sessionCount),
+            ]
+        ]
 
         return EnrichedEventPayload(
             type: event.type,

@@ -49,10 +49,14 @@ final class LifecycleEventEmitterTests: XCTestCase {
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
         )
+        // Internal init with suite-isolated session storage: the public
+        // convenience init would mint sessions into UserDefaults.standard,
+        // polluting the developer's real defaults across test runs.
         enrichmentService = EventEnrichmentService(
             contextProvider: StubContextProvider(),
             identityManager: identityManager,
-            writeKey: options.writeKey
+            writeKey: options.writeKey,
+            sessionManager: SessionManager(storage: SessionStorage(userDefaults: defaults))
         )
     }
 

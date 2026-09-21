@@ -7,19 +7,30 @@ final class BridgeEventPlumbingTests: XCTestCase {
 
     private var enrichment: EventEnrichmentService!
     private var identityManager: IdentityManager!
+    private var sessionSuiteName: String!
+    private var sessionDefaults: UserDefaults!
 
     override func setUp() async throws {
         try await super.setUp()
         identityManager = IdentityManager(writeKey: "test-write-key", host: "https://test.metarouter.com")
         await identityManager.initialize()
+        // Internal init with suite-isolated session storage: the public
+        // convenience init would mint sessions into UserDefaults.standard,
+        // polluting the developer's real defaults across test runs.
+        sessionSuiteName = "com.metarouter.test.bridgePlumbingSession.\(UUID().uuidString)"
+        sessionDefaults = UserDefaults(suiteName: sessionSuiteName)
         enrichment = EventEnrichmentService(
             contextProvider: MockContextProvider(),
             identityManager: identityManager,
-            writeKey: "test-write-key"
+            writeKey: "test-write-key",
+            sessionManager: SessionManager(storage: SessionStorage(userDefaults: sessionDefaults))
         )
     }
 
     override func tearDown() {
+        sessionDefaults.removePersistentDomain(forName: sessionSuiteName)
+        sessionDefaults = nil
+        sessionSuiteName = nil
         enrichment = nil
         identityManager = nil
         super.tearDown()
