@@ -171,6 +171,31 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
     func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
         recordCall(.attachWebView(allowedOrigins: allowedOrigins))
     }
+
+    var consentToReturn = Consent(explicit: false, optOut: [:])
+
+    func registerConsentCategories(_ categories: [ConsentCategory]) {
+        recordCall(.registerConsentCategories(keys: categories.map(\.key)))
+    }
+
+    func setConsent(_ consent: Consent) {
+        recordCall(.setConsent(consent))
+    }
+
+    func getConsent() -> Consent {
+        recordCall(.getConsent)
+        return consentToReturn
+    }
+
+    func clearConsent() {
+        recordCall(.clearConsent)
+    }
+
+    @discardableResult
+    func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe {
+        recordCall(.subscribeToConsent)
+        return {}
+    }
 }
 
 // Analytics Call Recording
@@ -194,6 +219,11 @@ enum AnalyticsCall: Equatable {
     case setTracing(enabled: Bool)
     case recordOpenedURL(url: URL, sourceApplication: String?)
     case attachWebView(allowedOrigins: [String])
+    case registerConsentCategories(keys: [String])
+    case setConsent(Consent)
+    case getConsent
+    case clearConsent
+    case subscribeToConsent
 }
 
 // CodableValue Test Extensions

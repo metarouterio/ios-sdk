@@ -474,8 +474,37 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             info["sessionId"] = .string(session.sessionId)
             info["sessionCount"] = .int(session.sessionCount)
         }
+        info["consent"] = consentManager.getConsent().debugInfoValue
 
         return info
+    }
+
+    // MARK: - Consent
+    // Thin delegation: the state machine lives in ConsentManager. No lifecycle gate
+    // on reads or writes — consent must be settable during init (CMP callbacks fire
+    // early) and the manager exists before any event can be enriched. reset()
+    // deliberately does not touch it: consent is a device-scoped compliance
+    // record, not identity.
+
+    public func registerConsentCategories(_ categories: [ConsentCategory]) {
+        consentManager.registerConsentCategories(categories)
+    }
+
+    public func setConsent(_ consent: Consent) {
+        consentManager.setConsent(consent)
+    }
+
+    public func getConsent() -> Consent {
+        consentManager.getConsent()
+    }
+
+    public func clearConsent() {
+        consentManager.clearConsent()
+    }
+
+    @discardableResult
+    public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe {
+        consentManager.subscribe(handler)
     }
 
     public func flush() {

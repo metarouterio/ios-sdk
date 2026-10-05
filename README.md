@@ -21,6 +21,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 - [Identity Persistence](#identity-persistence)
 - [Lifecycle Events](#lifecycle-events)
 - [Session Tracking](#session-tracking)
+- [Consent](#consent)
 - [WebView Bridge](#webview-bridge)
 - [Event Queue Persistence](#event-queue-persistence)
 - [Advertising ID (IDFA)](#advertising-id-idfa)
@@ -252,6 +253,11 @@ The analytics client provides the following methods:
 - `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
 - `recordOpenedURL(_ url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. Mirrors UIKit's `application(_:open:options:)` shape. See [Lifecycle Events](#lifecycle-events) for wiring
 - `attachWebView(_ webView: WKWebView, allowedOrigins: [String])`: Capture track/page events emitted by pages inside a host-owned WebView. Main-actor-isolated. See [WebView Bridge](#webview-bridge) for wiring details
+- `registerConsentCategories(_ categories: [ConsentCategory])`: Register the consent categories the pipeline gates on and each one's default posture. Call on `MetaRouter.Analytics.shared` before `initialize`. See [Consent](#consent)
+- `setConsent(_ consent: Consent)`: Push the user's consent into the SDK. Reconciled against the registered categories, persisted across launches, stamped on every subsequent event as `context.consent`. Usable before `initialize`
+- `getConsent() -> Consent`: The current reconciled consent. Never nil: the implicit default (`explicit: false`, registered defaults) until the first `setConsent`
+- `clearConsent()`: Consent withdrawal — back to the implicit default, persisted state wiped. `reset()` does **not** do this
+- `subscribeToConsent(_ handler: @escaping @MainActor @Sendable (Consent) -> Void) -> ConsentUnsubscribe`: Observe consent changes on the main actor; the first delivery is the current value, on the next main-queue turn. Returns an unsubscribe closure
 
 ### Testing APIs
 
@@ -281,6 +287,7 @@ await MetaRouter.Analytics.resetAndWait()
 - 🔌 **Circuit Breaker**: Intelligent retry logic with exponential backoff
 - ⚡ **Batching**: Automatic event batching for network efficiency
 - 📲 **Lifecycle Events** (opt-in): Automatic `Application Installed` / `Updated` / `Opened` / `Backgrounded` tracking with deep-link attribution support
+- ✅ **Consent**: Push CMP consent (OneTrust adapter included) into the SDK; every event carries `context.consent` in the web SDK's shape so the cluster enforces it per integration
 
 ## ✅ Compatibility
 
@@ -803,6 +810,97 @@ let options = InitOptions(
 
 `fireSessionStarted` is off by default so upgrading the SDK never changes an app's event volume. Turn it on when a downstream destination needs an explicit session-start signal (GA4's `session_start`, for example).
 
+## Consent
+
+The host app owns consent acquisition — a CMP SDK callback, a cookie read out of a WebView, your own preference screen. The SDK owns storage, reconciliation, observation, and putting consent on the wire. Every event carries the current consent at `context.consent`, in the same shape the web SDK emits, so the cluster enforces one set of per-integration rules for web and mobile:
+
+```json
+"context": {
+  "consent": {
+    "explicit": true,
+    "optOut": {
+      "c0001": false,
+      "c0002": false,
+      "c0004": true
+    }
+  }
+}
+```
+
+- `explicit` — `true` when the user made an explicit choice, `false` for an implicit or regional default. You set it; the SDK cannot infer it.
+- `optOut` — a flat map with **opt-out** semantics: `true` means blocked. Keys are lowercase and pass through from your CMP (`c0001`…, `analytics`, `advertising`, …).
+
+Consent never gates delivery. Events send immediately and the server gates per integration, so there is no buffering, no init flag, and nothing to wait for.
+
+### 1. Register categories — before `initialize`
+
+Register the category set your pipeline gates on, with each category's default posture. Default is opt-out (`defaultOptOut: true`): a category is opted *in* deliberately, and the absence of a signal never opts a user in.
+
+```swift
+// Consent calls never wait for a client, so register first…
+MetaRouter.Analytics.shared.registerConsentCategories([
+    ConsentCategory(key: "c0001", defaultOptOut: false), // strictly necessary — always on
+    ConsentCategory(key: "c0002"),                        // performance
+    ConsentCategory(key: "c0004"),                        // targeting
+])
+
+// …then initialize.
+let analytics = MetaRouter.Analytics.initialize(with: options)
+```
+
+Order matters. The registry is not persisted, and until it is registered the implicit default has an empty `optOut`, which the cluster reads as nothing blocked. `initialize` can emit `Application Opened` / `Session Started` on its init task, so registering afterwards races those events on every launch where the user has not yet set consent.
+
+Registration is what lets the SDK complete a sparse CMP payload into a full block: known keys keep their value, unknown keys are dropped, missing categories take their registered default. Re-registering replaces the set and recomputes the view of any stored consent against it — the stored snapshot itself is kept whole, so a category one build drops and the next re-adds comes back with the user's original choice.
+
+### 2. Push consent whenever it changes
+
+```swift
+analytics.setConsent(Consent(
+    explicit: true,
+    optOut: ["c0002": false, "c0004": true]
+))
+```
+
+`setConsent` fully replaces the previous state, persists it across launches, and takes effect immediately — no await. Events are stamped when they are enriched, which happens on a background task right after `track()` returns, so set consent *before* tracking the events it should cover; `track(); setConsent()` on adjacent lines can stamp the new state on that event. It is safe to call before `initialize` (CMP callbacks often fire first), and the state survives both `analytics.reset()` and `MetaRouter.Analytics.reset()` + re-initialize: consent is a compliance record scoped to the device and person, not to the analytics identity, so a logout must not resurrect tracking the user opted out of. Only `clearConsent()` removes it.
+
+Each `Consent` carries an optional epoch-millisecond `timestamp`. If you supply timestamps (for example from the CMP's own record), a snapshot older than the newest timestamp you have supplied since the last `clearConsent()` is ignored, so a CMP replaying a cached choice cannot overwrite a fresher one. A call without a timestamp is always applied as the user's current choice; the SDK stamps the device clock for information only and never compares it with yours. The timestamp never goes on the wire.
+
+Before the first `setConsent`, `getConsent()` and every outbound event carry the **implicit default** — `explicit: false` with every registered category at its default — which the cluster gates exactly like an implicit-consent web visitor. There is no "unknown" state.
+
+### OneTrust
+
+`OneTrustAdapter` translates OneTrust's opt-in statuses into the canonical shape: category IDs lowercased (`C0004` → `c0004`), values inverted to opt-out semantics. It is a pure function with no dependency on the OneTrust SDK — read OneTrust however you already do and hand the raw result over. Reconciliation against your registered categories happens in `setConsent`, so you can pass everything OneTrust reports.
+
+```swift
+// From the OneTrust SDK's category statuses
+let statuses: [String: Any] = ["C0001": 1, "C0002": 1, "C0004": 0]
+analytics.setConsent(OneTrustAdapter.normalize(statuses, explicit: true))
+
+// From the OptanonConsent cookie's `groups` parameter (e.g. read out of a WebView).
+// Percent-encoded values and the whole cookie value are both accepted.
+analytics.setConsent(OneTrustAdapter.normalize(groups: "C0001%3A1%2CC0002%3A1%2CC0004%3A0", explicit: true))
+```
+
+Pass `explicit: true` from the banner-interaction callback and `explicit: false` when applying a regional default — the payload does not say which it was; your code does. Re-run the two lines on every OneTrust consent-changed callback. Any other CMP (or your own preference screen) can build a `Consent` directly: adapters are a convenience, not a requirement.
+
+### Observing and withdrawing
+
+```swift
+// From a @MainActor context (a view controller, SwiftUI view, or app delegate):
+let unsubscribe = analytics.subscribeToConsent { consent in
+    // The handler is @MainActor @Sendable: UI and main-actor objects are safe to
+    // touch directly. It fires once with the current value (asynchronously, on the
+    // next main-queue turn), then on every real change.
+    thirdPartySDK.setEnabled(consent.optOut["c0004"] == false)
+}
+// later, on the main actor — nothing is delivered after this returns, even if already queued
+unsubscribe()
+
+analytics.clearConsent() // back to the implicit default; persisted state wiped
+```
+
+A `setConsent` whose values equal the current state does not notify subscribers, even with a fresher timestamp — handlers react to decisions, not clocks.
+
 ## WebView Bridge
 
 Hybrid apps render some screens as web content inside a WebView. Without extra work that activity is invisible to MetaRouter — or worse, double-tracked by an in-page analytics setup on a separate identity. The webview bridge captures events fired by page JavaScript and delivers them through the native SDK, so webview and native activity arrive at your cluster as **one user, one pipeline**: native identity, device context, and the page's own facts on every event.
@@ -851,7 +949,7 @@ Bridged events go through the same enrichment as native events. The page contrib
 | From the page (stamped at call time) | From the SDK (merged at receipt) |
 |---|---|
 | event type (`track`/`page`), name, properties | `anonymousId` / `userId`, device + app context |
-| `context.page` — url, path, search, title, referrer | `messageId`, `timestamp` |
+| `context.page` — url, path, search, title, referrer | `messageId`, `timestamp`, `context.consent`, session (`context.providers.metarouter`) |
 
 Each bridge message carries a producer-minted ID used to drop duplicate deliveries (bounded window). The page receives an ack or a coded error for every message on the underlying channel — malformed input is rejected, never silently dropped, and events arriving while the SDK cannot accept them are answered `not_ready` rather than acked.
 

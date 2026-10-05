@@ -67,4 +67,57 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     ///   - allowedOrigins: Explicit page origins allowed to produce events
     @MainActor
     func attachWebView(_ webView: WKWebView, allowedOrigins: [String])
+
+    // MARK: - Consent
+
+    /// Register the consent category set and each category's default posture.
+    ///
+    /// Call on `MetaRouter.Analytics.shared` BEFORE `initialize`, and before the first
+    /// `setConsent`. The registry is not persisted, and until it is registered the
+    /// implicit default is an empty `optOut` — which the server reads as nothing
+    /// blocked. `initialize` can emit lifecycle events (`Application Opened`,
+    /// `Session Started`) on its init task, so a registration that runs after it
+    /// races those events on every launch without stored consent. Registration works
+    /// before `initialize` because consent never waits for a client.
+    ///
+    /// A CMP payload is sparse, and the registry is what lets the SDK complete it into
+    /// a full block (keep known keys, drop unknown ones, fill missing ones with the
+    /// registered default). Default posture is opt-OUT. Re-registration replaces the
+    /// set and recomputes the view of any stored consent against it; it does not merge.
+    func registerConsentCategories(_ categories: [ConsentCategory])
+
+    /// Push the current consent state into the SDK.
+    ///
+    /// The host owns consent acquisition (CMP SDK callback, WebView cookie, …) — feed
+    /// the raw payload through an adapter (e.g. `OneTrustAdapter.normalize`) and hand
+    /// the canonical result here. The SDK reconciles it against the registered
+    /// categories, persists it across launches, and stamps it on every subsequent
+    /// outbound event as `context.consent`. Fully replaces prior state; a snapshot
+    /// with an older `timestamp` than the stored state is ignored.
+    ///
+    /// Usable before `initialize` and immediately effective: an event tracked on the
+    /// next line carries the new state. Consent never gates delivery — events always
+    /// send, and the server gates per integration on the stamped block.
+    func setConsent(_ consent: Consent)
+
+    /// The current reconciled consent state. Never nil: before the first `setConsent`
+    /// (and after `clearConsent`) this is the implicit default — `explicit: false`
+    /// with every registered category at its default posture.
+    func getConsent() -> Consent
+
+    /// Wipe the stored consent state and return to the implicit default. This is the
+    /// consent-withdrawal path — unlike `reset()`, which clears identity but leaves
+    /// consent untouched.
+    func clearConsent()
+
+    /// Subscribe to consent changes. The handler is `@MainActor`: it runs on the main
+    /// queue, once with the current value right after subscribing (asynchronously,
+    /// never inline), then on every real change (value-identical `setConsent` calls
+    /// do not fire).
+    ///
+    /// - Returns: an unsubscribe closure; safe to call more than once. After it
+    ///   returns, the handler is not invoked again, even for a delivery that was
+    ///   already queued.
+    @discardableResult
+    func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe
 }

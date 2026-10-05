@@ -4,8 +4,24 @@ import Foundation
 
 
 public enum MetaRouter {
-    private static let proxy = AnalyticsProxy()
+    // One consent manager per process, built with the proxy rather than at
+    // initialize: it needs nothing from a client, so consent is usable before
+    // initialize() (a CMP callback can fire first), during async init, and across
+    // reset()/re-initialize — every client this type binds stamps from this same
+    // instance. Consent is a device-scoped compliance record, not identity, which
+    // is why reset() leaves it alone.
+    private static let consentManager = ConsentManager(storage: ConsentStorage())
+    private static let proxy = AnalyticsProxy(consentManager: consentManager)
     private static let store = RealClientStore()
+
+    /// Test seam for the process-wide manager; see `ConsentManager._replaceStorageForTesting`.
+    internal static var _consentManagerForTesting: ConsentManager { consentManager }
+
+    private static var clientDependencies: AnalyticsDependencies {
+        var deps = AnalyticsDependencies.production
+        deps.consentManager = consentManager
+        return deps
+    }
 
     // Synchronous-binding initializer for deterministic testing/flows that require immediate binding
     public static func initializeAndWait(with options: InitOptions) async -> AnalyticsInterface {
@@ -14,7 +30,7 @@ public enum MetaRouter {
             return proxy
         }
         await proxy._clearConfigDisabled()
-        let real = AnalyticsClient.initialize(options: options.discardingConfigCallback())
+        let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
         await store.set(real)
         await proxy._bindAndReplay(real)
         return proxy
@@ -29,7 +45,7 @@ public enum MetaRouter {
         }
         Task {
             await proxy._clearConfigDisabled()
-            let real = AnalyticsClient.initialize(options: options.discardingConfigCallback())
+            let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
             if await store.setIfNil(real) {
                 proxy.bind(real)
             } else {
