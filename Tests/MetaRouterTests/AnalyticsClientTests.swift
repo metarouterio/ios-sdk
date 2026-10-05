@@ -591,6 +591,7 @@ final class AnalyticsClientTests: XCTestCase {
         var deps = AnalyticsDependencies()
         deps.identityManager = identityManager
         deps.sessionStorage = sessionIso.sessionStorage
+        deps.consentStorage = sessionIso.consentStorage
         let testClient = AnalyticsClient.initialize(options: options, deps: deps)
 
         let clientAnonymousId = await testClient.getAnonymousId()

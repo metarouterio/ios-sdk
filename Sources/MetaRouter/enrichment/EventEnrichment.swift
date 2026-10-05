@@ -7,33 +7,28 @@ public final class EventEnrichmentService: Sendable {
     private let identityManager: IdentityManager
     private let writeKey: String
     private let sessionManager: SessionManager
+    private let consentManager: ConsentManager
 
-    /// Standalone construction only. This creates its OWN session manager over
-    /// `UserDefaults.standard` with the default timeout — running one of these
-    /// beside a live `AnalyticsClient` means two managers racing the same
-    /// persisted `metarouter:session:*` keys: independent mints, a
-    /// double-incremented sessionCount, and events inside one real session
-    /// stamped with different sessionIDs. Anything with access to the client's
-    /// session manager must pass it via the internal initializer instead.
-    public convenience init(contextProvider: ContextProvider, identityManager: IdentityManager, writeKey: String) {
-        self.init(
-            contextProvider: contextProvider,
-            identityManager: identityManager,
-            writeKey: writeKey,
-            sessionManager: SessionManager(storage: SessionStorage())
-        )
-    }
-
+    /// The only initializer. Construction requires the client's own session and
+    /// consent managers: a second session manager races the same persisted
+    /// `metarouter:session:*` keys (independent mints, a double-incremented
+    /// sessionCount), and a second consent manager never hears the host's
+    /// `setConsent` / `clearConsent` — it would stamp a consent the user has since
+    /// withdrawn. A public standalone initializer existed before consent and was
+    /// removed for exactly that reason; the class stays public only so its
+    /// `EnrichedEventPayload` factories remain callable on the client's instance.
     internal init(
         contextProvider: ContextProvider,
         identityManager: IdentityManager,
         writeKey: String,
-        sessionManager: SessionManager
+        sessionManager: SessionManager,
+        consentManager: ConsentManager
     ) {
         self.contextProvider = contextProvider
         self.identityManager = identityManager
         self.writeKey = writeKey
         self.sessionManager = sessionManager
+        self.consentManager = consentManager
     }
 
     /// Enrich an event with identity, context, and metadata
@@ -63,6 +58,21 @@ public final class EventEnrichmentService: Sendable {
                 "sessionCount": .int(session.sessionCount),
             ]
         ]
+
+        // Consent is read here, per event, for the same reason: this funnel is
+        // shared by every source. The stamp is the state at ENRICHMENT time — the
+        // same moment identity and session are read — not at the track() call:
+        // track() only schedules enrichment, so `track(); setConsent()` on adjacent
+        // lines can stamp the new state, and a pre-initialize call replayed at bind
+        // is stamped with whatever consent holds at replay. Once enriched, a payload
+        // is immutable; a later setConsent never rewrites it. Before the host's first
+        // setConsent this is the implicit default (`explicit: false`, registered
+        // categories at their defaults) — a complete block the server gates like
+        // implicit-consent web traffic, never an absent field. The path and shape
+        // are the web SDK's `context.consent`; the server's per-integration gating
+        // reads one block from both platforms, so moving or renaming this forks
+        // every consent rule downstream.
+        context.consent = ConsentContext(consentManager.getConsent())
 
         return EnrichedEventPayload(
             type: event.type,

@@ -23,7 +23,8 @@ final class BridgeEventPlumbingTests: XCTestCase {
             contextProvider: MockContextProvider(),
             identityManager: identityManager,
             writeKey: "test-write-key",
-            sessionManager: SessionManager(storage: SessionStorage(userDefaults: sessionDefaults))
+            sessionManager: SessionManager(storage: SessionStorage(userDefaults: sessionDefaults)),
+            consentManager: ConsentManager(storage: ConsentStorage(userDefaults: sessionDefaults))
         )
     }
 

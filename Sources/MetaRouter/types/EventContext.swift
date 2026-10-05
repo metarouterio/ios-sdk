@@ -112,6 +112,12 @@ public struct EventContext: Codable, Sendable {
     /// disk, and a decoder that requires this key would silently discard every
     /// event queued by a build that predates it.
     public var providers: [String: [String: CodableValue]]?
+    /// The consent block, set per event by enrichment from the consent manager's
+    /// current state — never captured in the provider's cached context, because
+    /// consent changes over the app's lifetime and the stamp must be point-in-time.
+    /// Optional for the same disk-compatibility reason as `providers`: events
+    /// persisted by a build that predates this key must still decode.
+    public var consent: ConsentContext?
 
     public init(
         app: AppContext,
@@ -124,7 +130,8 @@ public struct EventContext: Codable, Sendable {
         timezone: String,
         additional: [String: CodableValue] = [:],
         page: PageContext? = nil,
-        providers: [String: [String: CodableValue]]? = nil
+        providers: [String: [String: CodableValue]]? = nil,
+        consent: ConsentContext? = nil
     ) {
         self.app = app
         self.device = device
@@ -137,6 +144,27 @@ public struct EventContext: Codable, Sendable {
         self.additional = additional
         self.page = page
         self.providers = providers
+        self.consent = consent
+    }
+}
+
+/// Consent block stamped on every outbound event at `context.consent`. Mirrors
+/// the web SDK's output exactly — the server gates per integration on this shape,
+/// so web and mobile traffic must be indistinguishable to downstream config. The
+/// internal `Consent.timestamp` deliberately stays off the wire: this type has no
+/// field for it, so no encoder path can leak it.
+public struct ConsentContext: Codable, Sendable, Equatable {
+    public let explicit: Bool
+    public let optOut: [String: Bool]
+
+    public init(explicit: Bool, optOut: [String: Bool]) {
+        self.explicit = explicit
+        self.optOut = optOut
+    }
+
+    public init(_ consent: Consent) {
+        self.explicit = consent.explicit
+        self.optOut = consent.optOut
     }
 }
 
