@@ -1,8 +1,8 @@
 import Foundation
 
 /// Service responsible for enriching events with context and metadata. Internal:
-/// it is only correct when built with the client's own session and consent
-/// managers, so nothing outside the SDK constructs one.
+/// it is only correct when built with the client's own session, consent and
+/// provider-context managers, so nothing outside the SDK constructs one.
 internal final class EventEnrichmentService: Sendable {
 
     private let contextProvider: ContextProvider
@@ -10,26 +10,30 @@ internal final class EventEnrichmentService: Sendable {
     private let writeKey: String
     private let sessionManager: SessionManager
     private let consentManager: ConsentManager
+    private let providerContextManager: ProviderContextManager
 
-    /// The only initializer. Construction requires the client's own session and
-    /// consent managers: a second session manager races the same persisted
-    /// `metarouter:session:*` keys (independent mints, a double-incremented
-    /// sessionCount), and a second consent manager never hears the host's
-    /// `setConsent` / `clearConsent` — it would stamp a consent the user has since
-    /// withdrawn. The type and a standalone initializer were public before consent,
-    /// and both were withdrawn for exactly that reason.
+    /// The only initializer. Construction requires the client's own session,
+    /// consent and provider-context managers: a second session manager races the
+    /// same persisted `metarouter:session:*` keys (independent mints, a
+    /// double-incremented sessionCount), a second consent manager never hears the
+    /// host's `setConsent` / `clearConsent` — it would stamp a consent the user has
+    /// since withdrawn — and a second provider-context manager never hears
+    /// `setProviderContext`. The type and a standalone initializer were public before
+    /// consent, and both were withdrawn for exactly that reason.
     internal init(
         contextProvider: ContextProvider,
         identityManager: IdentityManager,
         writeKey: String,
         sessionManager: SessionManager,
-        consentManager: ConsentManager
+        consentManager: ConsentManager,
+        providerContextManager: ProviderContextManager
     ) {
         self.contextProvider = contextProvider
         self.identityManager = identityManager
         self.writeKey = writeKey
         self.sessionManager = sessionManager
         self.consentManager = consentManager
+        self.providerContextManager = providerContextManager
     }
 
     /// Enrich an event with identity, context, and metadata
@@ -53,12 +57,17 @@ internal final class EventEnrichmentService: Sendable {
         // (`context.providers.metarouter`), so pipeline mappings read one shape
         // from both platforms — renaming either side forks them.
         let session = await sessionManager.touch()
-        context.providers = [
-            "metarouter": [
-                "sessionID": .string(session.sessionId),
-                "sessionCount": .int(session.sessionCount),
-            ]
+        // Host values first, the SDK's block last, so the session stamp wins any
+        // collision. The API already refuses `metarouter`; this ordering is what
+        // still holds for a value that reached the map another way. Flipping it —
+        // one merge with the host map last — hands a customer sessionID, and
+        // nothing downstream would flag it.
+        var providers = providerContextManager.getAll()
+        providers["metarouter"] = [
+            "sessionID": .string(session.sessionId),
+            "sessionCount": .int(session.sessionCount),
         ]
+        context.providers = providers
 
         // Consent is read here, per event, for the same reason: this funnel is
         // shared by every source. The stamp is the state at ENRICHMENT time — not

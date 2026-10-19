@@ -26,11 +26,21 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // not, and the client bound later stamps from that same manager.
     private let consentManager: ConsentManager
 
-    /// The default manager reads `UserDefaults.standard` — fine for a proxy that is
-    /// never asked about consent; anything exercising consent through a proxy must
-    /// inject an isolated manager.
-    init(consentManager: ConsentManager = ConsentManager(storage: ConsentStorage())) {
+    // Bypasses the pending-call queue for the same reasons as consent, plus one of
+    // its own: the queue drops its OLDEST entry at capacity (`ProxyState.cap`), so
+    // a host that sets a vendor id and then tracks a burst of pre-initialize events
+    // would have the id evicted — the one call that cannot be lost.
+    private let providerContextManager: ProviderContextManager
+
+    /// The default managers read `UserDefaults.standard` — fine for a proxy never
+    /// asked about consent or provider context; anything exercising either through
+    /// a proxy must inject isolated managers.
+    init(
+        consentManager: ConsentManager = ConsentManager(storage: ConsentStorage()),
+        providerContextManager: ProviderContextManager = ProviderContextManager(storage: ProviderContextStorage())
+    ) {
         self.consentManager = consentManager
+        self.providerContextManager = providerContextManager
         bridgeProcessor = BridgeMessageProcessor(
             sink: ProxyBridgeSink(box: bridgeClient)
         )
@@ -155,6 +165,9 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         if info["consent"] == nil {
             info["consent"] = consentManager.getConsent().debugInfoValue
         }
+        if info["providerContext"] == nil {
+            info["providerContext"] = providerContextManager.debugInfoValue
+        }
         return info
     }
 
@@ -198,6 +211,24 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 
     public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
         ConsentSubscription(onCancel: consentManager.subscribe(handler))
+    }
+
+    // MARK: - Provider context (direct, never queued — see providerContextManager)
+
+    public func setProviderContext(_ provider: String, key: String, value: Any?) {
+        providerContextManager.setValue(provider: provider, key: key, value: value)
+    }
+
+    public func getProviderContext() -> [String: [String: CodableValue]] {
+        providerContextManager.getAll()
+    }
+
+    public func clearProviderContext(_ provider: String) {
+        providerContextManager.clear(provider: provider)
+    }
+
+    public func clearAllProviderContext() {
+        providerContextManager.clearAll()
     }
 }
 

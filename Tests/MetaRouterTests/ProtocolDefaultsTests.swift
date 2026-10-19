@@ -3,7 +3,7 @@ import WebKit
 @testable import MetaRouter
 
 /// A host type conforming to `AnalyticsInterface` that implements none of the
-/// requirements added for the WebView bridge or consent. It
+/// requirements added for the WebView bridge, consent, or provider context. It
 /// compiling at all is the main assertion: without the protocol-extension defaults,
 /// every minor release that grows the protocol breaks hosts' builds.
 private final class LegacyHostFake: AnalyticsInterface, @unchecked Sendable {
@@ -42,8 +42,12 @@ final class ProtocolDefaultsTests: XCTestCase {
         let subscription = host.subscribeToConsent { _ in }
         subscription.cancel()
         XCTAssertTrue(subscription.isCancelled)
+        host.setProviderContext("googleFirebase", key: "appInstanceId", value: "x")
+        host.clearProviderContext("googleFirebase")
+        host.clearAllProviderContext()
 
         XCTAssertEqual(host.getConsent(), Consent(explicit: false, optOut: [:]))
+        XCTAssertEqual(host.getProviderContext(), [:])
     }
 
     @MainActor
@@ -62,6 +66,10 @@ final class ProtocolDefaultsTests: XCTestCase {
         _ = target.getConsent()
         target.subscribeToConsent { _ in }.cancel()
         target.clearConsent()
+        target.setProviderContext("googleFirebase", key: "appInstanceId", value: "x")
+        _ = target.getProviderContext()
+        target.clearProviderContext("googleFirebase")
+        target.clearAllProviderContext()
     }
 
     /// The defaults removed the compiler's witness check, so this is what catches an
@@ -73,8 +81,12 @@ final class ProtocolDefaultsTests: XCTestCase {
         defer { iso.cleanUp() }
         var deps = iso.deps
         deps.consentManager = ConsentManager(storage: iso.consentStorage)
+        deps.providerContextManager = ProviderContextManager(storage: iso.providerContextStorage)
         let client = AnalyticsClient.initialize(options: TestDataFactory.makeInitOptions(), deps: deps)
-        let proxy = AnalyticsProxy(consentManager: deps.consentManager!)
+        let proxy = AnalyticsProxy(
+            consentManager: deps.consentManager!,
+            providerContextManager: deps.providerContextManager!
+        )
         ProtocolDefaultProbe.reset()
 
         driveEveryDefaultedRequirement(client)
@@ -90,7 +102,7 @@ final class ProtocolDefaultsTests: XCTestCase {
 
         driveEveryDefaultedRequirement(LegacyHostFake())
 
-        XCTAssertEqual(ProtocolDefaultProbe.hits.count, 6)
+        XCTAssertEqual(ProtocolDefaultProbe.hits.count, 10)
     }
 
     /// A wrapper that forwards `track` but not `getConsent` must not log per event.

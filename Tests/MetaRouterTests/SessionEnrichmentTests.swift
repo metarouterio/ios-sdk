@@ -39,7 +39,8 @@ final class SessionEnrichmentTests: XCTestCase {
             ),
             writeKey: "test-key",
             sessionManager: sessionManager,
-            consentManager: ConsentManager(storage: ConsentStorage(userDefaults: defaults))
+            consentManager: ConsentManager(storage: ConsentStorage(userDefaults: defaults)),
+            providerContextManager: ProviderContextManager(storage: ProviderContextStorage(userDefaults: defaults))
         )
     }
 

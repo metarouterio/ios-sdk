@@ -11,15 +11,26 @@ public enum MetaRouter {
     // instance. Consent is a device-scoped compliance record, not identity, which
     // is why reset() leaves it alone.
     private static let consentManager = ConsentManager(storage: ConsentStorage())
-    private static let proxy = AnalyticsProxy(consentManager: consentManager)
+    // One per process, for the same reasons as consent plus one more: it loads from
+    // storage at construction, before any client exists, so last launch's vendor ids
+    // are already on the cold-launch events initialize() goes on to emit.
+    private static let providerContextManager = ProviderContextManager(storage: ProviderContextStorage())
+    private static let proxy = AnalyticsProxy(
+        consentManager: consentManager,
+        providerContextManager: providerContextManager
+    )
     private static let store = RealClientStore()
 
     /// Test seam for the process-wide manager; see `ConsentManager._replaceStorageForTesting`.
     internal static var _consentManagerForTesting: ConsentManager { consentManager }
 
+    /// Test seam for the process-wide manager; see `ProviderContextManager._replaceStorageForTesting`.
+    internal static var _providerContextManagerForTesting: ProviderContextManager { providerContextManager }
+
     private static var clientDependencies: AnalyticsDependencies {
         var deps = AnalyticsDependencies.production
         deps.consentManager = consentManager
+        deps.providerContextManager = providerContextManager
         return deps
     }
 
