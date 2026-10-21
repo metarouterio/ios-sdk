@@ -1,7 +1,9 @@
 import Foundation
 
-/// Service responsible for enriching events with context and metadata
-public final class EventEnrichmentService: Sendable {
+/// Service responsible for enriching events with context and metadata. Internal:
+/// it is only correct when built with the client's own session and consent
+/// managers, so nothing outside the SDK constructs one.
+internal final class EventEnrichmentService: Sendable {
 
     private let contextProvider: ContextProvider
     private let identityManager: IdentityManager
@@ -14,9 +16,8 @@ public final class EventEnrichmentService: Sendable {
     /// `metarouter:session:*` keys (independent mints, a double-incremented
     /// sessionCount), and a second consent manager never hears the host's
     /// `setConsent` / `clearConsent` — it would stamp a consent the user has since
-    /// withdrawn. A public standalone initializer existed before consent and was
-    /// removed for exactly that reason; the class stays public only so its
-    /// `EnrichedEventPayload` factories remain callable on the client's instance.
+    /// withdrawn. The type and a standalone initializer were public before consent,
+    /// and both were withdrawn for exactly that reason.
     internal init(
         contextProvider: ContextProvider,
         identityManager: IdentityManager,
@@ -33,7 +34,7 @@ public final class EventEnrichmentService: Sendable {
 
     /// Enrich an event with identity, context, and metadata
     /// Equivalent to the React Native enrichEvent function
-    public func enrichEvent(
+    func enrichEvent(
         _ event: EventWithIdentity
     ) async -> EnrichedEventPayload {
         var context = await contextProvider.getContext()
@@ -60,15 +61,19 @@ public final class EventEnrichmentService: Sendable {
         ]
 
         // Consent is read here, per event, for the same reason: this funnel is
-        // shared by every source. The stamp is the state at ENRICHMENT time — the
-        // same moment identity and session are read — not at the track() call:
+        // shared by every source. The stamp is the state at ENRICHMENT time — not
+        // atomically with identity and session, which were read before the awaits
+        // above, but never as early as the track() call:
         // track() only schedules enrichment, so `track(); setConsent()` on adjacent
         // lines can stamp the new state, and a pre-initialize call replayed at bind
         // is stamped with whatever consent holds at replay. Once enriched, a payload
         // is immutable; a later setConsent never rewrites it. Before the host's first
         // setConsent this is the implicit default (`explicit: false`, registered
         // categories at their defaults) — a complete block the server gates like
-        // implicit-consent web traffic, never an absent field. The path and shape
+        // implicit-consent web traffic, never an absent field. (Events a
+        // pre-consent build enriched and left on disk drain without one; they were
+        // never consent-stamped, and stamping today's consent onto them would
+        // misattribute it.) The path and shape
         // are the web SDK's `context.consent`; the server's per-integration gating
         // reads one block from both platforms, so moving or renaming this forks
         // every consent rule downstream.
@@ -91,7 +96,7 @@ public final class EventEnrichmentService: Sendable {
     }
 
     /// Enrich a base event by first adding identity information, then enriching
-    public func enrichEvent(
+    func enrichEvent(
         _ baseEvent: BaseEvent
     ) async -> EnrichedEventPayload {
         let identity = await identityManager.getIdentityInfo()
@@ -115,7 +120,7 @@ public final class EventEnrichmentService: Sendable {
 
 
     /// Create and enrich a track event
-    public func createTrackEvent(
+    func createTrackEvent(
         event: String,
         properties: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
@@ -129,7 +134,7 @@ public final class EventEnrichmentService: Sendable {
     }
 
     /// Create and enrich an identify event
-    public func createIdentifyEvent(
+    func createIdentifyEvent(
         userId: String,
         traits: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
@@ -143,7 +148,7 @@ public final class EventEnrichmentService: Sendable {
     }
 
     /// Create and enrich a group event
-    public func createGroupEvent(
+    func createGroupEvent(
         groupId: String,
         traits: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
@@ -157,7 +162,7 @@ public final class EventEnrichmentService: Sendable {
     }
 
     /// Create and enrich a screen event
-    public func createScreenEvent(
+    func createScreenEvent(
         name: String,
         properties: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
@@ -173,7 +178,7 @@ public final class EventEnrichmentService: Sendable {
     }
 
     /// Create and enrich a page event
-    public func createPageEvent(
+    func createPageEvent(
         name: String,
         properties: [String: CodableValue]? = nil
     ) async -> EnrichedEventPayload {
@@ -189,7 +194,7 @@ public final class EventEnrichmentService: Sendable {
     }
 
     /// Create and enrich an alias event
-    public func createAliasEvent(
+    func createAliasEvent(
         newUserId: String,
         previousUserId: String? = nil
     ) async -> EnrichedEventPayload {
