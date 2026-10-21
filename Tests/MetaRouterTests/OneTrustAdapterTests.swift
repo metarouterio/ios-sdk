@@ -183,6 +183,48 @@ final class OneTrustAdapterTests: XCTestCase {
         XCTAssertEqual(OneTrustAdapter.normalize(groups: "", explicit: false).optOut, [:])
     }
 
+    /// Dictionary order is undefined; two casings of one category must resolve the
+    /// same way every run, and fail closed.
+    func testKeysCollidingAfterLowercasingResolveOptedOut() {
+        let consent = OneTrustAdapter.normalize(["C0004": 1, "c0004": 0], explicit: true)
+
+        XCTAssertEqual(consent.optOut, ["c0004": true])
+    }
+
+    /// An unrelated cookie named `groups` earlier in the jar must not shadow
+    /// OptanonConsent's — that would stamp a user who accepted everything as
+    /// rejecting everything.
+    func testUnrelatedGroupsCookieDoesNotShadowOptanonConsent() {
+        let jar = "groups=beta; OptanonConsent=isGpcEnabled=0&groups=C0001%3A1%2CC0002%3A1"
+
+        let consent = OneTrustAdapter.normalize(groups: jar, explicit: true)
+
+        XCTAssertEqual(consent.optOut, ["c0001": false, "c0002": false])
+    }
+
+    /// Other OneTrust parameters share the `key:value` shape; with `groups`
+    /// missing they must not come out as phantom categories.
+    func testParameterizedValueWithoutGroupsYieldsNoCategories() {
+        let consent = OneTrustAdapter.normalize(groups: "isGpcEnabled=0&hosts=H1:1,H2:0&genVendors=V1:1,V2:1", explicit: true)
+
+        XCTAssertEqual(consent.optOut, [:])
+    }
+
+    /// In a jar, `groups` can be the first parameter of the cookie's own value.
+    func testGroupsAsFirstParameterOfACookieInAJarIsFound() {
+        let jar = "OptanonConsent=groups=C0001%3A1%2CC0002%3A1&isGpcEnabled=0; other=1"
+
+        let consent = OneTrustAdapter.normalize(groups: jar, explicit: true)
+
+        XCTAssertEqual(consent.optOut, ["c0001": false, "c0002": false])
+    }
+
+    func testWholeValueEncodedTwiceIsDecodedAndSearchedAgain() {
+        let consent = OneTrustAdapter.normalize(groups: "isGpcEnabled%3D0%26groups%3DC0001%253A1%252CC0002%253A0", explicit: true)
+
+        XCTAssertEqual(consent.optOut, ["c0001": false, "c0002": true])
+    }
+
     // MARK: - End to end through the SDK's reconcile
 
     func testOutputRoundTripsThroughSetConsent() {

@@ -92,8 +92,13 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// the raw payload through an adapter (e.g. `OneTrustAdapter.normalize`) and hand
     /// the canonical result here. The SDK reconciles it against the registered
     /// categories, persists it across launches, and stamps it on every subsequent
-    /// outbound event as `context.consent`. Fully replaces prior state; a snapshot
-    /// with an older `timestamp` than the stored state is ignored.
+    /// outbound event as `context.consent`. Keys are matched case-insensitively and
+    /// sent lowercase. Fully replaces prior state, with one exception: a snapshot
+    /// whose `timestamp` is older than the newest host-supplied `timestamp` seen —
+    /// including before a `clearConsent` — is ignored as a stale CMP replay, and so
+    /// is one equal to it once a later untimestamped call or a `clearConsent` has
+    /// replaced that snapshot. Untimestamped calls are never rejected and are not
+    /// compared with any timestamp.
     ///
     /// Usable before `initialize` and immediately effective: an event tracked on the
     /// next line carries the new state. Consent never gates delivery — events always
@@ -105,7 +110,9 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// with every registered category at its default posture.
     func getConsent() -> Consent
 
-    /// Wipe the stored consent state and return to the implicit default. This is the
+    /// Wipe the stored consent state and return to the implicit default. A CMP
+    /// snapshot timestamped at or before the withdrawn consent can no longer restore
+    /// it; push a fresh choice untimestamped, or with a newer timestamp. This is the
     /// consent-withdrawal path — unlike `reset()`, which clears identity but leaves
     /// consent untouched.
     func clearConsent()
@@ -120,4 +127,67 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     ///   already queued.
     @discardableResult
     func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe
+}
+
+// MARK: - Defaults for host conformers
+
+/// Defaults for every requirement added after the protocol first shipped, so a host
+/// type conforming to `AnalyticsInterface` (a test fake, a wrapper) keeps compiling
+/// across a minor SDK upgrade. The SDK's own types implement all of these; the
+/// defaults only ever run on a host conformer.
+///
+/// Each one warns and does nothing, rather than trapping: a wrapper that forgets to
+/// forward a new call loses that call — visible in the log — instead of either
+/// breaking the host's build or crashing in production. Any requirement added to
+/// the protocol from here on gets a default in this extension for the same reason.
+extension AnalyticsInterface {
+
+    @MainActor
+    public func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
+        Self.warnNotImplemented("attachWebView")
+    }
+
+    public func registerConsentCategories(_ categories: [ConsentCategory]) {
+        Self.warnNotImplemented("registerConsentCategories")
+    }
+
+    public func setConsent(_ consent: Consent) {
+        Self.warnNotImplemented("setConsent")
+    }
+
+    /// The implicit default with nothing registered — the same answer a fresh SDK
+    /// gives before any category registration or `setConsent`.
+    public func getConsent() -> Consent {
+        Self.warnNotImplemented("getConsent")
+        return Consent(explicit: false, optOut: [:])
+    }
+
+    public func clearConsent() {
+        Self.warnNotImplemented("clearConsent")
+    }
+
+    @discardableResult
+    public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe {
+        Self.warnNotImplemented("subscribeToConsent")
+        return {}
+    }
+
+    private static func warnNotImplemented(_ method: String) {
+        ProtocolDefaultProbe.record(method)
+        Logger.warn("\(method) is not implemented by \(Self.self) — the call was ignored. A type wrapping the SDK must forward it to MetaRouter.Analytics.")
+    }
+}
+
+/// Records every default above that runs. The defaults removed the compiler's
+/// check that the SDK's own types implement each requirement — a signature that
+/// drifts (a new parameter, a changed isolation) silently stops being the witness,
+/// and the call becomes a logged no-op. Tests drive every requirement through the
+/// protocol on the SDK's types and assert this stays empty.
+internal enum ProtocolDefaultProbe {
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var _hits: [String] = []
+
+    static func record(_ method: String) { lock.withLock { _hits.append(method) } }
+    static var hits: [String] { lock.withLock { _hits } }
+    static func reset() { lock.withLock { _hits.removeAll() } }
 }

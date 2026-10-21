@@ -56,7 +56,7 @@ final class ConsentProxyTests: XCTestCase {
         proxy.setConsent(Consent(explicit: true, optOut: ["c0002": false], timestamp: 1))
 
         XCTAssertEqual(proxy.getConsent(), Consent(explicit: true, optOut: ["c0001": false, "c0002": false], timestamp: 1))
-        XCTAssertEqual(ConsentStorage(userDefaults: defaults).get()?.consent.optOut, ["c0002": false],
+        XCTAssertEqual(ConsentStorage(userDefaults: defaults).get()?.consent?.optOut, ["c0002": false],
                        "persisted immediately — nothing waits for a bind")
     }
 

@@ -169,7 +169,7 @@ final class ConsentIntegrationTests: XCTestCase {
         _ = await poll { await harness.client.getDebugInfo()["lifecycle"] == .string("idle") }
 
         XCTAssertEqual(harness.client.getConsent().optOut, ["c0001": false, "c0002": false, "c0004": true])
-        XCTAssertEqual(ConsentStorage(userDefaults: defaults).get()?.consent.timestamp, 7, "still persisted")
+        XCTAssertEqual(ConsentStorage(userDefaults: defaults).get()?.consent?.timestamp, 7, "still persisted")
     }
 
     func testDebugInfoCarriesConsent() async {

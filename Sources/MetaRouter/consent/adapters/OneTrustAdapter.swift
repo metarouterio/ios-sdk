@@ -14,7 +14,7 @@ import Foundation
 /// OneTrust reports opt-IN status (1 / true = consented); the canonical shape is
 /// opt-OUT. The inversion happens here, once, so no other layer ever reasons about
 /// vendor semantics. Keys are lowercased (`C0004` → `c0004`) to match the web
-/// SDK's `optOut` keys — the SDK matches registered keys exactly.
+/// SDK's `optOut` keys.
 public enum OneTrustAdapter {
 
     /// - Parameters:
@@ -30,11 +30,9 @@ public enum OneTrustAdapter {
         var optOut: [String: Bool] = [:]
         optOut.reserveCapacity(raw.count)
         for (key, value) in raw {
-            let normalizedKey = ConsentKey.canonical(key)
-            if normalizedKey.isEmpty { continue }
-            optOut[normalizedKey] = !isOptedIn(value)
+            optOut[key] = !isOptedIn(value)
         }
-        return Consent(explicit: explicit, optOut: optOut)
+        return Consent(explicit: explicit, optOut: ConsentKey.canonicalize(optOut))
     }
 
     /// Convenience for the `OptanonConsent` cookie's `groups` parameter, e.g.
@@ -55,11 +53,16 @@ public enum OneTrustAdapter {
     /// Segments without a `key:value` shape, or whose key contains `=` (a
     /// `name=` prefix that is not a group ID), are skipped — a malformed value
     /// degrades to fewer categories (which reconciliation fills with their opt-out
-    /// defaults), never to a crash or to a consented category. A non-empty list that
-    /// yields no categories at all is logged (the one side effect of this otherwise
-    /// pure function), since that is almost certainly the wrong field.
+    /// defaults), never to a crash or to a consented category. Input that yields no
+    /// categories at all is logged (the one side effect of this otherwise pure
+    /// function), since that is almost certainly the wrong field.
     public static func normalize(groups: String, explicit: Bool) -> Consent {
-        let list = groupsList(in: groups)
+        guard let list = groupsList(in: groups) else {
+            if !groups.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Logger.warn("OneTrustAdapter: no `groups` parameter found — expected the OptanonConsent `groups` value, e.g. \"C0001:1,C0002:0\"")
+            }
+            return normalize([:], explicit: explicit)
+        }
 
         var raw: [String: Any] = [:]
         for segment in list.split(separator: ",") {
@@ -81,17 +84,38 @@ public enum OneTrustAdapter {
     /// cookie value, or a cookie jar. Tokens are split on both `&` (query-style
     /// parameters inside the cookie value) and `;` (cookie separators), so a
     /// `groups` that is the last parameter of its cookie does not swallow the next
-    /// cookie into its last category.
-    private static func groupsList(in input: String) -> String {
+    /// cookie into its last category. Nil when the input is parameterized but
+    /// carries no usable `groups` token.
+    ///
+    /// - A `groups=` token whose value holds no `key:value` pair is skipped, so an
+    ///   unrelated cookie named `groups` in the jar cannot shadow OptanonConsent's.
+    /// - `&`-joined input without a usable `groups` token is never parsed whole:
+    ///   other OneTrust parameters (`hosts=H1:1,H2:0`) share the `key:value` shape
+    ///   and would otherwise come out as phantom categories.
+    /// - Anything else is a bare list — or a whole value encoded once more
+    ///   (`groups%3DC0001%253A1`), which is decoded and searched again.
+    private static func groupsList(in input: String, depth: Int = 0) -> String? {
         let tokens = input.split(whereSeparator: { $0 == "&" || $0 == ";" })
         for token in tokens {
-            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.hasPrefix("groups=") {
-                let encoded = String(trimmed.dropFirst("groups=".count))
-                return encoded.removingPercentEncoding ?? encoded
+            var trimmed = Substring(token.trimmingCharacters(in: .whitespacesAndNewlines))
+            // In a cookie jar, `groups` can be the first parameter of the cookie's
+            // value: `OptanonConsent=groups=…`. Look past one `name=` prefix.
+            if !trimmed.hasPrefix("groups="),
+               let eq = trimmed.firstIndex(of: "="),
+               trimmed[trimmed.index(after: eq)...].hasPrefix("groups=") {
+                trimmed = trimmed[trimmed.index(after: eq)...]
             }
+            guard trimmed.hasPrefix("groups=") else { continue }
+            let encoded = String(trimmed.dropFirst("groups=".count))
+            let decoded = encoded.removingPercentEncoding ?? encoded
+            if decoded.contains(":") { return decoded }
         }
-        return input.removingPercentEncoding ?? input
+        if input.contains("&") { return nil }
+        let decoded = input.removingPercentEncoding ?? input
+        if depth == 0, decoded.contains("groups=") {
+            return groupsList(in: decoded, depth: 1)
+        }
+        return decoded
     }
 
     /// `Bool` is checked first on purpose: a JSON-sourced `NSNumber` holding 0 or 1
