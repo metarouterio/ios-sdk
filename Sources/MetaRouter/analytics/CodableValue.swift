@@ -207,6 +207,15 @@ extension CodableValue {
       return codableValue
     }
 
+    // JSONSerialization and Objective-C APIs hand booleans back as NSNumber
+    // (CFBoolean), and an NSNumber casts to Int — so without this check a parsed
+    // `false` ships as `0`, and a mapping expecting a JSON boolean misreads it.
+    // Checked by CF type id, before the numeric cases below claim it. A Swift Bool
+    // bridges to the same CFBoolean, so it takes this path too.
+    if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
+      return .bool(number.boolValue)
+    }
+
     switch value {
     case let string as String: return .string(string)
     case let int as Int: return .int(int)

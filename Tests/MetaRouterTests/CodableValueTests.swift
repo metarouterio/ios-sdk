@@ -115,6 +115,27 @@ final class CodableValueTests: XCTestCase {
     
     // Basic Type Tests
     
+    /// The bug this pins: JSONSerialization booleans are NSNumber, which cast to
+    /// Int, so `false` was stamped as `0`.
+    func testJsonAndObjcBooleansStayBooleans() throws {
+        let parsed = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(#"{"f":false,"t":true,"one":1,"zero":0,"half":1.5}"#.utf8))
+                as? [String: Any]
+        )
+
+        XCTAssertEqual(CodableValue.convert(parsed), [
+            "f": .bool(false),
+            "t": .bool(true),
+            "one": .int(1),
+            "zero": .int(0),
+            "half": .double(1.5),
+        ])
+        XCTAssertEqual(CodableValue.from(NSNumber(value: false)), .bool(false))
+        XCTAssertEqual(CodableValue.from(NSNumber(value: 1)), .int(1), "a numeric NSNumber is not a boolean")
+        XCTAssertEqual(CodableValue.from(true), .bool(true))
+        XCTAssertEqual(CodableValue.from(1), .int(1))
+    }
+
     func testStringValue() {
         let value: CodableValue = .string("hello")
         
