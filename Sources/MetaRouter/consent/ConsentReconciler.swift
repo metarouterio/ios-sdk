@@ -11,17 +11,23 @@ internal enum ConsentReconciler {
     /// - Parameters:
     ///   - incoming: consent as supplied by the host (already adapter-normalized).
     ///   - registry: registered categories, already deduplicated by the manager. An
-    ///     empty registry passes `optOut` through untouched: with nothing to
+    ///     empty registry passes every `optOut` value through: with nothing to
     ///     reconcile against, dropping keys would silently discard the host's signal.
     ///     The caller owns warning about that path.
+    ///
+    /// Incoming keys are canonicalized first, on both paths. The registry is
+    /// lowercase, so a host calling `setConsent` with OneTrust's native `C0004`
+    /// would otherwise miss the lookup and get the registered default — silently
+    /// dropping an opt-out whenever that default is opt-in.
     static func reconcile(_ incoming: Consent, against registry: [ConsentCategory]) -> Consent {
+        let optOut = ConsentKey.canonicalize(incoming.optOut)
         if registry.isEmpty {
-            return incoming
+            return Consent(explicit: incoming.explicit, optOut: optOut, timestamp: incoming.timestamp)
         }
         var completed: [String: Bool] = [:]
         completed.reserveCapacity(registry.count)
         for category in registry {
-            completed[category.key] = incoming.optOut[category.key] ?? category.defaultOptOut
+            completed[category.key] = optOut[category.key] ?? category.defaultOptOut
         }
         return Consent(explicit: incoming.explicit, optOut: completed, timestamp: incoming.timestamp)
     }

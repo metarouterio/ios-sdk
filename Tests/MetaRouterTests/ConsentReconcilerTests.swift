@@ -52,15 +52,35 @@ final class ConsentReconcilerTests: XCTestCase {
         XCTAssertNil(ConsentReconciler.reconcile(implicitIn, against: registry).timestamp)
     }
 
-    /// Key matching is exact: an uppercase incoming key is "unknown" and the
-    /// category takes its default. Adapters lowercase before handing over.
-    func testKeyMatchingIsCaseSensitive() {
-        let incoming = Consent(explicit: true, optOut: ["C0002": false])
+    /// Incoming keys are canonicalized before matching. A host building `Consent`
+    /// directly with OneTrust's native casing must not fall through to defaults —
+    /// for a category whose default is opt-IN, that silently drops an opt-out.
+    func testIncomingKeysAreCanonicalizedBeforeMatching() {
+        let incoming = Consent(explicit: true, optOut: ["C0001": true, " C0002 ": false])
 
         let result = ConsentReconciler.reconcile(incoming, against: registry)
 
-        XCTAssertEqual(result.optOut["c0002"], true, "unmatched → registered default (blocked)")
-        XCTAssertNil(result.optOut["C0002"])
+        XCTAssertEqual(result.optOut["c0001"], true, "the opt-out survives; default would have been false")
+        XCTAssertEqual(result.optOut["c0002"], false)
+        XCTAssertNil(result.optOut["C0001"])
+    }
+
+    /// Dictionary order is undefined, so a collision must resolve the same way
+    /// every run — and the safe way.
+    func testKeysCollidingAfterCanonicalizationResolveOptedOut() {
+        let incoming = Consent(explicit: true, optOut: ["C0001": false, "c0001": true])
+
+        let result = ConsentReconciler.reconcile(incoming, against: registry)
+
+        XCTAssertEqual(result.optOut["c0001"], true)
+    }
+
+    func testEmptyRegistryPassThroughIsCanonicalized() {
+        let incoming = Consent(explicit: true, optOut: ["C0004": true, "  ": false])
+
+        let result = ConsentReconciler.reconcile(incoming, against: [])
+
+        XCTAssertEqual(result.optOut, ["c0004": true], "lowercase keys, blank dropped")
     }
 
     func testImplicitDefaultIsExplicitFalseWithRegisteredDefaults() {

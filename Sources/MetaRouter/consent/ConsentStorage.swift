@@ -51,8 +51,9 @@ internal struct ConsentStorage: @unchecked Sendable {
         }
     }
 
-    /// Production path (the consent-withdrawal half of `clearConsent`), unlike
-    /// `SessionStorage.clear()` which is a test-only seam.
+    /// Production path — `clearConsent` when no host timestamp was ever seen, so
+    /// there is no watermark worth keeping — unlike `SessionStorage.clear()`, which
+    /// is a test-only seam.
     func clear() {
         userDefaults.removeObject(forKey: ConsentStorageKey.state.rawValue)
     }

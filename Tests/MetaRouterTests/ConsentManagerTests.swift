@@ -135,7 +135,7 @@ final class ConsentManagerTests: XCTestCase {
         let expected = ["c0001": false, "c0002": false, "c0004": true]
         XCTAssertEqual(manager.getConsent().optOut, expected)
         XCTAssertTrue(manager.getConsent().explicit)
-        XCTAssertEqual(storage.get()?.consent.optOut, ["c0002": false, "junk": true],
+        XCTAssertEqual(storage.get()?.consent?.optOut, ["c0002": false, "junk": true],
                        "storage keeps the host's raw snapshot — reconciliation is a view, recomputed per registry")
     }
 
@@ -146,7 +146,7 @@ final class ConsentManagerTests: XCTestCase {
         manager.setConsent(Consent(explicit: true, optOut: [:]))
 
         XCTAssertEqual(manager.getConsent().timestamp, 123_456)
-        XCTAssertEqual(storage.get()?.consent.timestamp, 123_456)
+        XCTAssertEqual(storage.get()?.consent?.timestamp, 123_456)
         XCTAssertNil(storage.get()?.lastHostTimestamp)
     }
 
@@ -180,7 +180,7 @@ final class ConsentManagerTests: XCTestCase {
 
         XCTAssertFalse(accepted)
         XCTAssertEqual(manager.getConsent(), before, "older snapshot must not overwrite a newer one")
-        XCTAssertEqual(storage.get()?.consent.optOut, ["c0004": false])
+        XCTAssertEqual(storage.get()?.consent?.optOut, ["c0004": false])
         XCTAssertEqual(storage.get()?.lastHostTimestamp, 2_000)
         XCTAssertEqual(received.values.count, 1, "only the initial emission — a rejected set never notifies")
     }
@@ -225,6 +225,40 @@ final class ConsentManagerTests: XCTestCase {
         XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 2_001)), "a newer host snapshot still wins")
     }
 
+    /// The equal-timestamp case of the rule above: the CMP replays its cached
+    /// snapshot carrying exactly the watermark's timestamp after the user's newer,
+    /// untimestamped choice. That replay is the snapshot the choice replaced.
+    func testEqualTimestampReplayAfterAnUntimestampedChoiceIsRejected() {
+        let manager = makeManager()
+        manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_000))    // CMP at launch
+        manager.setConsent(Consent(explicit: true, optOut: ["a": true]))                       // user's later choice
+
+        let accepted = manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_000))  // cached replay
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(manager.getConsent().optOut, ["a": true], "the user's newer choice stands")
+        XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_001)),
+                      "a genuinely newer host snapshot still wins")
+    }
+
+    func testSupersededFlagSurvivesARelaunch() {
+        let manager = makeManager()
+        manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_000))
+        manager.setConsent(Consent(explicit: true, optOut: ["a": true]))
+
+        let relaunched = ConsentManager(storage: storage, dispatch: { $0() })
+
+        XCTAssertFalse(relaunched.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_000)))
+    }
+
+    func testStoredConsentWrittenBeforeTheSupersededFieldStillDecodes() throws {
+        let legacy = #"{"consent":{"explicit":true,"optOut":{"a":true},"timestamp":5},"lastHostTimestamp":5}"#
+        let decoded = try JSONDecoder().decode(StoredConsent.self, from: Data(legacy.utf8))
+
+        XCTAssertEqual(decoded.lastHostTimestamp, 5)
+        XCTAssertNil(decoded.watermarkSuperseded)
+    }
+
     /// The failure this rule exists for: the host applies an untimestamped regional
     /// default (stamped by a device clock running fast), then the banner callback
     /// arrives carrying the CMP's server time, which is behind the device. The
@@ -264,7 +298,7 @@ final class ConsentManagerTests: XCTestCase {
         XCTAssertEqual(manager.getConsent().optOut, expected)
         XCTAssertTrue(manager.getConsent().explicit, "explicit carried through")
         XCTAssertEqual(manager.getConsent().timestamp, 1, "re-reconciliation is not a new decision")
-        XCTAssertEqual(storage.get()?.consent.optOut, ["c0002": false, "junk": true], "raw snapshot stays on disk")
+        XCTAssertEqual(storage.get()?.consent?.optOut, ["c0002": false, "junk": true], "raw snapshot stays on disk")
         XCTAssertEqual(received.values.map(\.optOut), [["c0002": false, "junk": true], expected],
                        "subscribers learn the completed block")
     }
@@ -383,13 +417,59 @@ final class ConsentManagerTests: XCTestCase {
         XCTAssertEqual(received.values.count, 1, "never set → clear is a visible no-op")
     }
 
-    func testSetAfterClearIsNotStale() {
+    /// The failure the kept watermark exists for: the user accepts, withdraws, and
+    /// then a delayed CMP callback replays the acceptance. Nothing may opt them back in.
+    func testWithdrawalCannotBeUndoneByAStaleSnapshot() {
         let manager = makeManager()
-        manager.setConsent(Consent(explicit: true, optOut: ["a": true], timestamp: 2_000))
+        manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 2_000))   // accepted
+        manager.clearConsent()                                                                // withdrew
+
+        XCTAssertFalse(manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 2_000)),
+                       "the very snapshot that was withdrawn")
+        XCTAssertFalse(manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_500)),
+                       "an even older one")
+        XCTAssertEqual(manager.getConsent(), Consent(explicit: false, optOut: [:]), "still withdrawn")
+    }
+
+    /// The watermark outlives `clearConsent`, so a wrong-unit timestamp (here
+    /// microseconds) must not become it — every later real timestamp would lose.
+    func testTimestampTooLargeForMillisecondsIsAppliedAsUntimestamped() {
+        let asserts = captureDebugAsserts()
+        let manager = makeManager()
+        clock.now = 7_000
+        XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": true], timestamp: 1_757_400_000_000_000)))
+
+        XCTAssertEqual(manager.getConsent().timestamp, 7_000, "stamped by the device clock, like an untimestamped call")
+        XCTAssertNil(storage.get()?.lastHostTimestamp, "never became the watermark")
+        XCTAssertEqual(asserts.values.count, 1)
+        XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_757_400_000_000)),
+                      "a real millisecond timestamp still applies")
+    }
+
+    func testFreshChoiceAfterWithdrawalIsAccepted() {
+        let manager = makeManager()
+        manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 2_000))
         manager.clearConsent()
 
-        XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_000)),
-                      "clear resets the host watermark — arbitration starts over after a withdrawal")
+        XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": true], timestamp: 2_001)), "newer host snapshot")
+        manager.clearConsent()
+        XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": false])), "untimestamped is never rejected")
+        XCTAssertEqual(manager.getConsent().optOut, ["a": false])
+    }
+
+    /// The withdrawal and its protecting watermark are persisted together, and both
+    /// survive a relaunch: the consent itself is gone, the watermark is not.
+    func testWithdrawalPersistsTheWatermarkButNotTheConsent() {
+        let manager = makeManager()
+        manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 2_000))
+        manager.clearConsent()
+
+        XCTAssertNil(storage.get()?.consent, "the withdrawn decision is not kept")
+        XCTAssertEqual(storage.get()?.lastHostTimestamp, 2_000)
+
+        let relaunched = ConsentManager(storage: storage, dispatch: { $0() })
+        XCTAssertEqual(relaunched.getConsent(), Consent(explicit: false, optOut: [:]))
+        XCTAssertFalse(relaunched.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 2_000)))
     }
 
     // MARK: - subscribe
@@ -552,7 +632,7 @@ final class ConsentManagerTests: XCTestCase {
 
         manager.registerConsentCategories([ConsentCategory(key: "c0001", defaultOptOut: false), ConsentCategory(key: "c0002")])
         XCTAssertEqual(manager.getConsent().optOut, ["c0001": false, "c0002": false], "view narrows")
-        XCTAssertEqual(storage.get()?.consent.optOut, ["c0001": false, "c0002": false, "c0004": false],
+        XCTAssertEqual(storage.get()?.consent?.optOut, ["c0001": false, "c0002": false, "c0004": false],
                        "storage does not narrow")
 
         manager.registerConsentCategories(Self.registry)
@@ -596,7 +676,7 @@ final class ConsentManagerTests: XCTestCase {
 
         XCTAssertEqual(manager.getConsent().optOut, ["y": true], "empty registry → raw passthrough from the new storage")
         XCTAssertEqual(received.values.count, 1, "old subscriber was dropped")
-        XCTAssertNil(storage.get()?.consent.optOut["y"], "old storage untouched")
+        XCTAssertNil(storage.get()?.consent?.optOut["y"], "old storage untouched")
     }
 
     /// Persistence runs off the manager lock: a host observing UserDefaults changes
@@ -618,7 +698,7 @@ final class ConsentManagerTests: XCTestCase {
         manager.setConsent(Consent(explicit: true, optOut: ["a": true], timestamp: 1))
 
         XCTAssertEqual(manager.getConsent().optOut, ["a": false])
-        XCTAssertEqual(storage.get()?.consent.optOut, ["a": false], "disk ends on the latest commit")
+        XCTAssertEqual(storage.get()?.consent?.optOut, ["a": false], "disk ends on the latest commit")
         XCTAssertGreaterThanOrEqual(observed.values.count, 1)
     }
 }

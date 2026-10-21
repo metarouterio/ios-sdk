@@ -1,7 +1,7 @@
 import Foundation
 
 /// What `ConsentStorage` persists: the host's snapshot exactly as it arrived (after
-/// stamping), plus the newest host-supplied timestamp seen since the last clear.
+/// stamping), plus the newest host-supplied timestamp ever seen.
 ///
 /// The RAW snapshot is stored, never the reconciled view. Reconciliation is a
 /// projection onto whatever registry is current, and persisting a projection loses
@@ -15,9 +15,23 @@ import Foundation
 /// host timestamps alone — an untimestamped set carries it forward untouched rather
 /// than resetting it, otherwise a host re-pushing the same decision without a
 /// timestamp would let an older CMP replay overwrite a newer explicit choice.
+///
+/// `watermarkSuperseded` marks that an untimestamped set — or a `clearConsent` —
+/// landed after the watermark was taken. A replay carrying exactly the watermark's
+/// timestamp is then stale too: it is the very snapshot the newer decision
+/// replaced. Without one, an equal timestamp is a harmless re-push and still
+/// applies. Optional so a blob persisted before the field existed decodes as "not
+/// superseded".
+///
+/// `consent` is nil after `clearConsent`: the user's decision is gone, but the
+/// watermark is kept, so a CMP snapshot from before the withdrawal — a slow launch
+/// callback, an old cookie read out of a WebView — cannot opt the user back in.
+/// One blob for both, so a crash can never persist the withdrawal without the
+/// watermark that protects it, or the reverse.
 internal struct StoredConsent: Codable, Equatable, Sendable {
-    var consent: Consent
+    var consent: Consent?
     var lastHostTimestamp: Int64?
+    var watermarkSuperseded: Bool? = nil
 }
 
 /// Owns the consent state machine: the category registry, the current reconciled
@@ -81,7 +95,8 @@ internal final class ConsentManager: @unchecked Sendable {
     // Recomputed only when the registry changes: getConsent() sits on the per-event
     // enrichment path, and rebuilding the default map per event is avoidable work.
     private var implicitDefault: Consent = ConsentReconciler.implicitDefault(for: [])
-    /// nil = the host has never set consent (or cleared it).
+    /// nil = the host has never set consent, or cleared it before any host timestamp
+    /// was seen. A clear after one keeps the watermark: `stored` with `consent == nil`.
     private var stored: StoredConsent?
     /// `stored` projected onto `registry`; recomputed on every set and registration.
     private var reconciled: Consent?
@@ -112,7 +127,7 @@ internal final class ConsentManager: @unchecked Sendable {
         // identity read from the same UserDefaults, and a consent persisted by a
         // prior launch must be visible to the very first read.
         self.stored = storage.get()
-        self.reconciled = stored.map { ConsentReconciler.reconcile($0.consent, against: []) }
+        self.reconciled = stored?.consent.map { ConsentReconciler.reconcile($0, against: []) }
     }
 
     /// What readers currently see. Caller holds `lock`.
@@ -134,8 +149,8 @@ internal final class ConsentManager: @unchecked Sendable {
     /// categories the snapshot never mentioned take their registered default.
     ///
     /// Misconfigured input degrades instead of trapping in release — a registration
-    /// typo must not take the host down: keys are trimmed and lowercased (optOut keys
-    /// are matched exactly, and vendor adapters lowercase), blank keys are dropped,
+    /// typo must not take the host down: keys are trimmed and lowercased (incoming
+    /// optOut keys are canonicalized the same way before matching), blank keys are dropped,
     /// and duplicates keep their first occurrence. Each case asserts in debug.
     func registerConsentCategories(_ categories: [ConsentCategory]) {
         let normalized = Self.normalize(categories)
@@ -145,7 +160,7 @@ internal final class ConsentManager: @unchecked Sendable {
         let before = visibleLocked()
         registry = normalized
         implicitDefault = ConsentReconciler.implicitDefault(for: normalized)
-        reconciled = stored.map { ConsentReconciler.reconcile($0.consent, against: normalized) }
+        reconciled = stored?.consent.map { ConsentReconciler.reconcile($0, against: normalized) }
         notifyIfChangedLocked(from: before)
     }
 
@@ -191,8 +206,9 @@ internal final class ConsentManager: @unchecked Sendable {
     /// Reconciles, stores, persists, and notifies. Fully replaces prior state.
     ///
     /// - Returns: `false` when the update was ignored as stale: it carries a
-    ///   host-supplied timestamp older than the newest host-supplied timestamp seen
-    ///   since the last `clearConsent`. A CMP replaying a cached choice must not
+    ///   host-supplied timestamp older than the newest host-supplied timestamp ever
+    ///   seen — or equal to it, once an untimestamped set or a `clearConsent` has
+    ///   replaced that snapshot. A CMP replaying a cached choice must not
     ///   overwrite the fresher one the user just made.
     ///
     /// Two timestamps are only comparable when the same party stamped them. The
@@ -204,24 +220,43 @@ internal final class ConsentManager: @unchecked Sendable {
     /// always applied as the user's choice as of now and stamped with the device
     /// clock (informational only — `getConsent().timestamp` is not monotonic), and a
     /// host-timestamped call is checked only against the host watermark, which an
-    /// untimestamped call carries forward rather than resets. `clearConsent` resets
-    /// the watermark: a withdrawal starts arbitration over.
+    /// untimestamped call carries forward rather than resets. `clearConsent` keeps
+    /// the watermark too, so a withdrawal can never be undone by an old snapshot.
+    /// A host timestamp past this is not epoch milliseconds — micro- or nanoseconds
+    /// (~1.7e15+). The watermark survives `clearConsent`, so one such value would
+    /// reject every later real timestamp with no way out; it is applied as
+    /// untimestamped instead. A fixed date, not the device clock, which this rule
+    /// deliberately never consults. Too-small values (seconds) need no guard: they
+    /// only lose to real ones, they cannot lock anything.
+    static let maxPlausibleHostTimestamp: Int64 = 4_102_444_800_000   // 2100-01-01 in ms
+
     @discardableResult
     func setConsent(_ consent: Consent) -> Bool {
+        var consent = consent
+        if let hostTimestamp = consent.timestamp, hostTimestamp > Self.maxPlausibleHostTimestamp {
+            let message = "setConsent: timestamp \(hostTimestamp) is not epoch milliseconds — applied as untimestamped"
+            Logger.warn(message)
+            Self.debugAssert(message)
+            consent = Consent(explicit: consent.explicit, optOut: consent.optOut)
+        }
+
         lock.lock()
         let watermark = stored?.lastHostTimestamp
         let incoming: StoredConsent
         if let hostTimestamp = consent.timestamp {
-            if let watermark, hostTimestamp < watermark {
+            if let watermark,
+               hostTimestamp < watermark
+                || (hostTimestamp == watermark && stored?.watermarkSuperseded == true) {
                 lock.unlock()
-                Logger.warn("setConsent ignored: snapshot (\(hostTimestamp)) is older than the newest host-timestamped state (\(watermark))")
+                Logger.warn("setConsent ignored: snapshot (\(hostTimestamp)) is not newer than the newest host-timestamped state (\(watermark)), which a later choice has replaced")
                 return false
             }
             incoming = StoredConsent(consent: consent, lastHostTimestamp: hostTimestamp)
         } else {
             incoming = StoredConsent(
                 consent: Consent(explicit: consent.explicit, optOut: consent.optOut, timestamp: clockMillis()),
-                lastHostTimestamp: watermark
+                lastHostTimestamp: watermark,
+                watermarkSuperseded: watermark == nil ? nil : true
             )
         }
 
@@ -242,12 +277,24 @@ internal final class ConsentManager: @unchecked Sendable {
         return true
     }
 
-    /// Wipes memory and persistence, returning to the implicit default. This is the
-    /// consent-withdrawal path — distinct from `reset()`, which clears identity and
-    /// deliberately leaves consent alone.
+    /// Withdraws consent: memory and persistence return to the implicit default.
+    /// This is the consent-withdrawal path — distinct from `reset()`, which clears
+    /// identity and deliberately leaves consent alone.
+    ///
+    /// The host-timestamp watermark survives, marked superseded. Resetting it would
+    /// let any delayed CMP snapshot from before the withdrawal — including one
+    /// carrying the exact timestamp of the consent just withdrawn — opt the user back
+    /// in with nothing to compare it against. Erring toward withdrawn is the
+    /// compliant failure; the cost is that a timestamped snapshot no newer than the
+    /// old watermark is ignored afterwards, and an untimestamped `setConsent` is
+    /// always available to push the current state.
     func clearConsent() {
         lock.lock()
-        let pending = commitLocked(nil)
+        let watermark = stored?.lastHostTimestamp
+        let withdrawn = watermark.map {
+            StoredConsent(consent: nil, lastHostTimestamp: $0, watermarkSuperseded: true)
+        }
+        let pending = commitLocked(withdrawn)
         lock.unlock()
         persist(pending)
     }
@@ -262,7 +309,7 @@ internal final class ConsentManager: @unchecked Sendable {
     private func commitLocked(_ newStored: StoredConsent?) -> PendingPersist {
         let before = visibleLocked()
         stored = newStored
-        reconciled = newStored.map { ConsentReconciler.reconcile($0.consent, against: registry) }
+        reconciled = newStored?.consent.map { ConsentReconciler.reconcile($0, against: registry) }
         commitSequence += 1
         notifyIfChangedLocked(from: before)
         return PendingPersist(sequence: commitSequence, value: newStored)
@@ -353,7 +400,7 @@ internal final class ConsentManager: @unchecked Sendable {
         registry = []
         implicitDefault = ConsentReconciler.implicitDefault(for: [])
         stored = loaded
-        reconciled = loaded.map { ConsentReconciler.reconcile($0.consent, against: []) }
+        reconciled = loaded?.consent.map { ConsentReconciler.reconcile($0, against: []) }
         warnedEmptyRegistry = false
         commitSequence = 0
         persistedSequence = 0

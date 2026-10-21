@@ -38,7 +38,7 @@ final class ConsentStorageTests: XCTestCase {
 
         let read = storage.get()
         XCTAssertEqual(read, stored)
-        XCTAssertNil(read?.consent.timestamp)
+        XCTAssertNil(read?.consent?.timestamp)
     }
 
     func testSetReplacesPriorState() {
@@ -46,7 +46,7 @@ final class ConsentStorageTests: XCTestCase {
         storage.set(StoredConsent(consent: Consent(explicit: true, optOut: ["c0001": false, "c0002": false]), lastHostTimestamp: nil))
         storage.set(StoredConsent(consent: Consent(explicit: true, optOut: ["c0001": true]), lastHostTimestamp: nil))
 
-        XCTAssertEqual(storage.get()?.consent.optOut, ["c0001": true], "replace, not merge")
+        XCTAssertEqual(storage.get()?.consent?.optOut, ["c0001": true], "replace, not merge")
     }
 
     func testClearRemovesState() {

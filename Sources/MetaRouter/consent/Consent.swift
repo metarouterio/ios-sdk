@@ -20,17 +20,19 @@ public struct Consent: Codable, Sendable, Equatable {
     public let explicit: Bool
 
     /// Flat category map with opt-OUT semantics: `true` means blocked. Keys are
-    /// lowercase category codes (`c0001`, `analytics`, …) and are matched exactly
-    /// against `ConsentCategory.key`; the SDK never re-cases an incoming key, so a
-    /// vendor adapter must lowercase before handing a payload over.
+    /// lowercase category codes (`c0001`, `analytics`, …). Keys passed to
+    /// `setConsent` are trimmed and lowercased before matching `ConsentCategory.key`;
+    /// if two collapse to one, opted-out wins.
     public let optOut: [String: Bool]
 
     /// Epoch milliseconds of the snapshot, as the host's CMP records it. Used for one
     /// thing: a `setConsent` carrying a timestamp older than the newest host-supplied
-    /// timestamp since the last `clearConsent` is ignored, because CMP callbacks race
+    /// timestamp is ignored — even across `clearConsent` — because CMP callbacks race
     /// app-launch reads and the newer choice must win regardless of arrival order.
     /// Only host timestamps are compared with each other. Leave nil and the SDK
     /// stamps the device clock for information only — such a call is always applied.
+    /// A value too large to be epoch milliseconds (micro- or nanoseconds) is treated
+    /// as nil, with a warning.
     /// Never part of the outbound payload.
     public let timestamp: Int64?
 
@@ -61,6 +63,21 @@ public struct Consent: Codable, Sendable, Equatable {
 internal enum ConsentKey {
     static func canonical(_ raw: String) -> String {
         return raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Re-keys an `optOut` map canonically, dropping blank keys. Two raw keys that
+    /// collapse to one (`C0004` and `c0004`) resolve fail-closed — opted out wins —
+    /// because dictionary order is undefined, and a coin flip must never be what
+    /// opts a user in.
+    static func canonicalize(_ optOut: [String: Bool]) -> [String: Bool] {
+        var result: [String: Bool] = [:]
+        result.reserveCapacity(optOut.count)
+        for (key, value) in optOut {
+            let canonicalKey = canonical(key)
+            if canonicalKey.isEmpty { continue }
+            result[canonicalKey] = (result[canonicalKey] ?? false) || value
+        }
+        return result
     }
 }
 
