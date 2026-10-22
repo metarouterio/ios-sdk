@@ -199,8 +199,9 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
 
     var providerContextToReturn: [String: [String: CodableValue]] = [:]
 
-    func setProviderContext(_ provider: String, key: String, value: Any?) {
+    func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool {
         recordCall(.setProviderContext(provider: provider, key: key, value: value.flatMap { CodableValue.from($0) }))
+        return true
     }
 
     func getProviderContext() -> [String: [String: CodableValue]] {

@@ -13,14 +13,11 @@ final class ProviderContextProxyTests: XCTestCase {
     private var manager: ProviderContextManager!
     private var proxy: AnalyticsProxy!
     private var mockClient: MockAnalyticsInterface!
-    private var savedDebugAssert: (@Sendable (String) -> Void)!
 
     override func setUp() {
         super.setUp()
         suiteName = "com.metarouter.test.providerContextProxy.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
-        savedDebugAssert = ProviderContextManager.debugAssert
-        ProviderContextManager.debugAssert = { _ in }
         storage = ProviderContextStorage(userDefaults: defaults)
         manager = ProviderContextManager(storage: storage)
         proxy = AnalyticsProxy(providerContextManager: manager)
@@ -28,7 +25,6 @@ final class ProviderContextProxyTests: XCTestCase {
     }
 
     override func tearDown() {
-        ProviderContextManager.debugAssert = savedDebugAssert
         defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
         suiteName = nil
@@ -36,8 +32,38 @@ final class ProviderContextProxyTests: XCTestCase {
         manager = nil
         proxy = nil
         mockClient = nil
-        savedDebugAssert = nil
         super.tearDown()
+    }
+
+    // MARK: - Through MetaRouter: one manager for proxy and client
+
+    /// The public entry point, end to end: set on `MetaRouter.Analytics.shared`
+    /// before `initialize`, read through the bound client, then `reset()` and
+    /// re-initialize. The process-wide manager is pointed at this test's suite for
+    /// the duration, so nothing lands in `UserDefaults.standard`.
+    func testSetBeforeInitializeThroughMetaRouterSurvivesResetAndReinitialize() async {
+        await MetaRouter.Analytics.resetAndWait()
+        MetaRouter._providerContextManagerForTesting._replaceStorageForTesting(storage)
+        addTeardownBlock {
+            await MetaRouter.Analytics.resetAndWait()
+            MetaRouter._providerContextManagerForTesting._replaceStorageForTesting(ProviderContextStorage())
+        }
+        let expected: [String: [String: CodableValue]] = ["googleFirebase": ["appInstanceId": .string("abc123")]]
+
+        XCTAssertTrue(MetaRouter.Analytics.shared.setProviderContext("googleFirebase", key: "appInstanceId", value: "abc123"))
+        XCTAssertFalse(MetaRouter.Analytics.shared.setProviderContext("Meta_Router", key: "sessionID", value: "x"))
+
+        let client = await MetaRouter.Analytics.initializeAndWait(with: TestDataFactory.makeInitOptions())
+        XCTAssertEqual(client.getProviderContext(), expected)
+        let debug = await client.getDebugInfo()
+        XCTAssertEqual(debug["providerContext"], .object(["googleFirebase": .array([.string("appInstanceId")])]))
+
+        await MetaRouter.Analytics.resetAndWait()
+        XCTAssertEqual(MetaRouter.Analytics.shared.getProviderContext(), expected, "reset() leaves provider context")
+        XCTAssertEqual(storage.get(), expected)
+
+        let reinitialized = await MetaRouter.Analytics.initializeAndWait(with: TestDataFactory.makeInitOptions())
+        XCTAssertEqual(reinitialized.getProviderContext(), expected)
     }
 
     // MARK: - Before any bind

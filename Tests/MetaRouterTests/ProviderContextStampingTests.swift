@@ -10,14 +10,11 @@ final class ProviderContextStampingTests: XCTestCase {
     private var defaults: UserDefaults!
     private var providerContext: ProviderContextManager!
     private var service: EventEnrichmentService!
-    private var savedDebugAssert: (@Sendable (String) -> Void)!
 
     override func setUp() {
         super.setUp()
         suiteName = "com.metarouter.test.providerContextStamping.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
-        savedDebugAssert = ProviderContextManager.debugAssert
-        ProviderContextManager.debugAssert = { _ in }
         providerContext = ProviderContextManager(
             storage: ProviderContextStorage(userDefaults: defaults)
         )
@@ -39,13 +36,11 @@ final class ProviderContextStampingTests: XCTestCase {
     }
 
     override func tearDown() {
-        ProviderContextManager.debugAssert = savedDebugAssert
         defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
         suiteName = nil
         providerContext = nil
         service = nil
-        savedDebugAssert = nil
         super.tearDown()
     }
 

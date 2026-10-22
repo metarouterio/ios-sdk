@@ -259,6 +259,8 @@ The analytics client provides the following methods:
 - `getConsent() -> Consent`: The current reconciled consent. Never nil: the implicit default (`explicit: false`, registered defaults) until the first `setConsent`
 - `clearConsent()`: Consent withdrawal — back to the implicit default, persisted state (timestamp history included) wiped. `reset()` does **not** do this
 - `subscribeToConsent(_ handler: @escaping @MainActor @Sendable (Consent) -> Void) -> ConsentSubscription`: Observe consent changes on the main actor; the first delivery is the current value, on the next main-queue turn. Keep the returned subscription and call `cancel()` to stop; it conforms to Combine's `Cancellable`
+- `setProviderContext(_ provider: String, key: String, value: Any?) -> Bool`: Stamp a value at `context.providers.<provider>.<key>` on every event. Persisted, survives `reset()`, usable before `initialize`. `nil` removes the key. Returns `false` when the write is rejected (discardable). See [Provider Context](#provider-context)
+- `getProviderContext()`, `clearProviderContext(_ provider: String)`, `clearAllProviderContext()`: Read, remove one provider's block, remove everything
 
 ### Testing APIs
 
@@ -515,6 +517,7 @@ The `advertisingId` is used for ad tracking and attribution (IDFA on iOS). See t
 | **groupId**       | `group(groupId)`       | `metarouter:group_id`       | All events after set | `reset()`                           |
 | **advertisingId** | `setAdvertisingId(id)` | `metarouter:advertising_id` | Event context        | `clearAdvertisingId()`, `reset()`   |
 | **consent**       | `setConsent(consent)`  | `metarouter:consent:state`  | All events (`context.consent`) | `clearConsent()` only (survives `reset()`) |
+| **provider context** | `setProviderContext(…)` | `metarouter:providers:context` | All events (`context.providers`) | `clearProviderContext`, `clearAllProviderContext` (survives `reset()`) |
 
 ### Event Enrichment Flow
 
@@ -912,12 +915,12 @@ Some destinations will not accept an event unless it carries a vendor's own iden
 Set a value once and the SDK stamps it onto **every** outbound event — native calls, lifecycle events, and WebView-bridge events alike:
 
 ```swift
-let analytics = MetaRouter.Analytics.shared
+import FirebaseAnalytics
 
-// Firebase resolves this asynchronously; set it as soon as you have it.
-Analytics.appInstanceID { appInstanceId in
-    guard let appInstanceId else { return }
-    analytics.setProviderContext("googleFirebase", key: "appInstanceId", value: appInstanceId)
+// On every launch, before `initialize`, so the launch's first events carry it.
+// Synchronous on iOS; nil while Firebase Analytics collection is disabled.
+if let appInstanceId = FirebaseAnalytics.Analytics.appInstanceID() {
+    MetaRouter.Analytics.shared.setProviderContext("googleFirebase", key: "appInstanceId", value: appInstanceId)
 }
 ```
 
@@ -948,21 +951,28 @@ analytics.getProviderContext()              // everything you have set
 analytics.setProviderContext("adjust", key: "adid", value: nil)  // remove one key
 analytics.clearProviderContext("adjust")    // remove one provider's block
 analytics.clearAllProviderContext()         // remove everything
+
+// A rejected write (oversize, not JSON, over a cap) returns false and logs.
+if !analytics.setProviderContext("adjust", key: "attribution", value: attribution) {
+    // too big to stamp on every event — send a smaller id instead
+}
 ```
 
 ### Lifetime and timing
 
 - **Usable before `initialize`**, and immediately effective — an event tracked on the next line carries the value. Values never wait for a bind, and are never dropped by the pre-initialize call queue.
 - **Persisted across launches**, so a value set in one launch is already on the wire for the next launch's first event.
-- **Survives `reset()`**. These are install-scoped vendor identifiers, not user state; a logout must not quietly stop events being forwardable. Use `clearProviderContext` to remove one deliberately.
+- **Survives `reset()`**. These are install-scoped vendor identifiers, not user state; a logout must not quietly stop events being forwardable. Use `clearProviderContext` to remove one deliberately. Note that `reset()` clears the advertising ID but leaves an IDFA-shaped value you put under a provider alone.
 
-Set each value as early as you have it. Values are stamped from the moment they are set, and `initialize` emits `Application Opened` (and can mint the first session) on its own init task — so a value that first resolves after that point misses those few events on the install launch. From the next launch onward the persisted value covers them. If a destination needs the id on *every* event with no exceptions, keep that one-launch gap in mind when reconciling counts.
+**Set values on every launch, and clear the ones that rotate.** The persisted value is stamped on every event until you overwrite it, so an id that changes underneath you — Firebase after `resetAnalyticsData()`, an advertising id the user resets — goes out stale with nothing to flag it. Re-set each value on launch, and call `clearProviderContext` on logout or ad-id reset for privacy-sensitive values.
+
+Set each value as early as you have it, ideally before `initialize`. Values are stamped from the moment they are set, and `initialize` emits `Application Opened` (and can mint the first session) on its own init task — so a value that first resolves after that point misses those few events on the install launch. From the next launch onward the persisted value covers them. Firebase's id is synchronous on iOS, so it can always be set first.
 
 ### Limits
 
-Because this map rides on every event, it is bounded: at most **10 providers**, **10 keys** per provider, **256 bytes** per encoded value, and **64 bytes** per name. Names are trimmed, and must not be blank. The `metarouter` provider is reserved for the SDK's own session block.
+Because this map rides on every event, it is bounded: at most **10 providers**, **10 keys** per provider, **256 bytes** per encoded value (as JSON), and **64 bytes** per name (UTF-8). Names are trimmed, and must not be blank. The `metarouter` provider is reserved for the SDK's own session block, in any casing or with separators (`Meta_Router`). Values must be JSON-representable all the way down: a dictionary holding a `Date` is rejected whole.
 
-A write that breaks one of these rules is **ignored** — logged as a warning, asserted in debug builds — and leaves prior state untouched. Nothing is silently truncated: a trimmed vendor id looks valid and matches nothing downstream, which is worse than an absent one. `getDebugInfo()` reports the shape (providers and their key names) without the values, since these are device identifiers and debug info lands in host logs.
+A write that breaks one of these rules is **ignored**: `setProviderContext` returns `false` and logs a warning, and prior state stays untouched. It never traps, even in debug builds, because these values often come from third-party SDKs you do not control. Nothing is silently truncated: a trimmed vendor id looks valid and matches nothing downstream, which is worse than an absent one. `getDebugInfo()` reports the shape (providers and their key names) without the values, since these are device identifiers and debug info lands in host logs.
 
 ## WebView Bridge
 

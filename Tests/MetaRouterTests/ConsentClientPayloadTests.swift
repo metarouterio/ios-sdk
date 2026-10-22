@@ -27,7 +27,11 @@ final class ConsentClientPayloadTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeClient(consentManager: ConsentManager, recorder: BodyRecordingNetworking) async -> AnalyticsClient {
+    private func makeClient(
+        consentManager: ConsentManager,
+        providerContextManager: ProviderContextManager? = nil,
+        recorder: BodyRecordingNetworking
+    ) async -> AnalyticsClient {
         let options = InitOptions(writeKey: "wk", ingestionHost: URL(string: "https://example.com")!, flushIntervalSeconds: 999)
         var deps = AnalyticsDependencies()
         deps.persistentQueue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 1000)
@@ -38,6 +42,8 @@ final class ConsentClientPayloadTests: XCTestCase {
         )
         deps.sessionStorage = SessionStorage(userDefaults: defaults)
         deps.consentManager = consentManager
+        deps.providerContextManager = providerContextManager
+        deps.providerContextStorage = ProviderContextStorage(userDefaults: defaults)
         deps.dispatcherConfig = Dispatcher.Config(
             endpointPath: "/v1/batch", timeoutMs: 1000, autoFlushThreshold: 9999, initialMaxBatchSize: 100
         )
@@ -112,6 +118,26 @@ final class ConsentClientPayloadTests: XCTestCase {
         try assertConsentBlock(event)
         let page = (event["context"] as? [String: Any])?["page"] as? [String: Any]
         XCTAssertEqual(page?["url"] as? String, "https://shop.example.com/cart")
+    }
+
+    /// The bridge leg of provider context: a WebView page cannot know the app's
+    /// vendor ids, so they must land on bridge events from the native side.
+    func testBridgeEventPostsBodyWithProviderContext() async throws {
+        let providers = ProviderContextManager(storage: ProviderContextStorage(userDefaults: defaults))
+        providers.setValue(provider: "googleFirebase", key: "appInstanceId", value: "abc123")
+        let recorder = BodyRecordingNetworking()
+        let client = await makeClient(consentManager: makeConsentManager(), providerContextManager: providers, recorder: recorder)
+
+        XCTAssertTrue(client.enqueueBridgeEvent(BridgeEnvelope(
+            version: 1, messageId: "bridge-2", type: .page, name: "Cart", properties: [:],
+            sentAt: nil, page: PageContext(url: "https://shop.example.com/cart", title: "Cart"), source: nil
+        )))
+
+        let event = try await firstPostedEvent(client, recorder)
+        let context = try XCTUnwrap(event["context"] as? [String: Any])
+        let block = try XCTUnwrap(context["providers"] as? [String: Any])
+        XCTAssertEqual(block["googleFirebase"] as? [String: String], ["appInstanceId": "abc123"])
+        XCTAssertNotNil(block["metarouter"], "session block alongside")
     }
 }
 

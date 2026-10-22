@@ -15,7 +15,8 @@ internal final class ProviderContextManager: @unchecked Sendable {
 
     /// Reserved for the SDK's own block (`sessionID`, `sessionCount`). Enrichment
     /// writes it last and would win anyway, but a write that silently vanished later
-    /// is worse than one rejected at the call.
+    /// is worse than one rejected at the call. Matched ignoring case and separators,
+    /// so `Metarouter` or `meta_router` cannot sit beside it looking like ours.
     static let reservedProvider = "metarouter"
 
     // This map rides on EVERY event and the cluster rejects a single event over
@@ -24,17 +25,14 @@ internal final class ProviderContextManager: @unchecked Sendable {
     // UUID) and well clear of the cap. Exceeding a bound rejects that one write and
     // keeps prior state; it never trims, because a truncated vendor id looks valid
     // and matches nothing.
+    //
+    // A rejection warns and returns false — no debug assertion. Values here come
+    // from third-party SDKs the host does not control (an attribution blob, a JWT),
+    // and an assertion would crash the host's debug build on vendor data.
     static let maxProviders = 10
     static let maxKeysPerProvider = 10
     static let maxValueBytes = 256
     static let maxNameBytes = 64
-
-    /// Debug-only fail-fast for host misuse, injectable: assertions are active in
-    /// test builds too, so tests of the release-degrade path swap this to observe
-    /// instead of trap. Matches `ConsentManager.debugAssert`.
-    internal nonisolated(unsafe) static var debugAssert: @Sendable (String) -> Void = {
-        assertionFailure($0)
-    }
 
     private let lock = NSLock()
     private var storage: ProviderContextStorage
@@ -70,28 +68,30 @@ internal final class ProviderContextManager: @unchecked Sendable {
     /// Host entry point. `nil` — and anything converting to JSON null — removes the
     /// key rather than stamping a null: a mapping gets nothing useful from a null,
     /// and a host passing nil means "stop sending this".
-    func setValue(provider: String, key: String, value: Any?) {
+    ///
+    /// - Returns: `false` when the write was rejected (with a warning) and prior
+    ///   state stands; `true` when the state now reflects the call, including the
+    ///   removal of a key that was not set.
+    @discardableResult
+    func setValue(provider: String, key: String, value: Any?) -> Bool {
         guard let value else {
-            setValue(provider: provider, key: key, codable: nil)
-            return
+            return setValue(provider: provider, key: key, codable: nil)
         }
         guard let converted = Self.strictlyConverted(value) else {
-            let message = "setProviderContext(\"\(provider)\", key: \"\(key)\"): value is not JSON-representable — ignored"
-            Logger.warn(message)
-            Self.debugAssert(message)
-            return
+            Logger.warn("setProviderContext(\"\(provider)\", key: \"\(key)\"): value is not JSON-representable — ignored")
+            return false
         }
         if case .null = converted {
-            setValue(provider: provider, key: key, codable: nil)
-            return
+            return setValue(provider: provider, key: key, codable: nil)
         }
-        setValue(provider: provider, key: key, codable: converted)
+        return setValue(provider: provider, key: key, codable: converted)
     }
 
     /// The one write path for a single key. `codable: nil` removes it, and removing
     /// a provider's last key removes the provider — an empty block would otherwise
     /// ship on every event forever, indistinguishable from a misconfigured one.
-    func setValue(provider: String, key: String, codable: CodableValue?) {
+    @discardableResult
+    func setValue(provider: String, key: String, codable: CodableValue?) -> Bool {
         let providerName = provider.trimmingCharacters(in: .whitespacesAndNewlines)
         let keyName = key.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -101,19 +101,16 @@ internal final class ProviderContextManager: @unchecked Sendable {
         // would break the mapping this exists to feed.
         guard let providerName = validatedName(providerName, label: "provider"),
               let keyName = validatedName(keyName, label: "key")
-        else { return }
+        else { return false }
 
-        guard providerName != Self.reservedProvider else {
-            let message = "setProviderContext: \"\(Self.reservedProvider)\" is reserved for the SDK's own session block — ignored"
-            Logger.warn(message)
-            Self.debugAssert(message)
-            return
+        guard !Self.isReserved(providerName) else {
+            Logger.warn("setProviderContext: \"\(providerName)\" is reserved for the SDK's own session block — ignored")
+            return false
         }
 
         if let codable, let rejection = oversizeRejection(codable, provider: providerName, key: keyName) {
             Logger.warn(rejection)
-            Self.debugAssert(rejection)
-            return
+            return false
         }
 
         lock.lock()
@@ -122,22 +119,22 @@ internal final class ProviderContextManager: @unchecked Sendable {
         if let codable {
             if providers[providerName] == nil && providers.count >= Self.maxProviders {
                 lock.unlock()
-                let message = "setProviderContext: at most \(Self.maxProviders) providers — \"\(providerName)\" ignored"
-                Logger.warn(message)
-                Self.debugAssert(message)
-                return
+                Logger.warn("setProviderContext: at most \(Self.maxProviders) providers — \"\(providerName)\" ignored")
+                return false
             }
             if existing[keyName] == nil && existing.count >= Self.maxKeysPerProvider {
                 lock.unlock()
-                let message = "setProviderContext: at most \(Self.maxKeysPerProvider) keys per provider — \"\(providerName).\(keyName)\" ignored"
-                Logger.warn(message)
-                Self.debugAssert(message)
-                return
+                Logger.warn("setProviderContext: at most \(Self.maxKeysPerProvider) keys per provider — \"\(providerName).\(keyName)\" ignored")
+                return false
             }
             existing[keyName] = codable
             providers[providerName] = existing
         } else {
-            existing.removeValue(forKey: keyName)
+            guard existing.removeValue(forKey: keyName) != nil else {
+                // Nothing to remove: no commit, same as `clear(provider:)`.
+                lock.unlock()
+                return true
+            }
             if existing.isEmpty {
                 providers.removeValue(forKey: providerName)
             } else {
@@ -148,6 +145,7 @@ internal final class ProviderContextManager: @unchecked Sendable {
         let pending = commitLocked()
         lock.unlock()
         persist(pending)
+        return true
     }
 
     /// Removes one provider's whole block.
@@ -209,20 +207,20 @@ internal final class ProviderContextManager: @unchecked Sendable {
         return CodableValue.from(value)
     }
 
+    private static func isReserved(_ providerName: String) -> Bool {
+        providerName.lowercased().filter { $0.isLetter || $0.isNumber } == reservedProvider
+    }
+
     private func validatedName(_ name: String, label: String) -> String? {
         guard !name.isEmpty else {
-            let message = "setProviderContext: blank \(label) name — ignored"
-            Logger.warn(message)
-            Self.debugAssert(message)
+            Logger.warn("setProviderContext: blank \(label) name — ignored")
             return nil
         }
         // UTF-8 bytes, not characters: the budget above is a byte budget, and one
         // grapheme cluster can carry hundreds of combining marks. Same reasoning as
         // the bridge parser's messageId cap.
         guard name.utf8.count <= Self.maxNameBytes else {
-            let message = "setProviderContext: \(label) name exceeds \(Self.maxNameBytes) bytes — ignored"
-            Logger.warn(message)
-            Self.debugAssert(message)
+            Logger.warn("setProviderContext: \(label) name exceeds \(Self.maxNameBytes) bytes — ignored")
             return nil
         }
         return name

@@ -153,14 +153,16 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     ///
     /// Bounded, because this rides on every event: at most 10 providers, 10 keys
     /// each, 256 bytes per encoded value, 64 bytes per name, and `metarouter` is
-    /// reserved. A write that breaks a rule is ignored with a warning (and a debug
-    /// assertion), leaving prior state untouched.
+    /// reserved (in any casing or spelling with separators). A write that breaks a
+    /// rule is ignored with a warning, leaving prior state untouched.
     ///
     /// - Parameters:
     ///   - provider: Provider namespace, e.g. `"googleFirebase"`.
     ///   - key: Key within that provider, e.g. `"appInstanceId"`.
     ///   - value: JSON-representable value. `nil` removes the key.
-    func setProviderContext(_ provider: String, key: String, value: Any?)
+    /// - Returns: `false` when the write was rejected; prior state stands.
+    @discardableResult
+    func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool
 
     /// Everything the host has set, as it will be stamped. Does not include the
     /// SDK's own `metarouter` session block, which is added per event at enrichment.
@@ -219,8 +221,11 @@ extension AnalyticsInterface {
         return ConsentSubscription(onCancel: {})
     }
 
-    public func setProviderContext(_ provider: String, key: String, value: Any?) {
+    /// `false`: nothing was applied.
+    @discardableResult
+    public func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool {
         Self.warnNotImplemented("setProviderContext")
+        return false
     }
 
     public func getProviderContext() -> [String: [String: CodableValue]] {

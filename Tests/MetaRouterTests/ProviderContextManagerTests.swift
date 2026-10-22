@@ -1,48 +1,24 @@
 import XCTest
 @testable import MetaRouter
 
-/// ProviderContextManager: the host-set map, its bounds, and persistence.
-/// `debugAssert` is swapped for a recorder so the release-degrade path is what gets
-/// exercised — assertions are live in test builds and would otherwise trap.
+/// ProviderContextManager: the host-set map, its bounds, and persistence. A rejected
+/// write returns false and leaves prior state alone; nothing asserts.
 final class ProviderContextManagerTests: XCTestCase {
     private var suiteName: String!
     private var defaults: UserDefaults!
     private var storage: ProviderContextStorage!
-    private var savedDebugAssert: (@Sendable (String) -> Void)!
-    private var asserted: Recorder!
-
-    private final class Recorder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _messages: [String] = []
-        func record(_ message: String) {
-            lock.lock(); defer { lock.unlock() }
-            _messages.append(message)
-        }
-        var messages: [String] {
-            lock.lock(); defer { lock.unlock() }
-            return _messages
-        }
-    }
-
     override func setUp() {
         super.setUp()
         suiteName = "com.metarouter.test.providerContext.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
         storage = ProviderContextStorage(userDefaults: defaults)
-        asserted = Recorder()
-        savedDebugAssert = ProviderContextManager.debugAssert
-        let recorder = asserted!
-        ProviderContextManager.debugAssert = { recorder.record($0) }
     }
 
     override func tearDown() {
-        ProviderContextManager.debugAssert = savedDebugAssert
         defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
         storage = nil
         suiteName = nil
-        asserted = nil
-        savedDebugAssert = nil
         super.tearDown()
     }
 
@@ -54,13 +30,12 @@ final class ProviderContextManagerTests: XCTestCase {
 
     func testSetStoresUnderProviderAndKey() {
         let manager = makeManager()
-        manager.setValue(provider: "googleFirebase", key: "appInstanceId", value: "abc123")
+        XCTAssertTrue(manager.setValue(provider: "googleFirebase", key: "appInstanceId", value: "abc123"))
 
         XCTAssertEqual(
             manager.getAll(),
             ["googleFirebase": ["appInstanceId": .string("abc123")]]
         )
-        XCTAssertTrue(asserted.messages.isEmpty)
     }
 
     func testMultipleProvidersAndKeysCoexist() {
@@ -120,10 +95,9 @@ final class ProviderContextManagerTests: XCTestCase {
         let manager = makeManager()
         manager.setValue(provider: "p", key: "a", value: "1")
         manager.setValue(provider: "p", key: "b", value: "2")
-        manager.setValue(provider: "p", key: "a", value: nil)
+        XCTAssertTrue(manager.setValue(provider: "p", key: "a", value: nil))
 
         XCTAssertEqual(manager.getAll(), ["p": ["b": .string("2")]])
-        XCTAssertTrue(asserted.messages.isEmpty, "removal is not misuse")
     }
 
     func testRemovingLastKeyRemovesProviderEntirely() {
@@ -162,6 +136,25 @@ final class ProviderContextManagerTests: XCTestCase {
         XCTAssertEqual(manager.getAll(), [:])
     }
 
+    /// Same as `clear(provider:)`: removing what is not there writes nothing.
+    func testRemovingAnAbsentKeyIsANoOpThatDoesNotPersist() {
+        let manager = makeManager()
+
+        XCTAssertTrue(manager.setValue(provider: "p", key: "absent", value: nil))
+
+        XCTAssertNil(storage.get(), "nothing was ever written")
+    }
+
+    /// Removal never asserts — a blank name just has nothing to remove.
+    func testRemovalWithABlankNameIsRejectedQuietly() {
+        let manager = makeManager()
+        manager.setValue(provider: "p", key: "a", value: "1")
+
+        XCTAssertFalse(manager.setValue(provider: "  ", key: "a", value: nil))
+
+        XCTAssertEqual(manager.getAll(), ["p": ["a": .string("1")]])
+    }
+
     func testClearOfUnknownProviderIsANoOp() {
         let manager = makeManager()
         manager.setValue(provider: "p", key: "a", value: "1")
@@ -174,40 +167,45 @@ final class ProviderContextManagerTests: XCTestCase {
 
     func testReservedMetarouterProviderIsRejected() {
         let manager = makeManager()
-        manager.setValue(provider: "metarouter", key: "sessionID", value: "hijacked")
+        XCTAssertFalse(manager.setValue(provider: "metarouter", key: "sessionID", value: "hijacked"))
 
         XCTAssertEqual(manager.getAll(), [:])
-        XCTAssertEqual(asserted.messages.count, 1)
-        XCTAssertTrue(asserted.messages[0].contains("reserved"))
     }
 
     func testReservedCheckAppliesAfterTrimming() {
         let manager = makeManager()
-        manager.setValue(provider: "  metarouter ", key: "sessionID", value: "hijacked")
+        XCTAssertFalse(manager.setValue(provider: "  metarouter ", key: "sessionID", value: "hijacked"))
 
         XCTAssertEqual(manager.getAll(), [:])
-        XCTAssertEqual(asserted.messages.count, 1)
+    }
+
+    /// Lookalikes would sit next to the SDK's block and read as ours downstream.
+    func testReservedCheckIgnoresCaseAndSeparators() {
+        let manager = makeManager()
+        for name in ["Metarouter", "METAROUTER", "meta router", "meta_router", "Meta-Router"] {
+            XCTAssertFalse(manager.setValue(provider: name, key: "sessionID", value: "x"), name)
+        }
+        XCTAssertTrue(manager.setValue(provider: "metarouterPartner", key: "id", value: "x"), "only the reserved name itself")
+        XCTAssertEqual(manager.getAll().keys.sorted(), ["metarouterPartner"])
     }
 
     // MARK: - Bounds
 
     func testBlankNamesAreRejected() {
         let manager = makeManager()
-        manager.setValue(provider: "   ", key: "a", value: "1")
-        manager.setValue(provider: "p", key: "  ", value: "1")
+        XCTAssertFalse(manager.setValue(provider: "   ", key: "a", value: "1"))
+        XCTAssertFalse(manager.setValue(provider: "p", key: "  ", value: "1"))
 
         XCTAssertEqual(manager.getAll(), [:])
-        XCTAssertEqual(asserted.messages.count, 2)
     }
 
     func testOverlongNamesAreRejected() {
         let manager = makeManager()
         let longName = String(repeating: "a", count: ProviderContextManager.maxNameBytes + 1)
-        manager.setValue(provider: longName, key: "a", value: "1")
-        manager.setValue(provider: "p", key: longName, value: "1")
+        XCTAssertFalse(manager.setValue(provider: longName, key: "a", value: "1"))
+        XCTAssertFalse(manager.setValue(provider: "p", key: longName, value: "1"))
 
         XCTAssertEqual(manager.getAll(), [:])
-        XCTAssertEqual(asserted.messages.count, 2)
     }
 
     func testNameLimitIsMeasuredInUtf8BytesNotCharacters() {
@@ -217,10 +215,9 @@ final class ProviderContextManagerTests: XCTestCase {
         XCTAssertEqual(name.count, 32)
         XCTAssertGreaterThan(name.utf8.count, ProviderContextManager.maxNameBytes)
 
-        manager.setValue(provider: name, key: "a", value: "1")
+        XCTAssertFalse(manager.setValue(provider: name, key: "a", value: "1"))
 
         XCTAssertEqual(manager.getAll(), [:], "a char-count budget would have accepted this")
-        XCTAssertEqual(asserted.messages.count, 1)
     }
 
     func testNameExactlyAtTheByteLimitIsAccepted() {
@@ -229,19 +226,17 @@ final class ProviderContextManagerTests: XCTestCase {
         manager.setValue(provider: name, key: "a", value: "1")
 
         XCTAssertEqual(manager.getAll()[name], ["a": .string("1")])
-        XCTAssertTrue(asserted.messages.isEmpty)
     }
 
     func testOversizeValueIsRejectedAndLeavesPriorValueIntact() {
         let manager = makeManager()
         manager.setValue(provider: "p", key: "a", value: "keep-me")
         let big = String(repeating: "x", count: ProviderContextManager.maxValueBytes + 1)
-        manager.setValue(provider: "p", key: "a", value: big)
+        XCTAssertFalse(manager.setValue(provider: "p", key: "a", value: big))
 
         // Rejected, never truncated: a trimmed vendor id looks valid and matches
         // nothing.
         XCTAssertEqual(manager.getAll(), ["p": ["a": .string("keep-me")]])
-        XCTAssertEqual(asserted.messages.count, 1)
     }
 
     func testValueExactlyAtTheByteLimitIsAccepted() {
@@ -251,7 +246,6 @@ final class ProviderContextManagerTests: XCTestCase {
         manager.setValue(provider: "p", key: "a", value: value)
 
         XCTAssertEqual(manager.getAll(), ["p": ["a": .string(value)]])
-        XCTAssertTrue(asserted.messages.isEmpty)
     }
 
     func testProviderCountIsCapped() {
@@ -261,11 +255,10 @@ final class ProviderContextManagerTests: XCTestCase {
         }
         XCTAssertEqual(manager.getAll().count, ProviderContextManager.maxProviders)
 
-        manager.setValue(provider: "overflow", key: "a", value: "1")
+        XCTAssertFalse(manager.setValue(provider: "overflow", key: "a", value: "1"))
 
         XCTAssertEqual(manager.getAll().count, ProviderContextManager.maxProviders)
         XCTAssertNil(manager.getAll()["overflow"])
-        XCTAssertEqual(asserted.messages.count, 1)
     }
 
     func testProviderCapDoesNotBlockWritesToProvidersAlreadyPresent() {
@@ -276,7 +269,6 @@ final class ProviderContextManagerTests: XCTestCase {
         manager.setValue(provider: "p0", key: "b", value: "2")
 
         XCTAssertEqual(manager.getAll()["p0"], ["a": .string("1"), "b": .string("2")])
-        XCTAssertTrue(asserted.messages.isEmpty)
     }
 
     func testKeysPerProviderAreCapped() {
@@ -286,11 +278,10 @@ final class ProviderContextManagerTests: XCTestCase {
         }
         XCTAssertEqual(manager.getAll()["p"]?.count, ProviderContextManager.maxKeysPerProvider)
 
-        manager.setValue(provider: "p", key: "overflow", value: "1")
+        XCTAssertFalse(manager.setValue(provider: "p", key: "overflow", value: "1"))
 
         XCTAssertEqual(manager.getAll()["p"]?.count, ProviderContextManager.maxKeysPerProvider)
         XCTAssertNil(manager.getAll()["p"]?["overflow"])
-        XCTAssertEqual(asserted.messages.count, 1)
     }
 
     func testKeyCapDoesNotBlockOverwritingAnExistingKey() {
@@ -301,7 +292,6 @@ final class ProviderContextManagerTests: XCTestCase {
         manager.setValue(provider: "p", key: "k0", value: "updated")
 
         XCTAssertEqual(manager.getAll()["p"]?["k0"], .string("updated"))
-        XCTAssertTrue(asserted.messages.isEmpty)
     }
 
     func testRemovalIsNotBlockedByAFullMap() {
@@ -312,7 +302,6 @@ final class ProviderContextManagerTests: XCTestCase {
         manager.setValue(provider: "p", key: "k0", value: nil)
 
         XCTAssertEqual(manager.getAll()["p"]?.count, ProviderContextManager.maxKeysPerProvider - 1)
-        XCTAssertTrue(asserted.messages.isEmpty)
     }
 
     /// `CodableValue.from` drops bad container elements and keeps the rest; here
@@ -320,11 +309,10 @@ final class ProviderContextManagerTests: XCTestCase {
     func testContainerWithAnUnrepresentableElementIsRejectedWhole() {
         let manager = makeManager()
         manager.setValue(provider: "p", key: "a", value: "keep-me")
-        manager.setValue(provider: "p", key: "a", value: ["id": "abc", "ts": Date()])
-        manager.setValue(provider: "p", key: "b", value: ["ok", Date()])
+        XCTAssertFalse(manager.setValue(provider: "p", key: "a", value: ["id": "abc", "ts": Date()]))
+        XCTAssertFalse(manager.setValue(provider: "p", key: "b", value: ["ok", Date()]))
 
         XCTAssertEqual(manager.getAll(), ["p": ["a": .string("keep-me")]])
-        XCTAssertEqual(asserted.messages.count, 2)
     }
 
     func testFullyRepresentableContainersAreAccepted() {
@@ -332,15 +320,13 @@ final class ProviderContextManagerTests: XCTestCase {
         manager.setValue(provider: "p", key: "a", value: ["id": "abc", "n": 2])
 
         XCTAssertEqual(manager.getAll()["p"]?["a"], .object(["id": .string("abc"), "n": .int(2)]))
-        XCTAssertTrue(asserted.messages.isEmpty)
     }
 
     func testUnrepresentableValueIsRejected() {
         let manager = makeManager()
-        manager.setValue(provider: "p", key: "a", value: Date())
+        XCTAssertFalse(manager.setValue(provider: "p", key: "a", value: Date()))
 
         XCTAssertEqual(manager.getAll(), [:])
-        XCTAssertEqual(asserted.messages.count, 1)
     }
 
     // MARK: - Persistence

@@ -215,7 +215,8 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 
     // MARK: - Provider context (direct, never queued — see providerContextManager)
 
-    public func setProviderContext(_ provider: String, key: String, value: Any?) {
+    @discardableResult
+    public func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool {
         providerContextManager.setValue(provider: provider, key: key, value: value)
     }
 

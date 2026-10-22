@@ -519,7 +519,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     // MARK: - Provider context (direct, never lifecycle-gated — see the proxy)
 
-    public func setProviderContext(_ provider: String, key: String, value: Any?) {
+    @discardableResult
+    public func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool {
         providerContextManager.setValue(provider: provider, key: key, value: value)
     }
 
