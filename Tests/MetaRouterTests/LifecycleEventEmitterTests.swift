@@ -56,7 +56,8 @@ final class LifecycleEventEmitterTests: XCTestCase {
             contextProvider: StubContextProvider(),
             identityManager: identityManager,
             writeKey: options.writeKey,
-            sessionManager: SessionManager(storage: SessionStorage(userDefaults: defaults))
+            sessionManager: SessionManager(storage: SessionStorage(userDefaults: defaults)),
+            consentManager: ConsentManager(storage: ConsentStorage(userDefaults: defaults))
         )
     }
 

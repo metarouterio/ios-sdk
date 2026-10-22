@@ -17,6 +17,8 @@ internal struct AnalyticsDependencies: Sendable {
     var identityStorage: IdentityStorage?
     var sessionStorage: SessionStorage?
     var sessionManager: SessionManager?
+    var consentStorage: ConsentStorage?
+    var consentManager: ConsentManager?
     var appContext: AppContext?
     /// Override the initial app foreground state read at cold launch.
     /// Tests pass `.active` / `.background` directly to skip the UIKit probe.
@@ -32,6 +34,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private let contextProvider: ContextProvider
     private let identityManager: IdentityManager
     private let sessionManager: SessionManager
+    private let consentManager: ConsentManager
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
     private let networkMonitor: NetworkReachability?
@@ -70,11 +73,18 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             storage: deps.sessionStorage ?? SessionStorage(),
             timeoutMinutes: options.sessionTimeoutMinutes
         )
+        // Same single-instance rule for consent: enrichment stamps what this
+        // manager holds, so the one the host's setConsent lands on must be this
+        // one — a second instance would stamp stale state on every event.
+        self.consentManager = deps.consentManager ?? ConsentManager(
+            storage: deps.consentStorage ?? ConsentStorage()
+        )
         self.enrichmentService = deps.enrichmentService ?? EventEnrichmentService(
             contextProvider: self.contextProvider,
             identityManager: self.identityManager,
             writeKey: options.writeKey,
-            sessionManager: self.sessionManager
+            sessionManager: self.sessionManager,
+            consentManager: self.consentManager
         )
 
         let diskStore = DiskStorage()

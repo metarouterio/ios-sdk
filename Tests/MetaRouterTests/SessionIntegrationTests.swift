@@ -80,6 +80,7 @@ final class SessionIntegrationTests: XCTestCase {
         )
         deps.identityStorage = IdentityStorage(userDefaults: defaults)
         deps.lifecycleStorage = LifecycleStorage(userDefaults: defaults)
+        deps.consentStorage = ConsentStorage(userDefaults: defaults)
         deps.appContext = AppContext(name: "test-app", version: "1.5.0", build: "42", namespace: "com.metarouter.test")
         deps.initialAppState = .active
         deps.dispatcherConfig = Dispatcher.Config(

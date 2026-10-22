@@ -24,7 +24,8 @@ final class EventEnrichmentTests: XCTestCase {
             contextProvider: mockContextProvider,
             identityManager: mockIdentityManager,
             writeKey: "test-write-key",
-            sessionManager: SessionManager(storage: SessionStorage(userDefaults: sessionDefaults))
+            sessionManager: SessionManager(storage: SessionStorage(userDefaults: sessionDefaults)),
+            consentManager: ConsentManager(storage: ConsentStorage(userDefaults: sessionDefaults))
         )
     }
 

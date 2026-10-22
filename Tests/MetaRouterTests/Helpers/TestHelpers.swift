@@ -213,22 +213,26 @@ extension CodableValue: Equatable {
     }
 }
 
-/// Session-isolated dependencies for tests that build real `AnalyticsClient`s.
-/// Without this, the client's default `SessionStorage()` writes
-/// `metarouter:session:*` into `UserDefaults.standard` — sessions minted by test
-/// events persist on the developer's machine and the session counter climbs by
-/// one on every suite run, forever. No assertion notices, which is exactly how
-/// the pollution survives. Call `cleanUp()` in tearDown.
+/// Session- and consent-isolated dependencies for tests that build real
+/// `AnalyticsClient`s. Without this, the client's default `SessionStorage()`
+/// writes `metarouter:session:*` into `UserDefaults.standard` — sessions minted
+/// by test events persist on the developer's machine and the session counter
+/// climbs by one on every suite run, forever. No assertion notices, which is
+/// exactly how the pollution survives. Consent gets the same treatment so a test
+/// never reads a developer's real persisted consent into its payloads (or writes
+/// one out). Call `cleanUp()` in tearDown.
 final class SessionIsolatedDefaults {
     let suiteName: String
     let defaults: UserDefaults
     let sessionStorage: SessionStorage
+    let consentStorage: ConsentStorage
 
-    /// Dependencies carrying only the isolated session storage — everything
-    /// else keeps its production default.
+    /// Dependencies carrying only the isolated session and consent storage —
+    /// everything else keeps its production default.
     var deps: AnalyticsDependencies {
         var deps = AnalyticsDependencies()
         deps.sessionStorage = sessionStorage
+        deps.consentStorage = consentStorage
         return deps
     }
 
@@ -236,6 +240,7 @@ final class SessionIsolatedDefaults {
         suiteName = "com.metarouter.test.\(label).\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)!
         sessionStorage = SessionStorage(userDefaults: defaults)
+        consentStorage = ConsentStorage(userDefaults: defaults)
     }
 
     func cleanUp() {

@@ -217,6 +217,7 @@ private final class Setup {
         var deps = AnalyticsDependencies()
         deps.persistentQueue = self.queue
         deps.networking = self.recorder
+        deps.consentStorage = ConsentStorage(userDefaults: defaults)
         // Connected so flush() actually POSTs (offline writes to disk instead).
         // No persisted data exists on a fresh test, so drainDiskStore is a no-op.
         deps.networkMonitor = StubNetworkMonitor(status: .connected)
