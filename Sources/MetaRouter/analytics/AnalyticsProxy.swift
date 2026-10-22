@@ -16,7 +16,21 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     private let bridgeClient = BridgeClientBox()
     private let bridgeProcessor: BridgeMessageProcessor
 
-    init() {
+    // Consent bypasses the pending-call queue entirely. The manager needs nothing
+    // from an initialized client, so MetaRouter builds one per process and hands
+    // the same instance to the proxy and to every client it binds. Queueing
+    // consent would lose writes to the bind race and to queue eviction, and a
+    // pre-bind read would have to lie — ignoring both a queued setConsent and the
+    // consent persisted by the previous launch. Compliance state gets none of
+    // those failure modes: every call acts on the manager immediately, bound or
+    // not, and the client bound later stamps from that same manager.
+    private let consentManager: ConsentManager
+
+    /// The default manager reads `UserDefaults.standard` — fine for a proxy that is
+    /// never asked about consent; anything exercising consent through a proxy must
+    /// inject an isolated manager.
+    init(consentManager: ConsentManager = ConsentManager(storage: ConsentStorage())) {
+        self.consentManager = consentManager
         bridgeProcessor = BridgeMessageProcessor(
             sink: ProxyBridgeSink(box: bridgeClient)
         )
@@ -134,7 +148,14 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     }
 
     public func getDebugInfo() async -> [String: CodableValue] {
-        return await state.getDebugInfo()
+        var info = await state.getDebugInfo()
+        // Pre-bind, the bootstrap info has no client to report consent; the manager
+        // exists regardless, and "what consent is the SDK holding before init" is
+        // exactly what someone debugging a CMP-first launch wants to see.
+        if info["consent"] == nil {
+            info["consent"] = consentManager.getConsent().debugInfoValue
+        }
+        return info
     }
 
     public func flush() { Task { await state.enqueue(.flush) } }
@@ -154,6 +175,29 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 
     public func recordOpenedURL(_ url: URL, sourceApplication: String?) {
         Task { await state.enqueue(.recordOpenedURL(url, sourceApplication)) }
+    }
+
+    // MARK: - Consent (direct, never queued — see consentManager)
+
+    public func registerConsentCategories(_ categories: [ConsentCategory]) {
+        consentManager.registerConsentCategories(categories)
+    }
+
+    @discardableResult
+    public func setConsent(_ consent: Consent) -> Bool {
+        consentManager.setConsent(consent)
+    }
+
+    public func getConsent() -> Consent {
+        consentManager.getConsent()
+    }
+
+    public func clearConsent() {
+        consentManager.clearConsent()
+    }
+
+    public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
+        ConsentSubscription(onCancel: consentManager.subscribe(handler))
     }
 }
 

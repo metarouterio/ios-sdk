@@ -171,6 +171,31 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
     func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
         recordCall(.attachWebView(allowedOrigins: allowedOrigins))
     }
+
+    var consentToReturn = Consent(explicit: false, optOut: [:])
+
+    func registerConsentCategories(_ categories: [ConsentCategory]) {
+        recordCall(.registerConsentCategories(keys: categories.map(\.key)))
+    }
+
+    func setConsent(_ consent: Consent) -> Bool {
+        recordCall(.setConsent(consent))
+        return true
+    }
+
+    func getConsent() -> Consent {
+        recordCall(.getConsent)
+        return consentToReturn
+    }
+
+    func clearConsent() {
+        recordCall(.clearConsent)
+    }
+
+    func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
+        recordCall(.subscribeToConsent)
+        return ConsentSubscription(onCancel: {})
+    }
 }
 
 // Analytics Call Recording
@@ -194,6 +219,11 @@ enum AnalyticsCall: Equatable {
     case setTracing(enabled: Bool)
     case recordOpenedURL(url: URL, sourceApplication: String?)
     case attachWebView(allowedOrigins: [String])
+    case registerConsentCategories(keys: [String])
+    case setConsent(Consent)
+    case getConsent
+    case clearConsent
+    case subscribeToConsent
 }
 
 // CodableValue Test Extensions
@@ -245,6 +275,25 @@ final class SessionIsolatedDefaults {
 
     func cleanUp() {
         defaults.removePersistentDomain(forName: suiteName)
+    }
+}
+
+/// A consent dispatcher the test drains by hand, on the main thread. Delivery
+/// must be asynchronous — `ConsentManager` traps an inline one, which would run
+/// handlers under its lock.
+final class DrainableDispatcher: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [@Sendable () -> Void] = []
+
+    var dispatch: @Sendable (@escaping @Sendable () -> Void) -> Void {
+        { [self] block in lock.withLock { pending.append(block) } }
+    }
+
+    /// Runs everything queued so far, including work queued while draining.
+    func drain() {
+        while let block = lock.withLock({ pending.isEmpty ? nil : pending.removeFirst() }) {
+            block()
+        }
     }
 }
 
