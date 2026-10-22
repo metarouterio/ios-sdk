@@ -72,8 +72,8 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
 
     /// Register the consent category set and each category's default posture.
     ///
-    /// Call on `MetaRouter.Analytics.shared` BEFORE `initialize`, and before the first
-    /// `setConsent`. The registry is not persisted, and until it is registered the
+    /// Call on `MetaRouter.Analytics.shared` BEFORE `initialize`. The registry is not
+    /// persisted, and until it is registered the
     /// implicit default is an empty `optOut` — which the server reads as nothing
     /// blocked. `initialize` can emit lifecycle events (`Application Opened`,
     /// `Session Started`) on its init task, so a registration that runs after it
@@ -84,6 +84,7 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// a full block (keep known keys, drop unknown ones, fill missing ones with the
     /// registered default). Default posture is opt-OUT. Re-registration replaces the
     /// set and recomputes the view of any stored consent against it; it does not merge.
+    /// A `setConsent` that arrives first is stored as-is and completed on registration.
     func registerConsentCategories(_ categories: [ConsentCategory])
 
     /// Push the current consent state into the SDK.
@@ -94,27 +95,28 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// categories, persists it across launches, and stamps it on every subsequent
     /// outbound event as `context.consent`. Keys are matched case-insensitively and
     /// sent lowercase. Fully replaces prior state, with one exception: a snapshot
-    /// whose `timestamp` is older than the newest host-supplied `timestamp` seen —
-    /// including before a `clearConsent` — is ignored as a stale CMP replay, and so
-    /// is one equal to it once a later untimestamped call or a `clearConsent` has
-    /// replaced that snapshot. Untimestamped calls are never rejected and are not
-    /// compared with any timestamp.
+    /// whose `timestamp` is older than the newest host-supplied `timestamp` since the
+    /// last `clearConsent` is ignored as a stale CMP replay. Untimestamped calls are
+    /// never rejected and are not compared with any timestamp.
     ///
     /// Usable before `initialize` and immediately effective: an event tracked on the
     /// next line carries the new state. Consent never gates delivery — events always
     /// send, and the server gates per integration on the stamped block.
-    func setConsent(_ consent: Consent)
+    ///
+    /// - Returns: `false` when the snapshot was ignored as stale; the previous state
+    ///   stands.
+    @discardableResult
+    func setConsent(_ consent: Consent) -> Bool
 
     /// The current reconciled consent state. Never nil: before the first `setConsent`
     /// (and after `clearConsent`) this is the implicit default — `explicit: false`
     /// with every registered category at its default posture.
     func getConsent() -> Consent
 
-    /// Wipe the stored consent state and return to the implicit default. A CMP
-    /// snapshot timestamped at or before the withdrawn consent can no longer restore
-    /// it; push a fresh choice untimestamped, or with a newer timestamp. This is the
-    /// consent-withdrawal path — unlike `reset()`, which clears identity but leaves
-    /// consent untouched.
+    /// Wipe the stored consent state, timestamp history included, and return to the
+    /// implicit default. Any `setConsent` after it applies, so do not re-push a CMP
+    /// snapshot from before the clear. Unlike `reset()`, which clears identity but
+    /// leaves consent untouched.
     func clearConsent()
 
     /// Subscribe to consent changes. The handler is `@MainActor`: it runs on the main
@@ -122,11 +124,10 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// never inline), then on every real change (value-identical `setConsent` calls
     /// do not fire).
     ///
-    /// - Returns: an unsubscribe closure; safe to call more than once. After it
-    ///   returns, the handler is not invoked again, even for a delivery that was
-    ///   already queued.
-    @discardableResult
-    func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe
+    /// - Returns: the subscription. Keep it: delivery continues until `cancel()`,
+    ///   even if the reference is dropped. After `cancel()` returns on the main
+    ///   actor, the handler is not invoked again, even for a delivery already queued.
+    func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription
 }
 
 // MARK: - Defaults for host conformers
@@ -151,8 +152,11 @@ extension AnalyticsInterface {
         Self.warnNotImplemented("registerConsentCategories")
     }
 
-    public func setConsent(_ consent: Consent) {
+    /// `false`: nothing was applied.
+    @discardableResult
+    public func setConsent(_ consent: Consent) -> Bool {
         Self.warnNotImplemented("setConsent")
+        return false
     }
 
     /// The implicit default with nothing registered — the same answer a fresh SDK
@@ -166,28 +170,32 @@ extension AnalyticsInterface {
         Self.warnNotImplemented("clearConsent")
     }
 
-    @discardableResult
-    public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe {
+    public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
         Self.warnNotImplemented("subscribeToConsent")
-        return {}
+        return ConsentSubscription(onCancel: {})
     }
 
+    /// Warns once per type and method: a wrapper that forwards `track` but not
+    /// `getConsent` would otherwise log on every event.
     private static func warnNotImplemented(_ method: String) {
-        ProtocolDefaultProbe.record(method)
-        Logger.warn("\(method) is not implemented by \(Self.self) — the call was ignored. A type wrapping the SDK must forward it to MetaRouter.Analytics.")
+        guard ProtocolDefaultProbe.record("\(Self.self).\(method)") else { return }
+        Logger.warn("\(method) is not implemented by \(Self.self) — the call was ignored. A type wrapping the SDK must forward it to MetaRouter.Analytics. Logged once.")
     }
 }
 
-/// Records every default above that runs. The defaults removed the compiler's
-/// check that the SDK's own types implement each requirement — a signature that
-/// drifts (a new parameter, a changed isolation) silently stops being the witness,
-/// and the call becomes a logged no-op. Tests drive every requirement through the
-/// protocol on the SDK's types and assert this stays empty.
+/// Records which `Type.method` defaults above have run — a set, so it is bounded by
+/// the number of conforming types and stays cheap in release, where it gates the
+/// warning to once each. The defaults also removed the compiler's check that the
+/// SDK's own types implement each requirement: a signature that drifts (a new
+/// parameter, a changed isolation) silently stops being the witness, and the call
+/// becomes a logged no-op. Tests drive every requirement through the protocol on
+/// the SDK's types and assert this stays empty.
 internal enum ProtocolDefaultProbe {
     private static let lock = NSLock()
-    private nonisolated(unsafe) static var _hits: [String] = []
+    private nonisolated(unsafe) static var _hits: Set<String> = []
 
-    static func record(_ method: String) { lock.withLock { _hits.append(method) } }
-    static var hits: [String] { lock.withLock { _hits } }
+    /// `true` the first time `key` is recorded.
+    static func record(_ key: String) -> Bool { lock.withLock { _hits.insert(key).inserted } }
+    static var hits: Set<String> { lock.withLock { _hits } }
     static func reset() { lock.withLock { _hits.removeAll() } }
 }

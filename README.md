@@ -247,17 +247,17 @@ The analytics client provides the following methods:
 - `getAnonymousId() async -> String`: Retrieve the device's anonymous ID. Awaits initialization internally, so on any initialized session the returned value is always valid. Returns `""` only when initialization was refused over invalid config (the degraded, never-hanging answer — see `onConfigError`)
 - `getSessionId() async -> String?`: The current analytics session id, or `nil` before the first event of the process. Reading it never starts or extends a session. See [Session Tracking](#session-tracking)
 - `flush()`: Flush events immediately
-- `reset()`: Reset analytics state and clear all stored data (includes clearing advertising ID)
+- `reset()`: Reset analytics state: clears identity (user, anonymous and group ids, advertising ID) and the event queue. Consent is **not** cleared; see `clearConsent()`
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
 - `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
 - `recordOpenedURL(_ url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. Mirrors UIKit's `application(_:open:options:)` shape. See [Lifecycle Events](#lifecycle-events) for wiring
 - `attachWebView(_ webView: WKWebView, allowedOrigins: [String])`: Capture track/page events emitted by pages inside a host-owned WebView. Main-actor-isolated. See [WebView Bridge](#webview-bridge) for wiring details
 - `registerConsentCategories(_ categories: [ConsentCategory])`: Register the consent categories the pipeline gates on and each one's default posture. Call on `MetaRouter.Analytics.shared` before `initialize`. See [Consent](#consent)
-- `setConsent(_ consent: Consent)`: Push the user's consent into the SDK. Reconciled against the registered categories, persisted across launches, stamped on every subsequent event as `context.consent`. Usable before `initialize`
+- `setConsent(_ consent: Consent) -> Bool`: Push the user's consent into the SDK. Reconciled against the registered categories, persisted across launches, stamped on every subsequent event as `context.consent`. Usable before `initialize`. Returns `false` when the snapshot was ignored as stale (discardable)
 - `getConsent() -> Consent`: The current reconciled consent. Never nil: the implicit default (`explicit: false`, registered defaults) until the first `setConsent`
-- `clearConsent()`: Consent withdrawal — back to the implicit default, persisted state wiped. `reset()` does **not** do this
-- `subscribeToConsent(_ handler: @escaping @MainActor @Sendable (Consent) -> Void) -> ConsentUnsubscribe`: Observe consent changes on the main actor; the first delivery is the current value, on the next main-queue turn. Returns an unsubscribe closure
+- `clearConsent()`: Consent withdrawal — back to the implicit default, persisted state (timestamp history included) wiped. `reset()` does **not** do this
+- `subscribeToConsent(_ handler: @escaping @MainActor @Sendable (Consent) -> Void) -> ConsentSubscription`: Observe consent changes on the main actor; the first delivery is the current value, on the next main-queue turn. Keep the returned subscription and call `cancel()` to stop; it conforms to Combine's `Cancellable`
 
 ### Testing APIs
 
@@ -513,6 +513,7 @@ The `advertisingId` is used for ad tracking and attribution (IDFA on iOS). See t
 | **anonymousId**   | Auto-generated (UUID)  | `metarouter:anonymous_id`   | All events           | `reset()` (new ID generated on init)|
 | **groupId**       | `group(groupId)`       | `metarouter:group_id`       | All events after set | `reset()`                           |
 | **advertisingId** | `setAdvertisingId(id)` | `metarouter:advertising_id` | Event context        | `clearAdvertisingId()`, `reset()`   |
+| **consent**       | `setConsent(consent)`  | `metarouter:consent:state`  | All events (`context.consent`) | `clearConsent()` only (survives `reset()`) |
 
 ### Event Enrichment Flow
 
@@ -861,9 +862,9 @@ analytics.setConsent(Consent(
 ))
 ```
 
-`setConsent` fully replaces the previous state, persists it across launches, and takes effect immediately — no await. Events are stamped when they are enriched, which happens on a background task right after `track()` returns, so set consent *before* tracking the events it should cover; `track(); setConsent()` on adjacent lines can stamp the new state on that event. It is safe to call before `initialize` (CMP callbacks often fire first), and the state survives both `analytics.reset()` and `MetaRouter.Analytics.reset()` + re-initialize: consent is a compliance record scoped to the device and person, not to the analytics identity, so a logout must not resurrect tracking the user opted out of. Only `clearConsent()` removes it.
+`setConsent` fully replaces the previous state, persists it across launches, and takes effect immediately — no await. Events are stamped when they are enriched, which happens on a background task right after `track()` returns, so set consent *before* tracking the events it should cover; `track(); setConsent()` on adjacent lines can stamp the new state on that event. Before the client is ready, calls are queued and enriched when it binds, so every queued event carries the consent current at bind, not at its call. It is safe to call before `initialize` (CMP callbacks often fire first), and the state survives both `analytics.reset()` and `MetaRouter.Analytics.reset()` + re-initialize: consent is a compliance record scoped to the device and person, not to the analytics identity, so a logout must not resurrect tracking the user opted out of. Only `clearConsent()` removes it.
 
-Each `Consent` carries an optional epoch-millisecond `timestamp`. If you supply timestamps (for example from the CMP's own record), a snapshot older than the newest timestamp you have supplied is ignored, so a CMP replaying a cached choice cannot overwrite a fresher one. That holds across `clearConsent()` as well: once consent is withdrawn, a snapshot timestamped at or before the withdrawn one cannot restore it — push a new choice untimestamped, or with a newer timestamp. A call without a timestamp is always applied as the user's current choice; the SDK stamps the device clock for information only and never compares it with yours. The timestamp never goes on the wire.
+Each `Consent` carries an optional epoch-millisecond `timestamp`. If you supply timestamps (for example from the CMP's own record), a snapshot older than the newest timestamp you have supplied is ignored, so a CMP replaying a cached choice cannot overwrite a fresher one; `setConsent` returns `false` when that happens. `clearConsent()` resets that history, so after a clear any snapshot applies — do not re-push one from before the clear. Use one unit: a single millisecond timestamp followed by seconds rejects every seconds call until the next clear. A call without a timestamp is always applied as the user's current choice; the SDK stamps the device clock for information only and never compares it with yours. The timestamp never goes on the wire.
 
 Before the first `setConsent`, `getConsent()` and every outbound event carry the **implicit default** — `explicit: false` with every registered category at its default — which the cluster gates exactly like an implicit-consent web visitor. There is no "unknown" state.
 
@@ -881,20 +882,22 @@ analytics.setConsent(OneTrustAdapter.normalize(statuses, explicit: true))
 analytics.setConsent(OneTrustAdapter.normalize(groups: "C0001%3A1%2CC0002%3A1%2CC0004%3A0", explicit: true))
 ```
 
-Pass `explicit: true` from the banner-interaction callback and `explicit: false` when applying a regional default — the payload does not say which it was; your code does. Re-run the two lines on every OneTrust consent-changed callback. Any other CMP (or your own preference screen) can build a `Consent` directly: adapters are a convenience, not a requirement.
+Pass `explicit: true` from the banner-interaction callback and `explicit: false` when applying a regional default — the payload does not say which it was; your code does. Re-run the two lines on every OneTrust consent-changed callback. If the cookie is absent, do not call `setConsent`: `normalize(groups: "", explicit: true)` reads as "explicitly opted out of everything", which records a rejection the user never made. Any other CMP (or your own preference screen) can build a `Consent` directly: adapters are a convenience, not a requirement.
 
 ### Observing and withdrawing
 
 ```swift
 // From a @MainActor context (a view controller, SwiftUI view, or app delegate):
-let unsubscribe = analytics.subscribeToConsent { consent in
+let subscription = analytics.subscribeToConsent { consent in
     // The handler is @MainActor @Sendable: UI and main-actor objects are safe to
     // touch directly. It fires once with the current value (asynchronously, on the
     // next main-queue turn), then on every real change.
     thirdPartySDK.setEnabled(consent.optOut["c0004"] == false)
 }
-// later, on the main actor — nothing is delivered after this returns, even if already queued
-unsubscribe()
+// Keep `subscription`: dropping it does not stop delivery. Later, on the main actor —
+// nothing is delivered after this returns, even if already queued:
+subscription.cancel()
+// Combine: AnyCancellable(subscription).store(in: &cancellables)
 
 analytics.clearConsent() // back to the implicit default; persisted state wiped
 ```

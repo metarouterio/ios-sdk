@@ -4,8 +4,8 @@ import Foundation
 /// the main actor, so a handler may touch UI and main-actor-isolated objects
 /// directly — no hop, no `@Sendable` capture errors for view controllers.
 public typealias ConsentHandler = @MainActor @Sendable (Consent) -> Void
-/// Returned by `subscribeToConsent`; call it to stop receiving changes. Idempotent.
-public typealias ConsentUnsubscribe = @Sendable () -> Void
+/// The manager's unsubscribe; wrapped in `ConsentSubscription` at the public API.
+typealias ConsentUnsubscribe = @Sendable () -> Void
 
 /// Canonical consent state: what the host pushes in through `setConsent` and what the
 /// SDK stores and stamps on outbound events. Field names and semantics are the web

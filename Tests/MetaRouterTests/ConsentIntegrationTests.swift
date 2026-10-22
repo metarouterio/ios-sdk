@@ -113,6 +113,28 @@ final class ConsentIntegrationTests: XCTestCase {
                        ConsentContext(explicit: false, optOut: ["c0001": false, "c0002": true, "c0004": true]))
     }
 
+    /// Pre-bind calls are queued and enriched at bind, so a queued event carries the
+    /// consent current at bind — latest wins — not the consent at its call.
+    func testPreBindEventIsStampedWithTheConsentCurrentAtBind() async {
+        let harness = makeHarness()
+        defer { harness.cleanUp() }
+        _ = await harness.client.getAnonymousId()
+        let proxy = AnalyticsProxy(consentManager: harness.manager)
+        proxy.registerConsentCategories(Self.registry)
+        proxy.setConsent(Consent(explicit: true, optOut: ["c0004": false]))
+
+        proxy.track("Queued")
+        proxy.setConsent(Consent(explicit: true, optOut: ["c0004": true]))
+        await proxy._bindAndReplay(harness.client)
+
+        var events: [EnrichedEventPayload] = []
+        _ = await poll {
+            events += await harness.collectEvents()
+            return events.contains { $0.event == "Queued" }
+        }
+        XCTAssertEqual(events.first { $0.event == "Queued" }?.context.consent?.optOut["c0004"], true)
+    }
+
     func testSetConsentThenEventCarriesReconciledConsent() async {
         let harness = makeHarness()
         defer { harness.cleanUp() }
@@ -169,7 +191,7 @@ final class ConsentIntegrationTests: XCTestCase {
         _ = await poll { await harness.client.getDebugInfo()["lifecycle"] == .string("idle") }
 
         XCTAssertEqual(harness.client.getConsent().optOut, ["c0001": false, "c0002": false, "c0004": true])
-        XCTAssertEqual(ConsentStorage(userDefaults: defaults).get()?.consent?.timestamp, 7, "still persisted")
+        XCTAssertEqual(ConsentStorage(userDefaults: defaults).get()?.consent.timestamp, 7, "still persisted")
     }
 
     func testDebugInfoCarriesConsent() async {

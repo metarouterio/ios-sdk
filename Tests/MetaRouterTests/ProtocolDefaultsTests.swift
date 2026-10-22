@@ -38,8 +38,10 @@ final class ProtocolDefaultsTests: XCTestCase {
         host.registerConsentCategories([ConsentCategory(key: "c0001")])
         host.setConsent(Consent(explicit: true, optOut: ["c0001": true]))
         host.clearConsent()
-        let unsubscribe = host.subscribeToConsent { _ in }
-        unsubscribe()
+        XCTAssertFalse(host.setConsent(Consent(explicit: true, optOut: ["c0001": true])), "nothing was applied")
+        let subscription = host.subscribeToConsent { _ in }
+        subscription.cancel()
+        XCTAssertTrue(subscription.isCancelled)
 
         XCTAssertEqual(host.getConsent(), Consent(explicit: false, optOut: [:]))
     }
@@ -58,8 +60,7 @@ final class ProtocolDefaultsTests: XCTestCase {
         target.registerConsentCategories([ConsentCategory(key: "c0001")])
         target.setConsent(Consent(explicit: true, optOut: ["c0001": true]))
         _ = target.getConsent()
-        let unsubscribe = target.subscribeToConsent { _ in }
-        unsubscribe()
+        target.subscribeToConsent { _ in }.cancel()
         target.clearConsent()
     }
 
@@ -71,7 +72,7 @@ final class ProtocolDefaultsTests: XCTestCase {
         let iso = SessionIsolatedDefaults(label: "protocolDefaults")
         defer { iso.cleanUp() }
         var deps = iso.deps
-        deps.consentManager = ConsentManager(storage: iso.consentStorage, dispatch: { $0() })
+        deps.consentManager = ConsentManager(storage: iso.consentStorage)
         let client = AnalyticsClient.initialize(options: TestDataFactory.makeInitOptions(), deps: deps)
         let proxy = AnalyticsProxy(consentManager: deps.consentManager!)
         ProtocolDefaultProbe.reset()
@@ -90,5 +91,21 @@ final class ProtocolDefaultsTests: XCTestCase {
         driveEveryDefaultedRequirement(LegacyHostFake())
 
         XCTAssertEqual(ProtocolDefaultProbe.hits.count, 6)
+    }
+
+    /// A wrapper that forwards `track` but not `getConsent` must not log per event.
+    @MainActor
+    func testDefaultWarnsOncePerTypeAndMethod() {
+        ProtocolDefaultProbe.reset()
+        let host: AnalyticsInterface = LegacyHostFake()
+
+        let output = captureStderrAndStdout {
+            for _ in 0..<5 { _ = host.getConsent() }
+            host.clearConsent()
+        }
+
+        XCTAssertEqual(output.components(separatedBy: "getConsent is not implemented").count - 1, 1)
+        XCTAssertEqual(output.components(separatedBy: "clearConsent is not implemented").count - 1, 1)
+        XCTAssertEqual(ProtocolDefaultProbe.hits, ["LegacyHostFake.getConsent", "LegacyHostFake.clearConsent"])
     }
 }

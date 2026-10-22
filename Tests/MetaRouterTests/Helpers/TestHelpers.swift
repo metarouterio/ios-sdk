@@ -178,8 +178,9 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.registerConsentCategories(keys: categories.map(\.key)))
     }
 
-    func setConsent(_ consent: Consent) {
+    func setConsent(_ consent: Consent) -> Bool {
         recordCall(.setConsent(consent))
+        return true
     }
 
     func getConsent() -> Consent {
@@ -191,10 +192,9 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.clearConsent)
     }
 
-    @discardableResult
-    func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe {
+    func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
         recordCall(.subscribeToConsent)
-        return {}
+        return ConsentSubscription(onCancel: {})
     }
 }
 
@@ -275,6 +275,25 @@ final class SessionIsolatedDefaults {
 
     func cleanUp() {
         defaults.removePersistentDomain(forName: suiteName)
+    }
+}
+
+/// A consent dispatcher the test drains by hand, on the main thread. Delivery
+/// must be asynchronous — `ConsentManager` traps an inline one, which would run
+/// handlers under its lock.
+final class DrainableDispatcher: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [@Sendable () -> Void] = []
+
+    var dispatch: @Sendable (@escaping @Sendable () -> Void) -> Void {
+        { [self] block in lock.withLock { pending.append(block) } }
+    }
+
+    /// Runs everything queued so far, including work queued while draining.
+    func drain() {
+        while let block = lock.withLock({ pending.isEmpty ? nil : pending.removeFirst() }) {
+            block()
+        }
     }
 }
 

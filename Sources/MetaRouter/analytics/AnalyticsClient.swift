@@ -490,7 +490,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         consentManager.registerConsentCategories(categories)
     }
 
-    public func setConsent(_ consent: Consent) {
+    @discardableResult
+    public func setConsent(_ consent: Consent) -> Bool {
         consentManager.setConsent(consent)
     }
 
@@ -502,9 +503,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         consentManager.clearConsent()
     }
 
-    @discardableResult
-    public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentUnsubscribe {
-        consentManager.subscribe(handler)
+    public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
+        ConsentSubscription(onCancel: consentManager.subscribe(handler))
     }
 
     public func flush() {
