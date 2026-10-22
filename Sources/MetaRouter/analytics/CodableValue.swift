@@ -207,9 +207,30 @@ extension CodableValue {
       return codableValue
     }
 
+    // JSONSerialization and Objective-C APIs hand booleans back as NSNumber
+    // (CFBoolean), and an NSNumber casts to Int — so without this check a parsed
+    // `false` ships as `0`, and a mapping expecting a JSON boolean misreads it.
+    // Checked by CF type id, before the numeric cases below claim it. A Swift Bool
+    // bridges to the same CFBoolean, so it takes this path too.
+    if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
+      return .bool(number.boolValue)
+    }
+
     switch value {
     case let string as String: return .string(string)
     case let int as Int: return .int(int)
+    // Sized integers do not cast to Int from Any, so without these an Int64 —
+    // Firebase's sessionID, a CoreData attribute — was dropped. UInt and UInt64 only
+    // when they fit: wrapping a large one negative would send a different number.
+    case let int as Int64: return .int(Int(int))
+    case let int as Int32: return .int(Int(int))
+    case let int as Int16: return .int(Int(int))
+    case let int as Int8: return .int(Int(int))
+    case let uint as UInt8: return .int(Int(uint))
+    case let uint as UInt16: return .int(Int(uint))
+    case let uint as UInt32: return .int(Int(uint))
+    case let uint as UInt: return Int(exactly: uint).map { .int($0) }
+    case let uint as UInt64: return Int(exactly: uint).map { .int($0) }
     case let double as Double: return .double(double)
     case let float as Float: return .double(Double(float))
     case let bool as Bool: return .bool(bool)
