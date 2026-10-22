@@ -38,8 +38,9 @@ internal struct StoredConsent: Codable, Equatable, Sendable {
 /// settled on consent the user had already changed. `dispatch` must deliver on the
 /// main thread (handlers are `@MainActor`; delivering elsewhere traps at runtime)
 /// and must be asynchronous: an inline dispatcher runs the handler under the lock,
-/// where a handler that calls back into the manager deadlocks. Delivery checks for
-/// that re-entry and traps instead of hanging.
+/// where a handler that calls back into the manager deadlocks. Debug builds trap a
+/// dispatcher that runs work before returning on the enqueuing thread; a
+/// synchronous hop to another thread is not caught.
 ///
 /// Persistence happens AFTER the lock is released. `UserDefaults` writes post
 /// `didChangeNotification` and fire KVO synchronously on the calling thread, so a
@@ -72,6 +73,7 @@ internal final class ConsentManager: @unchecked Sendable {
         func cancel() { lock.withLock { handler = nil } }
     }
 
+    #if DEBUG
     /// Traps a `dispatch` that runs work before returning, on the enqueuing thread:
     /// that work runs under the manager lock, where a re-entering handler deadlocks.
     private final class InlineDispatchCheck: @unchecked Sendable {
@@ -85,6 +87,7 @@ internal final class ConsentManager: @unchecked Sendable {
             precondition(!inline, "ConsentManager dispatch ran a handler inline under the manager lock; it must be asynchronous")
         }
     }
+    #endif
 
     private let lock = NSLock()
     private var storage: ConsentStorage
@@ -121,11 +124,15 @@ internal final class ConsentManager: @unchecked Sendable {
     ) {
         self.storage = storage
         self.clockMillis = clockMillis
+        #if DEBUG
         self.dispatch = { work in
             let check = InlineDispatchCheck()
             dispatch { check.assertNotInline(); work() }
             check.markReturned()
         }
+        #else
+        self.dispatch = dispatch
+        #endif
         // Loaded eagerly: the manager is built once per process alongside the
         // identity read from the same UserDefaults, and a consent persisted by a
         // prior launch must be visible to the very first read.
@@ -237,9 +244,9 @@ internal final class ConsentManager: @unchecked Sendable {
     func setConsent(_ consent: Consent) -> Bool {
         var consent = consent
         if let hostTimestamp = consent.timestamp, hostTimestamp > Self.maxPlausibleHostTimestamp {
-            let message = "setConsent: timestamp \(hostTimestamp) is not epoch milliseconds — applied as untimestamped"
-            Logger.warn(message)
-            Self.debugAssert(message)
+            // Warn only, no debug assertion: the timestamp usually comes from the
+            // CMP SDK, and vendor data must not crash the host's debug build.
+            Logger.warn("setConsent: timestamp \(hostTimestamp) is not epoch milliseconds — applied as untimestamped")
             consent = Consent(explicit: consent.explicit, optOut: consent.optOut)
         }
 

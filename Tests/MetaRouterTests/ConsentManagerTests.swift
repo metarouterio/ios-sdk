@@ -428,7 +428,7 @@ final class ConsentManagerTests: XCTestCase {
 
         XCTAssertEqual(manager.getConsent().timestamp, 7_000, "stamped by the device clock, like an untimestamped call")
         XCTAssertNil(storage.get()?.lastHostTimestamp, "never became the watermark")
-        XCTAssertEqual(asserts.values.count, 1)
+        XCTAssertEqual(asserts.values.count, 0, "vendor data: warns, never asserts")
         XCTAssertTrue(manager.setConsent(Consent(explicit: true, optOut: ["a": false], timestamp: 1_757_400_000_000)),
                       "a real millisecond timestamp still applies")
     }
