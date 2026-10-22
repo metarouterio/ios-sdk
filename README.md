@@ -917,7 +917,9 @@ Set a value once and the SDK stamps it onto **every** outbound event — native 
 ```swift
 import FirebaseAnalytics
 
-// On every launch, before `initialize`, so the launch's first events carry it.
+// On every launch, after `FirebaseApp.configure()` and before `initialize`, so the
+// launch's first events carry it. Called before `configure()`, appInstanceID()
+// returns nil, which removes the id saved by the previous launch.
 // Synchronous on iOS. nil while Firebase Analytics collection is disabled, and a
 // nil value removes the key, so a stale id from an earlier launch never lingers.
 MetaRouter.Analytics.shared.setProviderContext(
@@ -961,7 +963,7 @@ if !analytics.setProviderContext("adjust", key: "attribution", value: attributio
 
 ### Lifetime and timing
 
-- **Usable before `initialize`**, and immediately effective — an event tracked on the next line carries the value. Values never wait for a bind, and are never dropped by the pre-initialize call queue.
+- **Usable before `initialize`**, and immediately effective — an event tracked on the next line carries the value. Values never wait for a bind, and are never dropped by the pre-initialize call queue. The value is read when the event is enriched, just after `track()` returns, not at the call: `track("Logged Out")` followed by `clearProviderContext(…)` on the next line can send that event without it — the same rule as consent.
 - **Persisted across launches**, so a value set in one launch is already on the wire for the next launch's first event.
 - **Survives `reset()`**. These are install-scoped vendor identifiers, not user state; a logout must not quietly stop events being forwardable. Use `clearProviderContext` to remove one deliberately. Note that `reset()` clears the advertising ID but leaves an IDFA-shaped value you put under a provider alone.
 
