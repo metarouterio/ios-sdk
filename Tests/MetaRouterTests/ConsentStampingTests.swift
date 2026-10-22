@@ -67,15 +67,14 @@ final class ConsentStampingTests: XCTestCase {
         }
     }
 
-    /// The bridge path enriches via the EventWithIdentity overload with page facts
-    /// attached — the stamp must land there too, and must not clobber page.
+    /// The bridge sink enriches a `BaseEvent` with page facts attached — the
+    /// overload used here — so the stamp must land there and must not clobber page.
     func testBridgeShapedEventCarriesConsentAndPage() async {
         consentManager.registerConsentCategories(Self.registry)
-        let event = EventWithIdentity(
+        let event = BaseEvent(
             type: "track",
             event: "Web Click",
-            anonymousId: "anon-1",
-            timestamp: "2026-10-05T12:00:00.000Z",
+            properties: ["sku": "abc"],
             page: PageContext(url: "https://shop.example.com/cart", title: "Cart")
         )
 
