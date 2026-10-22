@@ -27,7 +27,7 @@ public struct Consent: Codable, Sendable, Equatable {
 
     /// Epoch milliseconds of the snapshot, as the host's CMP records it. Used for one
     /// thing: a `setConsent` carrying a timestamp older than the newest host-supplied
-    /// timestamp is ignored — even across `clearConsent` — because CMP callbacks race
+    /// timestamp since the last `clearConsent` is ignored, because CMP callbacks race
     /// app-launch reads and the newer choice must win regardless of arrival order.
     /// Only host timestamps are compared with each other. Leave nil and the SDK
     /// stamps the device clock for information only — such a call is always applied.
