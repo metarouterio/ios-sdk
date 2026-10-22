@@ -104,7 +104,7 @@ internal actor SessionManager {
     private var lastPersistedMono: Int64 = 0
 
     static func epochClockMillis() -> Int64 {
-        return Int64(Date().timeIntervalSince1970 * 1000)
+        return WallClock.epochMillis()
     }
 
     init(
