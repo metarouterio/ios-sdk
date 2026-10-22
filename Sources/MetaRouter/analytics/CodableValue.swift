@@ -219,6 +219,18 @@ extension CodableValue {
     switch value {
     case let string as String: return .string(string)
     case let int as Int: return .int(int)
+    // Sized integers do not cast to Int from Any, so without these an Int64 —
+    // Firebase's sessionID, a CoreData attribute — was dropped. UInt and UInt64 only
+    // when they fit: wrapping a large one negative would send a different number.
+    case let int as Int64: return .int(Int(int))
+    case let int as Int32: return .int(Int(int))
+    case let int as Int16: return .int(Int(int))
+    case let int as Int8: return .int(Int(int))
+    case let uint as UInt8: return .int(Int(uint))
+    case let uint as UInt16: return .int(Int(uint))
+    case let uint as UInt32: return .int(Int(uint))
+    case let uint as UInt: return Int(exactly: uint).map { .int($0) }
+    case let uint as UInt64: return Int(exactly: uint).map { .int($0) }
     case let double as Double: return .double(double)
     case let float as Float: return .double(Double(float))
     case let bool as Bool: return .bool(bool)

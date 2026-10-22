@@ -136,6 +136,21 @@ final class CodableValueTests: XCTestCase {
         XCTAssertEqual(CodableValue.from(1), .int(1))
     }
 
+    /// Sized integers do not cast to Int from Any; they were dropped.
+    func testSizedIntegersAreKept() {
+        XCTAssertEqual(CodableValue.from(Int64(1_757_400_000_000)), .int(1_757_400_000_000))
+        XCTAssertEqual(CodableValue.from(Int32(-5)), .int(-5))
+        XCTAssertEqual(CodableValue.from(Int16(7)), .int(7))
+        XCTAssertEqual(CodableValue.from(Int8(-3)), .int(-3))
+        XCTAssertEqual(CodableValue.from(UInt8(255)), .int(255))
+        XCTAssertEqual(CodableValue.from(UInt16(9)), .int(9))
+        XCTAssertEqual(CodableValue.from(UInt32(10)), .int(10))
+        XCTAssertEqual(CodableValue.from(UInt(11)), .int(11))
+        XCTAssertEqual(CodableValue.from(UInt64(12)), .int(12))
+        XCTAssertNil(CodableValue.from(UInt64.max), "does not fit Int: rejected, never wrapped negative")
+        XCTAssertEqual(CodableValue.convert(["sessionId": Int64(42)]), ["sessionId": .int(42)], "kept inside properties too")
+    }
+
     func testStringValue() {
         let value: CodableValue = .string("hello")
         
