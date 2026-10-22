@@ -196,6 +196,26 @@ final class MockAnalyticsInterface: AnalyticsInterface, @unchecked Sendable {
         recordCall(.subscribeToConsent)
         return ConsentSubscription(onCancel: {})
     }
+
+    var providerContextToReturn: [String: [String: CodableValue]] = [:]
+
+    func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool {
+        recordCall(.setProviderContext(provider: provider, key: key, value: value.flatMap { CodableValue.from($0) }))
+        return true
+    }
+
+    func getProviderContext() -> [String: [String: CodableValue]] {
+        recordCall(.getProviderContext)
+        return providerContextToReturn
+    }
+
+    func clearProviderContext(_ provider: String) {
+        recordCall(.clearProviderContext(provider: provider))
+    }
+
+    func clearAllProviderContext() {
+        recordCall(.clearAllProviderContext)
+    }
 }
 
 // Analytics Call Recording
@@ -224,6 +244,10 @@ enum AnalyticsCall: Equatable {
     case getConsent
     case clearConsent
     case subscribeToConsent
+    case setProviderContext(provider: String, key: String, value: CodableValue?)
+    case getProviderContext
+    case clearProviderContext(provider: String)
+    case clearAllProviderContext
 }
 
 // CodableValue Test Extensions
@@ -256,6 +280,7 @@ final class SessionIsolatedDefaults {
     let defaults: UserDefaults
     let sessionStorage: SessionStorage
     let consentStorage: ConsentStorage
+    let providerContextStorage: ProviderContextStorage
 
     /// Dependencies carrying only the isolated session and consent storage —
     /// everything else keeps its production default.
@@ -263,6 +288,7 @@ final class SessionIsolatedDefaults {
         var deps = AnalyticsDependencies()
         deps.sessionStorage = sessionStorage
         deps.consentStorage = consentStorage
+        deps.providerContextStorage = providerContextStorage
         return deps
     }
 
@@ -271,6 +297,7 @@ final class SessionIsolatedDefaults {
         defaults = UserDefaults(suiteName: suiteName)!
         sessionStorage = SessionStorage(userDefaults: defaults)
         consentStorage = ConsentStorage(userDefaults: defaults)
+        providerContextStorage = ProviderContextStorage(userDefaults: defaults)
     }
 
     func cleanUp() {

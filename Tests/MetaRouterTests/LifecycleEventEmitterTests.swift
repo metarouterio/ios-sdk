@@ -14,6 +14,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
     private var queue: PersistentEventQueue!
     private var dispatcher: Dispatcher!
     private var enrichmentService: EventEnrichmentService!
+    private var providerContextManager: ProviderContextManager!
     private var identityStorage: IdentityStorage!
     private var lifecycleStorage: LifecycleStorage!
     private let appContext = AppContext(name: "test-app", version: "1.5.0", build: "42", namespace: "com.metarouter.test")
@@ -52,12 +53,14 @@ final class LifecycleEventEmitterTests: XCTestCase {
         // Internal init with suite-isolated session storage: the public
         // convenience init would mint sessions into UserDefaults.standard,
         // polluting the developer's real defaults across test runs.
+        providerContextManager = ProviderContextManager(storage: ProviderContextStorage(userDefaults: defaults))
         enrichmentService = EventEnrichmentService(
             contextProvider: StubContextProvider(),
             identityManager: identityManager,
             writeKey: options.writeKey,
             sessionManager: SessionManager(storage: SessionStorage(userDefaults: defaults)),
-            consentManager: ConsentManager(storage: ConsentStorage(userDefaults: defaults))
+            consentManager: ConsentManager(storage: ConsentStorage(userDefaults: defaults)),
+            providerContextManager: providerContextManager
         )
     }
 
@@ -68,6 +71,7 @@ final class LifecycleEventEmitterTests: XCTestCase {
         queue = nil
         dispatcher = nil
         enrichmentService = nil
+        providerContextManager = nil
         identityStorage = nil
         lifecycleStorage = nil
         try await super.tearDown()
@@ -93,6 +97,21 @@ final class LifecycleEventEmitterTests: XCTestCase {
 
         XCTAssertEqual(lifecycleStorage.getVersion(), "1.5.0")
         XCTAssertEqual(lifecycleStorage.getBuild(), "42")
+    }
+
+    /// The cold-launch events go through the same enrichment funnel, so a value set
+    /// before `initialize` is on `Application Installed` / `Opened` too.
+    func testColdLaunchEventsCarryProviderContextSetBeforehand() async {
+        providerContextManager.setValue(provider: "googleFirebase", key: "appInstanceId", value: "abc123")
+        let emitter = makeEmitter()
+        await emitter.emitColdLaunchSequence(initialAppState: .active)
+
+        let events = await drain()
+        XCTAssertEqual(events.count, 2)
+        for event in events {
+            XCTAssertEqual(event.context.providers?["googleFirebase"], ["appInstanceId": .string("abc123")], event.event ?? "")
+            XCTAssertNotNil(event.context.providers?["metarouter"], "session block alongside")
+        }
     }
 
     /// Existing user upgrading from a pre-lifecycle SDK build:

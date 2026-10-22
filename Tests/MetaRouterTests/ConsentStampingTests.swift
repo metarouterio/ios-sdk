@@ -33,7 +33,8 @@ final class ConsentStampingTests: XCTestCase {
             ),
             writeKey: "test-key",
             sessionManager: SessionManager(storage: SessionStorage(userDefaults: defaults)),
-            consentManager: consentManager
+            consentManager: consentManager,
+            providerContextManager: ProviderContextManager(storage: ProviderContextStorage(userDefaults: defaults))
         )
     }
 

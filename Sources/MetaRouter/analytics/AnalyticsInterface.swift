@@ -128,6 +128,52 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     ///   even if the reference is dropped. After `cancel()` returns on the main
     ///   actor, the handler is not invoked again, even for a delivery already queued.
     func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription
+
+    // MARK: - Provider context
+
+    /// Set one value the SDK stamps onto **every** outbound event at
+    /// `context.providers.<provider>.<key>` — native calls, lifecycle events, and
+    /// WebView-bridge events alike. The mobile stand-in for what the web SDK's sync
+    /// injectors write into `context.providers`: vendor metadata the app knows and
+    /// the page does not, such as an id a destination requires on every event.
+    ///
+    /// Provider and key names are wire paths, stamped **verbatim** apart from
+    /// trimming surrounding whitespace — no casing or separator normalisation —
+    /// because pipeline mappings match them exactly.
+    /// Values must be JSON-representable.
+    ///
+    /// Usable before `initialize` and immediately effective: an event tracked on the
+    /// next line carries the value. Values persist across launches and survive
+    /// `reset()` — they are install-scoped vendor metadata, not user state.
+    ///
+    /// Set each value as early as it exists. `initialize` emits `Application Opened`
+    /// and can mint the first session on its own init task, so a value that first
+    /// resolves after that misses those events on the install launch; from the next
+    /// launch the persisted value covers them.
+    ///
+    /// Bounded, because this rides on every event: at most 10 providers, 10 keys
+    /// each, 256 bytes per encoded value, 64 bytes per name, and `metarouter` is
+    /// reserved (in any casing or spelling with separators). A write that breaks a
+    /// rule is ignored with a warning, leaving prior state untouched.
+    ///
+    /// - Parameters:
+    ///   - provider: Provider namespace, e.g. `"googleFirebase"`.
+    ///   - key: Key within that provider, e.g. `"appInstanceId"`.
+    ///   - value: JSON-representable value. `nil` removes the key.
+    /// - Returns: `false` when the write was rejected; prior state stands.
+    @discardableResult
+    func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool
+
+    /// Everything the host has set, as it will be stamped. Does not include the
+    /// SDK's own `metarouter` session block, which is added per event at enrichment.
+    func getProviderContext() -> [String: [String: CodableValue]]
+
+    /// Remove one provider's whole block. Removing the last key of a provider via
+    /// `setProviderContext(_:key:value: nil)` does the same thing for that provider.
+    func clearProviderContext(_ provider: String)
+
+    /// Remove every value the host has set.
+    func clearAllProviderContext()
 }
 
 // MARK: - Defaults for host conformers
@@ -173,6 +219,26 @@ extension AnalyticsInterface {
     public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
         Self.warnNotImplemented("subscribeToConsent")
         return ConsentSubscription(onCancel: {})
+    }
+
+    /// `false`: nothing was applied.
+    @discardableResult
+    public func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool {
+        Self.warnNotImplemented("setProviderContext")
+        return false
+    }
+
+    public func getProviderContext() -> [String: [String: CodableValue]] {
+        Self.warnNotImplemented("getProviderContext")
+        return [:]
+    }
+
+    public func clearProviderContext(_ provider: String) {
+        Self.warnNotImplemented("clearProviderContext")
+    }
+
+    public func clearAllProviderContext() {
+        Self.warnNotImplemented("clearAllProviderContext")
     }
 
     /// Warns once per type and method: a wrapper that forwards `track` but not

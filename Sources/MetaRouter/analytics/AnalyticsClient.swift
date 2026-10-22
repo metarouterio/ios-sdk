@@ -19,6 +19,8 @@ internal struct AnalyticsDependencies: Sendable {
     var sessionManager: SessionManager?
     var consentStorage: ConsentStorage?
     var consentManager: ConsentManager?
+    var providerContextStorage: ProviderContextStorage?
+    var providerContextManager: ProviderContextManager?
     var appContext: AppContext?
     /// Override the initial app foreground state read at cold launch.
     /// Tests pass `.active` / `.background` directly to skip the UIKit probe.
@@ -35,6 +37,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private let identityManager: IdentityManager
     private let sessionManager: SessionManager
     private let consentManager: ConsentManager
+    private let providerContextManager: ProviderContextManager
     private let enrichmentService: EventEnrichmentService
     private let dispatcher: Dispatcher
     private let networkMonitor: NetworkReachability?
@@ -79,12 +82,18 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         self.consentManager = deps.consentManager ?? ConsentManager(
             storage: deps.consentStorage ?? ConsentStorage()
         )
+        // Same single-instance rule: enrichment stamps what this manager holds, so
+        // the host's setProviderContext must land on this very instance.
+        self.providerContextManager = deps.providerContextManager ?? ProviderContextManager(
+            storage: deps.providerContextStorage ?? ProviderContextStorage()
+        )
         self.enrichmentService = deps.enrichmentService ?? EventEnrichmentService(
             contextProvider: self.contextProvider,
             identityManager: self.identityManager,
             writeKey: options.writeKey,
             sessionManager: self.sessionManager,
-            consentManager: self.consentManager
+            consentManager: self.consentManager,
+            providerContextManager: self.providerContextManager
         )
 
         let diskStore = DiskStorage()
@@ -475,6 +484,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             info["sessionCount"] = .int(session.sessionCount)
         }
         info["consent"] = consentManager.getConsent().debugInfoValue
+        info["providerContext"] = providerContextManager.debugInfoValue
 
         return info
     }
@@ -505,6 +515,25 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
     public func subscribeToConsent(_ handler: @escaping ConsentHandler) -> ConsentSubscription {
         ConsentSubscription(onCancel: consentManager.subscribe(handler))
+    }
+
+    // MARK: - Provider context (direct, never lifecycle-gated — see the proxy)
+
+    @discardableResult
+    public func setProviderContext(_ provider: String, key: String, value: Any?) -> Bool {
+        providerContextManager.setValue(provider: provider, key: key, value: value)
+    }
+
+    public func getProviderContext() -> [String: [String: CodableValue]] {
+        providerContextManager.getAll()
+    }
+
+    public func clearProviderContext(_ provider: String) {
+        providerContextManager.clear(provider: provider)
+    }
+
+    public func clearAllProviderContext() {
+        providerContextManager.clearAll()
     }
 
     public func flush() {

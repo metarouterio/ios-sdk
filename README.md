@@ -22,6 +22,7 @@ A lightweight iOS analytics SDK that transmits events to your MetaRouter cluster
 - [Lifecycle Events](#lifecycle-events)
 - [Session Tracking](#session-tracking)
 - [Consent](#consent)
+- [Provider Context](#provider-context)
 - [WebView Bridge](#webview-bridge)
 - [Event Queue Persistence](#event-queue-persistence)
 - [Advertising ID (IDFA)](#advertising-id-idfa)
@@ -258,6 +259,8 @@ The analytics client provides the following methods:
 - `getConsent() -> Consent`: The current reconciled consent. Never nil: the implicit default (`explicit: false`, registered defaults) until the first `setConsent`
 - `clearConsent()`: Consent withdrawal — back to the implicit default, persisted state (timestamp history included) wiped. `reset()` does **not** do this
 - `subscribeToConsent(_ handler: @escaping @MainActor @Sendable (Consent) -> Void) -> ConsentSubscription`: Observe consent changes on the main actor; the first delivery is the current value, on the next main-queue turn. Keep the returned subscription and call `cancel()` to stop; it conforms to Combine's `Cancellable`
+- `setProviderContext(_ provider: String, key: String, value: Any?) -> Bool`: Stamp a value at `context.providers.<provider>.<key>` on every event. Persisted, survives `reset()`, usable before `initialize`. `nil` removes the key. Returns `false` when the write is rejected (discardable). See [Provider Context](#provider-context)
+- `getProviderContext()`, `clearProviderContext(_ provider: String)`, `clearAllProviderContext()`: Read, remove one provider's block, remove everything
 
 ### Testing APIs
 
@@ -514,6 +517,7 @@ The `advertisingId` is used for ad tracking and attribution (IDFA on iOS). See t
 | **groupId**       | `group(groupId)`       | `metarouter:group_id`       | All events after set | `reset()`                           |
 | **advertisingId** | `setAdvertisingId(id)` | `metarouter:advertising_id` | Event context        | `clearAdvertisingId()`, `reset()`   |
 | **consent**       | `setConsent(consent)`  | `metarouter:consent:state`  | All events (`context.consent`) | `clearConsent()` only (survives `reset()`) |
+| **provider context** | `setProviderContext(…)` | `metarouter:providers:context` | All events (`context.providers`) | `clearProviderContext`, `clearAllProviderContext` (survives `reset()`) |
 
 ### Event Enrichment Flow
 
@@ -904,6 +908,75 @@ analytics.clearConsent() // back to the implicit default; persisted state wiped
 
 A `setConsent` whose values equal the current state does not notify subscribers, even with a fresher timestamp — handlers react to decisions, not clocks.
 
+## Provider Context
+
+Some destinations will not accept an event unless it carries a vendor's own identifier — one the native app can read but a web page cannot. GA4's app streams, for example, reject app event data without a genuine Firebase app instance id. On the web, sync injectors write values like this into `context.providers`; on mobile, `setProviderContext` is how the app puts them there.
+
+Set a value once and the SDK stamps it onto **every** outbound event — native calls, lifecycle events, and WebView-bridge events alike:
+
+```swift
+import FirebaseAnalytics
+
+// On every launch, after `FirebaseApp.configure()` and before `initialize`, so the
+// launch's first events carry it. Called before `configure()`, appInstanceID()
+// returns nil, which removes the id saved by the previous launch.
+// Synchronous on iOS. nil while Firebase Analytics collection is disabled, and a
+// nil value removes the key, so a stale id from an earlier launch never lingers.
+MetaRouter.Analytics.shared.setProviderContext(
+    "googleFirebase", key: "appInstanceId", value: FirebaseAnalytics.Analytics.appInstanceID()
+)
+```
+
+Every event then carries:
+
+```json
+"context": {
+  "providers": {
+    "googleFirebase": {
+      "appInstanceId": "c0ffee1234567890abcdef"
+    },
+    "metarouter": {
+      "sessionID": "1757400000000",
+      "sessionCount": 3
+    }
+  }
+}
+```
+
+The provider namespace and key are **wire paths, stamped verbatim** apart from trimming surrounding whitespace — no casing or separator normalisation — because pipeline mappings match them exactly. `googleFirebase` / `appInstanceId` above is one worked example, not a special case: the API is agnostic, and any provider and key your pipeline reads will do.
+
+```swift
+// Several keys under one provider, and several providers, are all fine.
+analytics.setProviderContext("googleFirebase", key: "nonPersonalizedAds", value: false)
+analytics.setProviderContext("adjust", key: "adid", value: adjustAdid)
+
+analytics.getProviderContext()              // everything you have set
+analytics.setProviderContext("adjust", key: "adid", value: nil)  // remove one key
+analytics.clearProviderContext("adjust")    // remove one provider's block
+analytics.clearAllProviderContext()         // remove everything
+
+// A rejected write (oversize, not JSON, over a cap) returns false and logs.
+if !analytics.setProviderContext("adjust", key: "attribution", value: attribution) {
+    // too big to stamp on every event — send a smaller id instead
+}
+```
+
+### Lifetime and timing
+
+- **Usable before `initialize`**, and immediately effective — an event tracked on the next line carries the value. Values never wait for a bind, and are never dropped by the pre-initialize call queue. The value is read when the event is enriched, just after `track()` returns, not at the call: `track("Logged Out")` followed by `clearProviderContext(…)` on the next line can send that event without it — the same rule as consent.
+- **Persisted across launches**, so a value set in one launch is already on the wire for the next launch's first event.
+- **Survives `reset()`**. These are install-scoped vendor identifiers, not user state; a logout must not quietly stop events being forwardable. Use `clearProviderContext` to remove one deliberately. Note that `reset()` clears the advertising ID but leaves an IDFA-shaped value you put under a provider alone.
+
+**Set values on every launch, and clear the ones that rotate.** The persisted value is stamped on every event until you overwrite it, so an id that changes underneath you — Firebase after `resetAnalyticsData()`, an advertising id the user resets — goes out stale with nothing to flag it. Re-set each value on launch, and call `clearProviderContext` on logout or ad-id reset for privacy-sensitive values.
+
+Set each value as early as you have it, ideally before `initialize`. Values are stamped from the moment they are set, and `initialize` emits `Application Opened` (and can mint the first session) on its own init task — so a value that first resolves after that point misses those few events on the install launch. From the next launch onward the persisted value covers them. Firebase's id is synchronous on iOS, so it can always be set first.
+
+### Limits
+
+Because this map rides on every event, it is bounded: at most **10 providers**, **10 keys** per provider, **256 bytes** per encoded value (as JSON), and **64 bytes** per name (UTF-8). Names are trimmed, and must not be blank. The `metarouter` provider is reserved for the SDK's own session block, in any casing or with separators (`Meta_Router`). Values must be JSON-representable all the way down: a dictionary holding a `Date` is rejected whole.
+
+A write that breaks one of these rules is **ignored**: `setProviderContext` returns `false` and logs a warning, and prior state stays untouched. It never traps, even in debug builds, because these values often come from third-party SDKs you do not control. Nothing is silently truncated: a trimmed vendor id looks valid and matches nothing downstream, which is worse than an absent one. `getDebugInfo()` reports the shape (providers and their key names) without the values, since these are device identifiers and debug info lands in host logs.
+
 ## WebView Bridge
 
 Hybrid apps render some screens as web content inside a WebView. Without extra work that activity is invisible to MetaRouter — or worse, double-tracked by an in-page analytics setup on a separate identity. The webview bridge captures events fired by page JavaScript and delivers them through the native SDK, so webview and native activity arrive at your cluster as **one user, one pipeline**: native identity, device context, and the page's own facts on every event.
@@ -952,7 +1025,7 @@ Bridged events go through the same enrichment as native events. The page contrib
 | From the page (stamped at call time) | From the SDK (merged at receipt) |
 |---|---|
 | event type (`track`/`page`), name, properties | `anonymousId` / `userId`, device + app context |
-| `context.page` — url, path, search, title, referrer | `messageId`, `timestamp`, `context.consent`, session (`context.providers.metarouter`) |
+| `context.page` — url, path, search, title, referrer | `messageId`, `timestamp`, `context.consent`, session (`context.providers.metarouter`), and any [provider context](#provider-context) the app has set |
 
 Each bridge message carries a producer-minted ID used to drop duplicate deliveries (bounded window). The page receives an ack or a coded error for every message on the underlying channel — malformed input is rejected, never silently dropped, and events arriving while the SDK cannot accept them are answered `not_ready` rather than acked.
 
