@@ -918,10 +918,11 @@ Set a value once and the SDK stamps it onto **every** outbound event — native 
 import FirebaseAnalytics
 
 // On every launch, before `initialize`, so the launch's first events carry it.
-// Synchronous on iOS; nil while Firebase Analytics collection is disabled.
-if let appInstanceId = FirebaseAnalytics.Analytics.appInstanceID() {
-    MetaRouter.Analytics.shared.setProviderContext("googleFirebase", key: "appInstanceId", value: appInstanceId)
-}
+// Synchronous on iOS. nil while Firebase Analytics collection is disabled, and a
+// nil value removes the key, so a stale id from an earlier launch never lingers.
+MetaRouter.Analytics.shared.setProviderContext(
+    "googleFirebase", key: "appInstanceId", value: FirebaseAnalytics.Analytics.appInstanceID()
+)
 ```
 
 Every event then carries:
