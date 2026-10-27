@@ -67,5 +67,13 @@ jobs:
                    if 'iOS' in runtime for d in ds if d['name'].startswith('iPhone')))")
         echo "udid=$UDID" >> "$GITHUB_OUTPUT"
 
+    # No -quiet: it drops the assertion messages, leaving only a list of failing names.
     - name: Run Tests
-      run: xcodebuild test -scheme MetaRouter -destination "id=${{ steps.sim.outputs.udid }}" -quiet
+      run: xcodebuild test -scheme MetaRouter -destination "id=${{ steps.sim.outputs.udid }}" -resultBundlePath TestResults.xcresult
+
+    - name: Upload test results
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ios-simulator-test-results
+        path: TestResults.xcresult
