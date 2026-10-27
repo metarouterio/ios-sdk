@@ -529,7 +529,11 @@ final class ConsentManagerTests: XCTestCase {
 
         let timestamps = received.values.dropFirst().compactMap(\.timestamp)
         XCTAssertEqual(timestamps, timestamps.sorted(), "deliveries never go backwards in time")
-        XCTAssertEqual(received.values.last, manager.getConsent())
+        // Decision, not equality: a later set with the same decision commits a newer
+        // timestamp without notifying (no visible change), so the last delivery can
+        // legitimately carry an older timestamp than getConsent().
+        XCTAssertEqual(received.values.last?.sameDecision(as: manager.getConsent()), true,
+                       "the last delivery reflects the committed decision")
         XCTAssertEqual(manager.getConsent().timestamp, 63)
     }
 

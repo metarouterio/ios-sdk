@@ -139,7 +139,26 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         XCTAssertEqual(events[0].properties?["from_background"], .bool(false))
     }
 
-    func testBackgroundNotificationEnqueuesApplicationBackgrounded() async {
+    /// Hostless XCTest on iOS (no host app) cannot be granted background time:
+    /// `beginBackgroundTask` returns `.invalid`, and the observer skips the
+    /// background work when it does. These cases still run on macOS (AppKit path)
+    /// and in a host-app run; skipping beats a failure that says nothing about the SDK.
+    private func skipWithoutBackgroundTime() async throws {
+        #if canImport(UIKit)
+        let granted = await MainActor.run { () -> Bool in
+            let id = UIApplication.shared.beginBackgroundTask(withName: "metarouter.test.probe", expirationHandler: nil)
+            guard id != .invalid else { return false }
+            UIApplication.shared.endBackgroundTask(id)
+            return true
+        }
+        if !granted {
+            throw XCTSkip("No background time in a hostless test run; the observer skips background work without it")
+        }
+        #endif
+    }
+
+    func testBackgroundNotificationEnqueuesApplicationBackgrounded() async throws {
+        try await skipWithoutBackgroundTime()
         let bundle = Setup(defaults: defaults, trackLifecycleEvents: true)
         await bundle.waitForInit()
         await bundle.consumeAll() // drop cold-launch events
@@ -157,7 +176,8 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
                       "expected Application Backgrounded after background notification, got \(events.map { $0.event ?? "?" })")
     }
 
-    func testForegroundAfterBackgroundEmitsOpenedFromBackground() async {
+    func testForegroundAfterBackgroundEmitsOpenedFromBackground() async throws {
+        try await skipWithoutBackgroundTime()
         let bundle = Setup(defaults: defaults, trackLifecycleEvents: true)
         await bundle.waitForInit()
         await bundle.consumeAll()
