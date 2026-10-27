@@ -29,12 +29,29 @@ public actor PersistentEventQueue {
     private let flushThresholdBytes: Int
     private let maxDiskEvents: Int
 
-    private let memoryQueue: EventQueue<EnrichedEventPayload>
+    /// An event with its encoded size, measured once at enqueue. Re-encoding to
+    /// re-measure (drain, flush-failure restore) cost a full JSON encode per event
+    /// per pass purely to keep this counter right.
+    private struct SizedEvent: Sendable {
+        let event: EnrichedEventPayload
+        let bytes: Int
+    }
+
+    private let memoryQueue: EventQueue<SizedEvent>
     private let diskStore: DiskStorage
     private let diskLock = AsyncMutex()
 
-    /// Running estimate of serialized bytes in the memory queue.
+    /// Encoded bytes in the memory queue: the sum of each entry's measured size.
+    /// Updated only by signed deltas, never clamped or zeroed while the buffer may
+    /// hold events: every buffer mutation is an await on `memoryQueue`, so an
+    /// enqueue's `+n` can land after the drain that already took its event. With
+    /// deltas the two commute and the sum settles exact; a `max(0, …)` clamp
+    /// turns that ordering into permanent phantom bytes that trigger needless
+    /// disk flushes. A transiently negative value only delays a flush.
     private var estimatedBytes: Int = 0
+
+    /// Test seam: lets tests assert the byte counter returns to zero.
+    var bufferedBytes: Int { estimatedBytes }
 
     /// Lightweight gate for "is there anything on disk worth draining."
     /// Initialized via `checkForPersistedEvents()` on boot, updated by disk writes/deletes.
@@ -62,7 +79,7 @@ public actor PersistentEventQueue {
         self.maxSizeBytes = max(1, maxSizeBytes)
         self.flushThresholdCount = max(1, flushThresholdCount)
         self.flushThresholdBytes = max(1, flushThresholdBytes)
-        self.memoryQueue = EventQueue<EnrichedEventPayload>(capacity: maxEventCount)
+        self.memoryQueue = EventQueue<SizedEvent>(capacity: maxEventCount)
         self.maxDiskEvents = max(0, maxDiskEvents)
     }
 
@@ -122,23 +139,16 @@ public actor PersistentEventQueue {
             return postFlushCount
         }
 
-        let prevCount = await memoryQueue.count
-        let newCount = await memoryQueue.enqueue(event)
-        if newCount <= prevCount, estimatedBytes > 0, prevCount > 0 {
-            estimatedBytes -= estimatedBytes / prevCount
-        }
-        estimatedBytes += eventSize
+        let (newCount, evicted) = await memoryQueue.enqueueEvicting(SizedEvent(event: event, bytes: eventSize))
+        estimatedBytes += eventSize - (evicted?.bytes ?? 0)
         return newCount
     }
 
     /// Drain up to `max` events from the front of the in-memory buffer. No disk I/O.
     public func drain(max count: Int) async -> [EnrichedEventPayload] {
-        let events = await memoryQueue.drain(max: count)
-        for event in events {
-            estimatedBytes -= Self.estimateEventSize(event)
-        }
-        estimatedBytes = max(0, estimatedBytes)
-        return events
+        let entries = await memoryQueue.drain(max: count)
+        estimatedBytes -= entries.reduce(0) { $0 + $1.bytes }
+        return entries.map(\.event)
     }
 
     /// Requeue events at the front (used after retryable send failures).
@@ -147,27 +157,31 @@ public actor PersistentEventQueue {
     public func requeueToFront(_ events: [EnrichedEventPayload]) async {
         guard !events.isEmpty else { return }
         let currentCount = await memoryQueue.count
-        let addedBytes = events.reduce(0) { $0 + Self.estimateEventSize($1) }
+        // The dispatcher hands back bare payloads, so these are measured again —
+        // retry path only, never the per-event hot path.
+        let entries = events.map { SizedEvent(event: $0, bytes: Self.estimateEventSize($0)) }
+        let addedBytes = entries.reduce(0) { $0 + $1.bytes }
         if currentCount + events.count > maxEventCount || estimatedBytes + addedBytes > maxSizeBytes {
             await flushMemoryToDisk()
         }
-        await memoryQueue.requeueToFront(events)
-        estimatedBytes += addedBytes
+        let dropped = await memoryQueue.requeueToFront(entries)
+        estimatedBytes += addedBytes - dropped.reduce(0) { $0 + $1.bytes }
+        if !dropped.isEmpty {
+            Logger.warn("Requeue exceeded queue cap \(maxEventCount) — dropped \(dropped.count) newest event(s)")
+        }
     }
 
     /// Drop current front batch without requeueing.
     public func dropFront(_ count: Int) async {
-        await memoryQueue.dropFront(count)
-        if await memoryQueue.count == 0 {
-            estimatedBytes = 0
-        }
+        let dropped = await memoryQueue.drain(max: count)
+        estimatedBytes -= dropped.reduce(0) { $0 + $1.bytes }
     }
 
     /// Clear all events from memory, pending-overflow, AND delete the disk store.
     /// Serialized against in-flight drains/flushes via the disk lock.
     public func clear() async {
-        await memoryQueue.clear()
-        estimatedBytes = 0
+        let cleared = await memoryQueue.drain(max: Int.max)
+        estimatedBytes -= cleared.reduce(0) { $0 + $1.bytes }
         pendingOverflow.removeAll(keepingCapacity: false)
         await diskLock.lock()
         await deleteDiskStoreLocked()
@@ -298,11 +312,11 @@ public actor PersistentEventQueue {
     /// On failure, memory is restored and pending-overflow is left intact so the next
     /// successful flush catches them up.
     private func flushMemoryToDiskInternal() async -> Bool {
-        let memoryEvents = await memoryQueue.drain(max: Int.max)
+        let memoryEntries = await memoryQueue.drain(max: Int.max)
         let overflowEvents = pendingOverflow
-        let events = memoryEvents + overflowEvents
+        let events = memoryEntries.map(\.event) + overflowEvents
         guard !events.isEmpty else { return false }
-        estimatedBytes = 0
+        estimatedBytes -= memoryEntries.reduce(0) { $0 + $1.bytes }
 
         do {
             let total = try await diskStore.append(events, maxEvents: maxDiskEvents)
@@ -314,15 +328,14 @@ public actor PersistentEventQueue {
             Logger.warn("Failed to flush memory queue to disk: \(error)")
             // Restore memory so events aren't lost; leave pending-overflow untouched
             // so it will be re-attempted on the next flush.
-            await memoryQueue.requeueToFront(memoryEvents)
-            for event in memoryEvents {
-                estimatedBytes += Self.estimateEventSize(event)
-            }
+            // `+=`, not `=`: enqueues that ran during the awaited write already counted theirs.
+            let dropped = await memoryQueue.requeueToFront(memoryEntries)
+            estimatedBytes += memoryEntries.reduce(0) { $0 + $1.bytes } - dropped.reduce(0) { $0 + $1.bytes }
             return false
         }
     }
 
-    /// Fast per-event size estimate. Encodes once per event (at enqueue time only).
+    /// Encoded size of one event, measured at enqueue and carried with it.
     private static func estimateEventSize(_ event: EnrichedEventPayload) -> Int {
         (try? jsonEncoder.encode(event))?.count ?? 512
     }

@@ -15,6 +15,15 @@ public final class DebouncedNetworkMonitor: NetworkReachability, @unchecked Send
         lock.withLock { _currentStatus }
     }
 
+    /// Not debounced: the debounce exists to avoid flapping the dispatcher's
+    /// offline gate, whereas `wifi` is a fact stamped on the event — reporting the
+    /// previous interface for 2s after a switch would mislabel those events.
+    public var isWifi: Bool? { inner.isWifi }
+
+    public func awaitIsWifi(timeout: TimeInterval) async -> Bool? {
+        await inner.awaitIsWifi(timeout: timeout)
+    }
+
     /// - Parameters:
     ///   - inner: The underlying network monitor to wrap.
     ///   - debounceSeconds: How long an online signal must be stable before firing. Default 2s.
