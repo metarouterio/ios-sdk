@@ -60,7 +60,8 @@ final class LifecycleEventEmitterTests: XCTestCase {
             writeKey: options.writeKey,
             sessionManager: SessionManager(storage: SessionStorage(userDefaults: defaults)),
             consentManager: ConsentManager(storage: ConsentStorage(userDefaults: defaults)),
-            providerContextManager: providerContextManager
+            providerContextManager: providerContextManager,
+            networkMonitor: nil
         )
     }
 

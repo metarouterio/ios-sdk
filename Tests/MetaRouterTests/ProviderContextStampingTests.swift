@@ -31,7 +31,8 @@ final class ProviderContextStampingTests: XCTestCase {
                 storage: ConsentStorage(userDefaults: defaults),
                 dispatch: { $0() }
             ),
-            providerContextManager: providerContext
+            providerContextManager: providerContext,
+            networkMonitor: nil
         )
     }
 
@@ -151,7 +152,8 @@ final class ProviderContextStampingTests: XCTestCase {
                 storage: ConsentStorage(userDefaults: defaults),
                 dispatch: { $0() }
             ),
-            providerContextManager: smuggled
+            providerContextManager: smuggled,
+            networkMonitor: nil
         )
 
         let payload = await service.createTrackEvent(event: "Order Completed")
@@ -206,7 +208,8 @@ final class ProviderContextStampingTests: XCTestCase {
             ),
             providerContextManager: ProviderContextManager(
                 storage: ProviderContextStorage(userDefaults: defaults)
-            )
+            ),
+            networkMonitor: nil
         )
 
         let payload = await service.createTrackEvent(event: "Application Opened")
