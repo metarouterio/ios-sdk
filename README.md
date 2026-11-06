@@ -246,6 +246,7 @@ The analytics client provides the following methods:
 - `setAdvertisingId(_ advertisingId: String?)`: Set the advertising identifier (IDFA) for ad tracking. See [Advertising ID](#advertising-id-idfa) section for usage and compliance requirements
 - `clearAdvertisingId()`: Clear the advertising identifier from storage and context. Useful for GDPR/CCPA compliance when users opt out of ad tracking
 - `getAnonymousId() async -> String`: Retrieve the device's anonymous ID. Awaits initialization internally, so on any initialized session the returned value is always valid. Returns `""` only when initialization was refused over invalid config (the degraded, never-hanging answer — see `onConfigError`)
+- `setAnonymousId(_ anonymousId: String) -> Bool`: Replace the anonymous ID with one the host already has, such as the web SDK's id from the app's WebViews. Persisted, usable before `initialize`, stamped from the next event on. Returns `false` when rejected (discardable). See [Setting the anonymousId](#setting-the-anonymousid)
 - `getSessionId() async -> String?`: The current analytics session id, or `nil` before the first event of the process. Reading it never starts or extends a session. See [Session Tracking](#session-tracking)
 - `flush()`: Flush events immediately
 - `reset()`: Reset analytics state: clears identity (user, anonymous and group ids, advertising ID) and the event queue. Consent is **not** cleared; see `clearConsent()`
@@ -458,7 +459,7 @@ The `anonymousId` is a unique identifier automatically generated for each device
 **How it's set:**
 
 - **Automatically** generated as a UUID on first SDK initialization
-- No manual action required
+- Or by the host with `setAnonymousId(_:)` (see below)
 
 **Behavior:**
 
@@ -470,6 +471,34 @@ The `anonymousId` is a unique identifier automatically generated for each device
 
 **Use case:**
 Track user behavior before they log in or create an account, then connect pre-login and post-login activity using the `alias()` method.
+
+##### Setting the anonymousId
+
+In a hybrid app, the web SDK running in the app's WebViews already has an anonymousId, often one with history behind it. Hand it to the native SDK so native and web events from the same user share one id.
+
+For example, reading the web SDK's `ajs_anonymous_id` cookie from the WebView cookie store:
+
+```swift
+// The data store your WebViews use (`.default()` unless configured otherwise)
+let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+if let raw = cookies.first(where: { $0.name == "ajs_anonymous_id" })?.value {
+    // The web SDK stores the id JSON-encoded, usually percent-encoded too:
+    // %22a1b2c3d4-...%22 → "a1b2c3d4-..." → a1b2c3d4-...
+    let decoded = raw.removingPercentEncoding ?? raw
+    let webAnonymousId = decoded.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    MetaRouter.Analytics.shared.setAnonymousId(webAnonymousId)
+}
+MetaRouter.Analytics.initialize(with: options)
+```
+
+> **Pass the id exactly as the web SDK sends it.** The SDK only trims whitespace and stores everything else as given. A raw cookie value (`%22a1b2c3d4-...%22`) is accepted, and native events then carry an id that never matches the web events. Compare the value with the `anonymousId` on a web event before shipping. The cookie's name, domain and encoding depend on the web SDK's configuration.
+
+- **Call it before `initialize` when the id is available.** The launch's first events (`Application Opened`, …) then carry it too. It also works any time later.
+- Applies to every event enriched after the call: native calls, lifecycle events and [WebView Bridge](#webview-bridge) events. Enrichment is asynchronous, so events tracked just before the call (or queued before `initialize`) may carry the new id too.
+- Persisted across launches, like the generated id. `reset()` discards it and a new UUID is generated. An id set after calling `reset()` is kept, so a logout flow can call `reset()` and then hand over the web SDK's new id.
+- No format is required (a UUID is not enforced). Empty values and values over 256 UTF-8 bytes are rejected: the call returns `false`, logs a warning, and the anonymousId is unchanged.
+- Setting an id before the first `initialize` on a new install still reports `Application Installed`.
+- The session is not affected.
 
 #### 3. groupId
 
@@ -513,7 +542,7 @@ The `advertisingId` is used for ad tracking and attribution (IDFA on iOS). See t
 | Field             | Set By                 | Storage Key                 | Auto-Attached        | Cleared By                          |
 | ----------------- | ---------------------- | --------------------------- | -------------------- | ----------------------------------- |
 | **userId**        | `identify(userId)`     | `metarouter:user_id`        | All events           | `reset()`                           |
-| **anonymousId**   | Auto-generated (UUID)  | `metarouter:anonymous_id`   | All events           | `reset()` (new ID generated on init)|
+| **anonymousId**   | Auto-generated (UUID) or `setAnonymousId(id)` | `metarouter:anonymous_id`   | All events           | `reset()` (new ID generated on next event)|
 | **groupId**       | `group(groupId)`       | `metarouter:group_id`       | All events after set | `reset()`                           |
 | **advertisingId** | `setAdvertisingId(id)` | `metarouter:advertising_id` | Event context        | `clearAdvertisingId()`, `reset()`   |
 | **consent**       | `setConsent(consent)`  | `metarouter:consent:state`  | All events (`context.consent`) | `clearConsent()` only (survives `reset()`) |
@@ -558,7 +587,7 @@ analytics.reset()
 - Removes all identity fields from UserDefaults
 - Stops background flush loops
 - Clears event queue
-- Next initialization will generate a **new** `anonymousId`
+- The next event generates a **new** `anonymousId`
 
 **Common logout flow:**
 

@@ -25,6 +25,10 @@ public actor IdentityManager {
     /// Should be called before using other methods.
     public func initialize() async {
         getOrCreateAnonymousId()
+        // The lifecycle emitter snapshots install state when the client is built,
+        // before this runs; past that point the marker would only misreport a
+        // later launch (e.g. lifecycle tracking enabled in a future release).
+        storage.clearHostSetMarker()
 
         // Load userId, groupId, and advertisingId if they exist
         self.userId = storage.get(.userId)
@@ -43,7 +47,7 @@ public actor IdentityManager {
     
     /// Retrieves the current anonymous ID.
     public func getAnonymousId() -> String? {
-        return anonymousId
+        return currentAnonymousId()
     }
 
     /// Returns the current anonymous ID, generating and persisting one if missing.
@@ -51,19 +55,58 @@ public actor IdentityManager {
     /// persisted ID across subsequent calls.
     @discardableResult
     public func getOrCreateAnonymousId() -> String {
-        if let existing = anonymousId {
-            return existing
+        // Storage first: setAnonymousId writes there from outside this actor (the
+        // proxy, before a client is bound), and the next event must carry it. The
+        // in-memory copy only re-seeds storage if something else wiped it.
+        let (id, created) = storage.getOrCreateAnonymousId {
+            anonymousId ?? UUID().uuidString.lowercased()
         }
-        if let stored = storage.get(.anonymousId) {
-            self.anonymousId = stored
-            Logger.log("Loaded stored anonymous ID: \(stored)", writeKey: writeKey, host: host)
-            return stored
+        if created {
+            Logger.log("Generated and stored new anonymous ID: \(id)", writeKey: writeKey, host: host)
+        } else if id != anonymousId {
+            Logger.log("Loaded stored anonymous ID: \(id)", writeKey: writeKey, host: host)
         }
-        let newId = UUID().uuidString.lowercased()
-        storage.set(.anonymousId, value: newId)
-        self.anonymousId = newId
-        Logger.log("Generated and stored new anonymous ID: \(newId)", writeKey: writeKey, host: host)
-        return newId
+        self.anonymousId = id
+        return id
+    }
+
+    /// Replaces the anonymous ID with one the host owns (e.g. the id a WebView's web
+    /// SDK already uses). Nonisolated and storage-backed so it is read-your-writes
+    /// and works before `initialize`; see `apply(hostAnonymousId:to:)`.
+    @discardableResult
+    nonisolated public func setAnonymousId(_ anonymousId: String) -> Bool {
+        Self.apply(hostAnonymousId: anonymousId, to: storage)
+    }
+
+    /// See `IdentityStorage.noteResetRequested()`.
+    nonisolated func noteResetRequested() {
+        storage.noteResetRequested()
+    }
+
+    /// Longest accepted host anonymousId, in UTF-8 bytes. Generous for any web or
+    /// vendor id (a UUID is 36), and it rides on every event.
+    static let maxHostAnonymousIdBytes = 256
+
+    /// Validates and stores a host-provided anonymousId. Shared by the proxy (which
+    /// writes before any client exists) and the client.
+    /// - Returns: `false` when rejected; the stored anonymousId is unchanged.
+    static func apply(hostAnonymousId raw: String, to storage: IdentityStorage) -> Bool {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = storage.get(.anonymousId)  // for the warnings only
+        guard !id.isEmpty else {
+            Logger.warn("setAnonymousId rejected: the value is empty after trimming whitespace. anonymousId unchanged (\(current ?? "none stored yet")).")
+            return false
+        }
+        let bytes = id.utf8.count
+        guard bytes <= maxHostAnonymousIdBytes else {
+            Logger.warn("setAnonymousId rejected: the value is \(bytes) bytes, over the \(maxHostAnonymousIdBytes)-byte limit (starts '\(id.prefix(40))'). anonymousId unchanged (\(current ?? "none stored yet")).")
+            return false
+        }
+        let (previous, changed) = storage.setHostAnonymousId(id)
+        if changed {
+            Logger.log("Anonymous ID set by host: \(id) (was \(previous ?? "none stored yet"))")
+        }
+        return true
     }
     
     /// Sets the user ID for the current session.
@@ -117,17 +160,24 @@ public actor IdentityManager {
         Logger.log("Advertising ID cleared for GDPR compliance", writeKey: writeKey, host: host)
     }
 
-    /// Returns identity information for event enrichment.
+    /// Returns identity information for event enrichment. Generates the anonymous
+    /// ID if none is stored, so the first event after `reset()` carries a new one
+    /// rather than a placeholder.
     public func getIdentityInfo() -> (anonymousId: String, userId: String?, groupId: String?) {
         return (
-            anonymousId: anonymousId ?? "unknown",
+            anonymousId: getOrCreateAnonymousId(),
             userId: userId,
             groupId: groupId
         )
     }
     
+    private func currentAnonymousId() -> String? {
+        storage.get(.anonymousId) ?? anonymousId
+    }
+
     /// Resets the identity manager to its initial state.
-    /// Clears all user and group IDs, and removes the anonymous ID from storage.
+    /// Clears all user and group IDs, and removes the anonymous ID (host-set or not)
+    /// from storage — unless the host set one after `noteResetRequested()`.
     public func reset() {
         self.anonymousId = nil
         self.userId = nil
