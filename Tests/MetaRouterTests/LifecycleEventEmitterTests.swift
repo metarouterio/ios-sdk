@@ -134,6 +134,30 @@ final class LifecycleEventEmitterTests: XCTestCase {
         XCTAssertEqual(events[1].properties?["from_background"], .bool(false))
     }
 
+    /// A host id set before the first `initialize` is not prior identity: the
+    /// install launch still reports Installed, and carries the host id.
+    func testColdLaunchFreshInstallWithHostAnonymousIdEmitsInstalled() async {
+        XCTAssertTrue(IdentityManager.apply(hostAnonymousId: "web-anon-1", to: identityStorage))
+        let emitter = makeEmitter()
+        await emitter.emitColdLaunchSequence(initialAppState: .active)
+
+        let events = await drain()
+        XCTAssertEqual(events.map(\.event), ["Application Installed", "Application Opened"])
+        XCTAssertEqual(events.map(\.anonymousId), ["web-anon-1", "web-anon-1"])
+    }
+
+    /// The marker is only written when no id existed: a host id replacing an SDK
+    /// id from a pre-lifecycle build is still an upgrade.
+    func testColdLaunchHostAnonymousIdOverExistingIdEmitsUpdated() async {
+        identityStorage.set(.anonymousId, value: "existing-anon")
+        XCTAssertTrue(IdentityManager.apply(hostAnonymousId: "web-anon-1", to: identityStorage))
+        let emitter = makeEmitter()
+        await emitter.emitColdLaunchSequence(initialAppState: .active)
+
+        let events = await drain()
+        XCTAssertEqual(events.first?.event, "Application Updated")
+    }
+
     func testColdLaunchSameVersionEmitsOnlyOpened() async {
         lifecycleStorage.setVersionBuild(version: "1.5.0", build: "42")
         let emitter = makeEmitter()

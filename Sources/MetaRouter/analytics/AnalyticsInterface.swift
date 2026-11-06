@@ -21,6 +21,30 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     func enableDebugLogging()
     func getAnonymousId() async -> String
 
+    /// Replace the anonymousId with one the host already has — typically the id
+    /// the web SDK uses in the app's WebViews (`ajs_anonymous_id`), so native and
+    /// web events from one user share one anonymousId.
+    ///
+    /// Persisted, and stamped on every event enriched after the call: native calls,
+    /// lifecycle events and WebView-bridge events. Enrichment is asynchronous, so
+    /// events tracked just before the call, or queued before `initialize`, may
+    /// carry it too. Usable before `initialize`. Call it before `initialize` when
+    /// the id is available, so the launch's first events (`Application Opened`, …)
+    /// carry it. A host id set before the first `initialize` on a new install
+    /// still reports `Application Installed`. The session is unaffected.
+    ///
+    /// `reset()` discards it and generates a new anonymousId; an id set after
+    /// calling `reset()` (e.g. adopting the web SDK's new id on logout) is kept.
+    ///
+    /// The value is trimmed and otherwise stored as given; any format is accepted,
+    /// and passing the id the web SDK actually uses is up to the host. Setting the
+    /// current value is a no-op that returns `true`.
+    ///
+    /// - Returns: `false` when rejected (empty, or over 256 UTF-8 bytes); the
+    ///   anonymousId is unchanged and a warning is logged.
+    @discardableResult
+    func setAnonymousId(_ anonymousId: String) -> Bool
+
     /// The id of the current analytics session, or nil before the first event
     /// of the process has been enriched. Sessions are minted by events —
     /// reading the id is not activity and never extends or starts one, so a
@@ -192,6 +216,13 @@ extension AnalyticsInterface {
     @MainActor
     public func attachWebView(_ webView: WKWebView, allowedOrigins: [String]) {
         Self.warnNotImplemented("attachWebView")
+    }
+
+    /// `false`: the anonymousId is unchanged.
+    @discardableResult
+    public func setAnonymousId(_ anonymousId: String) -> Bool {
+        Self.warnNotImplemented("setAnonymousId")
+        return false
     }
 
     public func registerConsentCategories(_ categories: [ConsentCategory]) {

@@ -141,7 +141,7 @@ final class ConsentClientPayloadTests: XCTestCase {
     }
 }
 
-private final class BodyRecordingNetworking: Networking, @unchecked Sendable {
+final class BodyRecordingNetworking: Networking, @unchecked Sendable {
     private let lock = NSLock()
     private var _bodies: [Data] = []
 
