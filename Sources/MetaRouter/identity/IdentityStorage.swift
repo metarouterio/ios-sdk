@@ -76,7 +76,9 @@ public struct IdentityStorage: @unchecked Sendable {
 
     /// The stored anonymousId, or `make()` stored as the new one when none exists.
     func getOrCreateAnonymousId(_ make: () -> String) -> (id: String, created: Bool) {
-        Self.anonymousIdLock.withLock {
+        // Unlocked first: an id is almost always stored, and this runs per event.
+        if let stored = get(.anonymousId) { return (stored, false) }
+        return Self.anonymousIdLock.withLock {
             if let stored = get(.anonymousId) { return (stored, false) }
             let id = make()
             set(.anonymousId, value: id)
