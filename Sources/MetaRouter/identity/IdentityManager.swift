@@ -87,6 +87,12 @@ public actor IdentityManager {
     /// vendor id (a UUID is 36), and it rides on every event.
     static let maxHostAnonymousIdBytes = 256
 
+    /// Warnings are not debug-gated, so ids in them are cut to a prefix, as the
+    /// advertisingId already is.
+    private static func masked(_ id: String?) -> String {
+        id.map { "\($0.prefix(8))***" } ?? "none stored yet"
+    }
+
     /// Validates and stores a host-provided anonymousId. Shared by the proxy (which
     /// writes before any client exists) and the client.
     /// - Returns: `false` when rejected; the stored anonymousId is unchanged.
@@ -94,12 +100,12 @@ public actor IdentityManager {
         let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let current = storage.get(.anonymousId)  // for the warnings only
         guard !id.isEmpty else {
-            Logger.warn("setAnonymousId rejected: the value is empty after trimming whitespace. anonymousId unchanged (\(current ?? "none stored yet")).")
+            Logger.warn("setAnonymousId rejected: the value is empty after trimming whitespace. anonymousId unchanged (\(masked(current))).")
             return false
         }
         let bytes = id.utf8.count
         guard bytes <= maxHostAnonymousIdBytes else {
-            Logger.warn("setAnonymousId rejected: the value is \(bytes) bytes, over the \(maxHostAnonymousIdBytes)-byte limit (starts '\(id.prefix(40))'). anonymousId unchanged (\(current ?? "none stored yet")).")
+            Logger.warn("setAnonymousId rejected: the value is \(bytes) bytes, over the \(maxHostAnonymousIdBytes)-byte limit (starts '\(masked(id))'). anonymousId unchanged (\(masked(current))).")
             return false
         }
         let (previous, changed) = storage.setHostAnonymousId(id)

@@ -40,10 +40,9 @@ final class AnonymousIdClientPayloadTests: XCTestCase {
         deps.persistentQueue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 1000)
         deps.networking = recorder
         deps.networkMonitor = StubNetworkMonitor(status: .connected)
+        // Only the storage: the client builds its IdentityManager over it, the path
+        // MetaRouter's shared instance takes.
         deps.identityStorage = IdentityStorage(userDefaults: defaults)
-        deps.identityManager = IdentityManager(
-            storage: IdentityStorage(userDefaults: defaults), writeKey: options.writeKey, host: options.ingestionHost.absoluteString
-        )
         deps.sessionStorage = SessionStorage(userDefaults: defaults)
         deps.consentStorage = ConsentStorage(userDefaults: defaults)
         deps.providerContextStorage = ProviderContextStorage(userDefaults: defaults)

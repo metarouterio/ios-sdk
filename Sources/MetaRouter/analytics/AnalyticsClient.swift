@@ -65,6 +65,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         self.contextProvider = deps.contextProvider
             ?? DeviceContextProvider(appContext: appContext)
         self.identityManager = deps.identityManager ?? IdentityManager(
+            storage: deps.identityStorage ?? IdentityStorage(),
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
         )

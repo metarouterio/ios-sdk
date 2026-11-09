@@ -25,14 +25,15 @@ public struct IdentityStorage: @unchecked Sendable {
     /// `reset()` ordering. The host's reset() notes the request synchronously and
     /// its clear runs later in the same process; a host id set in between must
     /// survive that clear. In memory, because nothing about it survives a relaunch,
-    /// and per defaults store so separate stores (tests) never share it. Guarded by
-    /// `anonymousIdLock`.
-    private struct ResetOrdering {
+    /// and per defaults store so separate stores (tests) never share it. Weakly
+    /// keyed, so a store that goes away takes its entry with it (Android's
+    /// WeakHashMap). Guarded by `anonymousIdLock`.
+    private final class ResetOrdering {
         var pending = 0
         var hostSetSinceRequest = false
     }
-    private nonisolated(unsafe) static var resetOrdering: [ObjectIdentifier: ResetOrdering] = [:]
-    private var orderingKey: ObjectIdentifier { ObjectIdentifier(userDefaults) }
+    private nonisolated(unsafe) static let resetOrdering =
+        NSMapTable<UserDefaults, ResetOrdering>.weakToStrongObjects()
     
     public init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -58,12 +59,11 @@ public struct IdentityStorage: @unchecked Sendable {
     /// that request.
     public func clear() {
         Self.anonymousIdLock.withLock {
-            var ordering = Self.resetOrdering[orderingKey]
+            let ordering = Self.resetOrdering.object(forKey: userDefaults)
             let keepAnonymousId = ordering?.hostSetSinceRequest ?? false
-            if var o = ordering, o.pending > 0 {
-                o.pending -= 1
-                ordering = o.pending > 0 ? o : nil
-                Self.resetOrdering[orderingKey] = ordering
+            if let ordering, ordering.pending > 0 {
+                ordering.pending -= 1
+                if ordering.pending == 0 { Self.resetOrdering.removeObject(forKey: userDefaults) }
             }
             guard !keepAnonymousId else { return }
             remove(.anonymousId)
@@ -95,9 +95,7 @@ public struct IdentityStorage: @unchecked Sendable {
         Self.anonymousIdLock.withLock {
             // Before the unchanged check: re-setting the current id right after
             // reset() must keep it too.
-            if Self.resetOrdering[orderingKey] != nil {
-                Self.resetOrdering[orderingKey]?.hostSetSinceRequest = true
-            }
+            Self.resetOrdering.object(forKey: userDefaults)?.hostSetSinceRequest = true
             let previous = get(.anonymousId)
             guard previous != id else { return (previous, false) }
             if previous == nil { userDefaults.set(true, forKey: Self.hostSetMarkerKey) }
@@ -110,10 +108,10 @@ public struct IdentityStorage: @unchecked Sendable {
     /// clear is queued: from here, only a host id set after this call survives it.
     func noteResetRequested() {
         Self.anonymousIdLock.withLock {
-            var ordering = Self.resetOrdering[orderingKey] ?? ResetOrdering()
+            let ordering = Self.resetOrdering.object(forKey: userDefaults) ?? ResetOrdering()
             ordering.pending += 1
             ordering.hostSetSinceRequest = false
-            Self.resetOrdering[orderingKey] = ordering
+            Self.resetOrdering.setObject(ordering, forKey: userDefaults)
         }
     }
 

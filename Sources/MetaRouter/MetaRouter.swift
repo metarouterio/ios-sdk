@@ -15,9 +15,14 @@ public enum MetaRouter {
     // storage at construction, before any client exists, so last launch's vendor ids
     // are already on the cold-launch events initialize() goes on to emit.
     private static let providerContextManager = ProviderContextManager(storage: ProviderContextStorage())
+    // One instance for the proxy and every client, passed explicitly like the
+    // managers above: setAnonymousId before bind and reset()'s ordering note write
+    // through the proxy's, and the client's clear and reads must hit the same one.
+    private static let identityStorage = IdentityStorage()
     private static let proxy = AnalyticsProxy(
         consentManager: consentManager,
-        providerContextManager: providerContextManager
+        providerContextManager: providerContextManager,
+        identityStorage: identityStorage
     )
     private static let store = RealClientStore()
 
@@ -31,6 +36,7 @@ public enum MetaRouter {
         var deps = AnalyticsDependencies.production
         deps.consentManager = consentManager
         deps.providerContextManager = providerContextManager
+        deps.identityStorage = identityStorage
         return deps
     }
 
