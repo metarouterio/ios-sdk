@@ -248,60 +248,100 @@ final class ProviderContextManagerTests: XCTestCase {
         XCTAssertEqual(manager.getAll(), ["p": ["a": .string(value)]])
     }
 
-    func testProviderCountIsCapped() {
+    /// Hybrid apps forward ~20 sync providers; the old 10-provider / 10-key caps
+    /// rejected them.
+    func testProviderAndKeyCountsAreNotCapped() {
         let manager = makeManager()
-        for i in 0..<ProviderContextManager.maxProviders {
-            manager.setValue(provider: "p\(i)", key: "a", value: "1")
+        for i in 0..<25 {
+            XCTAssertTrue(manager.setValue(provider: "p\(i)", key: "a", value: "1"))
         }
-        XCTAssertEqual(manager.getAll().count, ProviderContextManager.maxProviders)
+        for i in 0..<25 {
+            XCTAssertTrue(manager.setValue(provider: "p0", key: "k\(i)", value: "1"))
+        }
 
-        XCTAssertFalse(manager.setValue(provider: "overflow", key: "a", value: "1"))
-
-        XCTAssertEqual(manager.getAll().count, ProviderContextManager.maxProviders)
-        XCTAssertNil(manager.getAll()["overflow"])
+        XCTAssertEqual(manager.getAll().count, 25)
+        XCTAssertEqual(manager.getAll()["p0"]?.count, 26)
     }
 
-    func testProviderCapDoesNotBlockWritesToProvidersAlreadyPresent() {
-        let manager = makeManager()
-        for i in 0..<ProviderContextManager.maxProviders {
-            manager.setValue(provider: "p\(i)", key: "a", value: "1")
+    /// Fills the map to just under the total budget with max-size values.
+    private func fillNearTotalBudget(_ manager: ProviderContextManager) -> Int {
+        let value = String(repeating: "x", count: ProviderContextManager.maxValueBytes - 2)
+        // Bounded so a budget check that regresses to "always accept" fails here
+        // instead of hanging the suite.
+        let ceiling = ProviderContextManager.maxTotalBytes / ProviderContextManager.maxValueBytes + 2
+        var count = 0
+        while count < ceiling, manager.setValue(provider: "p\(count)", key: "a", value: value) {
+            count += 1
         }
-        manager.setValue(provider: "p0", key: "b", value: "2")
-
-        XCTAssertEqual(manager.getAll()["p0"], ["a": .string("1"), "b": .string("2")])
+        XCTAssertLessThan(count, ceiling, "the total budget never rejected a write")
+        return count
     }
 
-    func testKeysPerProviderAreCapped() {
+    func testWriteThatWouldExceedTheTotalBudgetIsRejectedAndKeepsPriorState() {
         let manager = makeManager()
-        for i in 0..<ProviderContextManager.maxKeysPerProvider {
-            manager.setValue(provider: "p", key: "k\(i)", value: "1")
-        }
-        XCTAssertEqual(manager.getAll()["p"]?.count, ProviderContextManager.maxKeysPerProvider)
+        let accepted = fillNearTotalBudget(manager)
+        XCTAssertGreaterThan(accepted, 0)
+        let before = manager.getAll()
+        let encoded = try! JSONEncoder().encode(before)
+        XCTAssertLessThanOrEqual(encoded.count, ProviderContextManager.maxTotalBytes)
 
-        XCTAssertFalse(manager.setValue(provider: "p", key: "overflow", value: "1"))
+        XCTAssertFalse(manager.setValue(provider: "overflow",
+                                        key: "a",
+                                        value: String(repeating: "y", count: ProviderContextManager.maxValueBytes - 2)))
 
-        XCTAssertEqual(manager.getAll()["p"]?.count, ProviderContextManager.maxKeysPerProvider)
-        XCTAssertNil(manager.getAll()["p"]?["overflow"])
+        XCTAssertEqual(manager.getAll(), before)
     }
 
-    func testKeyCapDoesNotBlockOverwritingAnExistingKey() {
+    func testGrowingAnExistingKeyPastTheTotalBudgetIsRejected() {
         let manager = makeManager()
-        for i in 0..<ProviderContextManager.maxKeysPerProvider {
-            manager.setValue(provider: "p", key: "k\(i)", value: "1")
-        }
-        manager.setValue(provider: "p", key: "k0", value: "updated")
+        manager.setValue(provider: "small", key: "a", value: "1")
+        _ = fillNearTotalBudget(manager)
+        let before = manager.getAll()
 
-        XCTAssertEqual(manager.getAll()["p"]?["k0"], .string("updated"))
+        XCTAssertFalse(manager.setValue(provider: "small",
+                                        key: "a",
+                                        value: String(repeating: "y", count: ProviderContextManager.maxValueBytes - 2)))
+
+        XCTAssertEqual(manager.getAll(), before)
     }
 
-    func testRemovalIsNotBlockedByAFullMap() {
+    func testShrinkingAndRemovalAreNotBlockedByAFullMap() {
         let manager = makeManager()
-        for i in 0..<ProviderContextManager.maxKeysPerProvider {
-            manager.setValue(provider: "p", key: "k\(i)", value: "1")
-        }
-        manager.setValue(provider: "p", key: "k0", value: nil)
+        _ = fillNearTotalBudget(manager)
 
-        XCTAssertEqual(manager.getAll()["p"]?.count, ProviderContextManager.maxKeysPerProvider - 1)
+        XCTAssertTrue(manager.setValue(provider: "p0", key: "a", value: "short"))
+        XCTAssertEqual(manager.getAll()["p0"]?["a"], .string("short"))
+
+        XCTAssertTrue(manager.setValue(provider: "p1", key: "a", value: nil))
+        XCTAssertNil(manager.getAll()["p1"])
+    }
+
+    /// A map persisted under the old count caps can exceed the new budget; the host
+    /// must still be able to shrink it, and must not be able to grow it.
+    func testAMapAlreadyOverBudgetCanShrinkButNotGrow() {
+        let value = CodableValue.string(String(repeating: "x", count: 254))
+        var legacy: [String: [String: CodableValue]] = [:]
+        for p in 0..<10 {
+            legacy["p\(p)"] = Dictionary(uniqueKeysWithValues: (0..<10).map { ("k\($0)", value) })
+        }
+        storage.set(legacy)
+        let manager = makeManager()
+        XCTAssertGreaterThan(try! JSONEncoder().encode(manager.getAll()).count, ProviderContextManager.maxTotalBytes)
+
+        XCTAssertTrue(manager.setValue(provider: "p1", key: "k0", value: String(repeating: "z", count: 254)),
+                      "a same-size overwrite (a rotated vendor id) must still land")
+        XCTAssertTrue(manager.setValue(provider: "p0", key: "k0", value: "short"))
+        XCTAssertFalse(manager.setValue(provider: "p0", key: "k0", value: String(repeating: "y", count: 254)))
+        XCTAssertFalse(manager.setValue(provider: "new", key: "a", value: "1"))
+        XCTAssertEqual(manager.getAll()["p0"]?["k0"], .string("short"))
+    }
+
+    func testAnEncryptedEnvelopeSizedValueIsAccepted() {
+        let manager = makeManager()
+        // An enrichment-service envelope is always over the old 256 B value cap.
+        let envelope = String(repeating: "e", count: 1_200)
+
+        XCTAssertTrue(manager.setValue(provider: "enrichmentService", key: "payload", value: envelope))
     }
 
     /// `CodableValue.from` drops bad container elements and keeps the rest; here

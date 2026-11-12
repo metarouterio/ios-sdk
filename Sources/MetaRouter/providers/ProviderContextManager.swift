@@ -19,20 +19,35 @@ internal final class ProviderContextManager: @unchecked Sendable {
     /// so `Metarouter` or `meta_router` cannot sit beside it looking like ours.
     static let reservedProvider = "metarouter"
 
-    // This map rides on EVERY event and the cluster rejects a single event over
-    // 250 KiB (StreamingLimitBytes). Worst case here is 10 x 10 x (256 + 64 + 64)
-    // ≈ 38 KB — far more than any real integration needs (a vendor id is a ~36-byte
-    // UUID) and well clear of the cap. Exceeding a bound rejects that one write and
-    // keeps prior state; it never trims, because a truncated vendor id looks valid
-    // and matches nothing.
+    // This map rides on EVERY event, so the bound that matters is its total size,
+    // not how many providers or keys it holds: hybrid apps forward ~20 sync
+    // providers, and a count cap rejects them while a few large values pass.
+    // 16 KiB total sits well under the cluster's single-event cap (250 KiB,
+    // StreamingLimitBytes), even beside a 64 KiB bridge payload. A full map on a
+    // 100-event batch exceeds the 500 KB batch cap: a backlog drain then gets through
+    // at 25 events, with a 413 on every other request as the size doubles back. Real
+    // maps (~4-5 KB per event) cost at most an occasional single halving.
+    //
+    // 2 KiB per value fits an encrypted enrichment envelope (always over 256 B)
+    // and stops one key from taking the whole budget. Exceeding a bound rejects
+    // that one write and keeps prior state; it never trims, because a truncated
+    // vendor id looks valid and matches nothing.
     //
     // A rejection warns and returns false — no debug assertion. Values here come
     // from third-party SDKs the host does not control (an attribution blob, a JWT),
     // and an assertion would crash the host's debug build on vendor data.
-    static let maxProviders = 10
-    static let maxKeysPerProvider = 10
-    static let maxValueBytes = 256
+    static let maxValueBytes = 2 * 1024
+    static let maxTotalBytes = 16 * 1024
     static let maxNameBytes = 64
+
+    /// Measures sizes only. Slashes unescaped so a value counts the same bytes here
+    /// as on Android, whose encoder never escapes them: base64 envelopes and URLs are
+    /// full of `/`, and the default `\/` would reject near the limit on iOS alone.
+    private static func measuringEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        return encoder
+    }
 
     private let lock = NSLock()
     private var storage: ProviderContextStorage
@@ -117,18 +132,17 @@ internal final class ProviderContextManager: @unchecked Sendable {
         var existing = providers[providerName] ?? [:]
 
         if let codable {
-            if providers[providerName] == nil && providers.count >= Self.maxProviders {
-                lock.unlock()
-                Logger.warn("setProviderContext: at most \(Self.maxProviders) providers — \"\(providerName)\" ignored")
-                return false
-            }
-            if existing[keyName] == nil && existing.count >= Self.maxKeysPerProvider {
-                lock.unlock()
-                Logger.warn("setProviderContext: at most \(Self.maxKeysPerProvider) keys per provider — \"\(providerName).\(keyName)\" ignored")
-                return false
-            }
             existing[keyName] = codable
-            providers[providerName] = existing
+            var candidate = providers
+            candidate[providerName] = existing
+            // Checked on the candidate map under the lock: two concurrent writes
+            // that each fit alone must not both land and overshoot together.
+            if let rejection = overBudgetRejection(candidate, current: providers, provider: providerName, key: keyName) {
+                lock.unlock()
+                Logger.warn(rejection)
+                return false
+            }
+            providers = candidate
         } else {
             guard existing.removeValue(forKey: keyName) != nil else {
                 // Nothing to remove: no commit, same as `clear(provider:)`.
@@ -234,13 +248,33 @@ internal final class ProviderContextManager: @unchecked Sendable {
         do {
             // Wrapped in an array because a bare scalar is a top-level JSON
             // fragment; the two bracket bytes come off again before comparing.
-            encoded = try JSONEncoder().encode([value])
+            encoded = try Self.measuringEncoder().encode([value])
         } catch {
             return "setProviderContext(\"\(provider)\", key: \"\(key)\"): value could not be encoded (\(error)) — ignored"
         }
         let byteCount = max(0, encoded.count - 2)
         guard byteCount > Self.maxValueBytes else { return nil }
         return "setProviderContext(\"\(provider)\", key: \"\(key)\"): value is \(byteCount) bytes, limit \(Self.maxValueBytes) — ignored"
+    }
+
+    /// Nil when the host's map, as it would be stamped, fits the total budget —
+    /// or does not grow. Names count too: they are on the wire beside the values.
+    ///
+    /// The no-growth pass matters on upgrade: a map persisted under the old count
+    /// caps can be ~38 KB, and rejecting every write over budget would leave the host
+    /// unable to shrink it one value at a time.
+    private func overBudgetRejection(_ map: [String: [String: CodableValue]],
+                                     current: [String: [String: CodableValue]],
+                                     provider: String,
+                                     key: String) -> String? {
+        // Every value was already encoded once by `oversizeRejection`, so this
+        // cannot fail on content; a failure here is treated as over budget.
+        let byteCount = (try? Self.measuringEncoder().encode(map).count) ?? Int.max
+        guard byteCount > Self.maxTotalBytes else { return nil }
+        // Only paid when over budget, so the common write encodes the map once.
+        let currentCount = (try? Self.measuringEncoder().encode(current).count) ?? 0
+        guard byteCount > currentCount else { return nil }
+        return "setProviderContext(\"\(provider)\", key: \"\(key)\"): provider context would be \(byteCount) bytes, total limit \(Self.maxTotalBytes) — ignored, prior values kept"
     }
 
     // MARK: - Persistence
