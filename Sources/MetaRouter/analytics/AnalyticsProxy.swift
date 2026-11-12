@@ -32,15 +32,23 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // would have the id evicted — the one call that cannot be lost.
     private let providerContextManager: ProviderContextManager
 
-    /// The default managers read `UserDefaults.standard` — fine for a proxy never
-    /// asked about consent or provider context; anything exercising either through
-    /// a proxy must inject isolated managers.
+    // Before bind, setAnonymousId writes storage directly, for the same reasons as
+    // provider context. Every client's IdentityManager reads the anonymousId from
+    // this same storage first, so a write landing between a client's creation and
+    // its bind still reaches that client's next event.
+    private let identityStorage: IdentityStorage
+
+    /// The defaults read `UserDefaults.standard` — fine for a proxy never asked
+    /// about consent, provider context or setAnonymousId; anything exercising one
+    /// through a proxy must inject isolated storage.
     init(
         consentManager: ConsentManager = ConsentManager(storage: ConsentStorage()),
-        providerContextManager: ProviderContextManager = ProviderContextManager(storage: ProviderContextStorage())
+        providerContextManager: ProviderContextManager = ProviderContextManager(storage: ProviderContextStorage()),
+        identityStorage: IdentityStorage = IdentityStorage()
     ) {
         self.consentManager = consentManager
         self.providerContextManager = providerContextManager
+        self.identityStorage = identityStorage
         bridgeProcessor = BridgeMessageProcessor(
             sink: ProxyBridgeSink(box: bridgeClient)
         )
@@ -153,6 +161,14 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         return await state.getAnonymousId()
     }
 
+    @discardableResult
+    public func setAnonymousId(_ anonymousId: String) -> Bool {
+        if let client = bridgeClient.get() as? AnalyticsClient {
+            return client.setAnonymousId(anonymousId)
+        }
+        return IdentityManager.apply(hostAnonymousId: anonymousId, to: identityStorage)
+    }
+
     public func getSessionId() async -> String? {
         return await state.getSessionId()
     }
@@ -172,7 +188,18 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     }
 
     public func flush() { Task { await state.enqueue(.flush) } }
-    public func reset() { Task { await state.enqueue(.reset) } }
+    public func reset() {
+        // Here, not in the client's reset: this is the host's call site, while the
+        // client's runs later (after a queued replay at bind, or a Task hop), where
+        // it would also discard a setAnonymousId made after this call. Routed like
+        // setAnonymousId so both touch the same storage.
+        if let client = bridgeClient.get() as? AnalyticsClient {
+            client.noteResetRequested()
+        } else {
+            identityStorage.noteResetRequested()
+        }
+        Task { await state.enqueue(.reset) }
+    }
 
     public func setAdvertisingId(_ advertisingId: String?) {
         Task { await state.enqueue(.setAdvertisingId(advertisingId)) }

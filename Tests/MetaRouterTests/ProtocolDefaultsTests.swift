@@ -45,6 +45,7 @@ final class ProtocolDefaultsTests: XCTestCase {
         host.setProviderContext("googleFirebase", key: "appInstanceId", value: "x")
         host.clearProviderContext("googleFirebase")
         host.clearAllProviderContext()
+        XCTAssertFalse(host.setAnonymousId("web-anon-1"), "the anonymousId is unchanged")
 
         XCTAssertEqual(host.getConsent(), Consent(explicit: false, optOut: [:]))
         XCTAssertEqual(host.getProviderContext(), [:])
@@ -70,6 +71,7 @@ final class ProtocolDefaultsTests: XCTestCase {
         _ = target.getProviderContext()
         target.clearProviderContext("googleFirebase")
         target.clearAllProviderContext()
+        target.setAnonymousId("web-anon-1")
     }
 
     /// The defaults removed the compiler's witness check, so this is what catches an
@@ -82,10 +84,14 @@ final class ProtocolDefaultsTests: XCTestCase {
         var deps = iso.deps
         deps.consentManager = ConsentManager(storage: iso.consentStorage)
         deps.providerContextManager = ProviderContextManager(storage: iso.providerContextStorage)
+        let identityStorage = IdentityStorage(userDefaults: iso.defaults)
+        deps.identityStorage = identityStorage
+        deps.identityManager = IdentityManager(storage: identityStorage, writeKey: "test-key", host: "https://test.com")
         let client = AnalyticsClient.initialize(options: TestDataFactory.makeInitOptions(), deps: deps)
         let proxy = AnalyticsProxy(
             consentManager: deps.consentManager!,
-            providerContextManager: deps.providerContextManager!
+            providerContextManager: deps.providerContextManager!,
+            identityStorage: identityStorage
         )
         ProtocolDefaultProbe.reset()
 
@@ -102,7 +108,7 @@ final class ProtocolDefaultsTests: XCTestCase {
 
         driveEveryDefaultedRequirement(LegacyHostFake())
 
-        XCTAssertEqual(ProtocolDefaultProbe.hits.count, 10)
+        XCTAssertEqual(ProtocolDefaultProbe.hits.count, 11)
     }
 
     /// A wrapper that forwards `track` but not `getConsent` must not log per event.

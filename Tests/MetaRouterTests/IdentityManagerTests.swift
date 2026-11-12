@@ -190,8 +190,9 @@ final class IdentityManagerTests: XCTestCase {
         // Don't call initialize()
         let identity = await identityManager.getIdentityInfo()
         
-        // Should return "unknown" for anonymousId if not initialized
-        XCTAssertEqual(identity.anonymousId, "unknown")
+        // Mints and persists one rather than stamping a placeholder
+        XCTAssertNotNil(UUID(uuidString: identity.anonymousId))
+        XCTAssertEqual(testStorage.get(.anonymousId), identity.anonymousId)
         XCTAssertNil(identity.userId)
         XCTAssertNil(identity.groupId)
     }
@@ -266,16 +267,22 @@ final class IdentityManagerTests: XCTestCase {
         XCTAssertNil(groupId)
     }
     
+    /// The first event after reset() mints and persists a new id; it never goes
+    /// out as a placeholder.
     func testGetIdentityInfoAfterReset() async {
         await identityManager.initialize()
         await identityManager.identify("user-123")
+        let before = await identityManager.getAnonymousId()
         
         await identityManager.reset()
         
         let identity = await identityManager.getIdentityInfo()
         
-        // Should return "unknown" after reset
-        XCTAssertEqual(identity.anonymousId, "unknown")
+        XCTAssertNotEqual(identity.anonymousId, before)
+        XCTAssertNotNil(UUID(uuidString: identity.anonymousId))
+        XCTAssertEqual(testStorage.get(.anonymousId), identity.anonymousId)
+        let next = await identityManager.getIdentityInfo()
+        XCTAssertEqual(next.anonymousId, identity.anonymousId, "stable from then on")
         XCTAssertNil(identity.userId)
         XCTAssertNil(identity.groupId)
     }
@@ -593,5 +600,209 @@ final class IdentityManagerTests: XCTestCase {
         // Verify storage is cleared
         XCTAssertNil(testStorage.get(.advertisingId))
     }
-}
 
+    // MARK: - setAnonymousId
+
+    func testSetAnonymousIdIsReadYourWrites() async {
+        await identityManager.initialize()
+
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+
+        let current = await identityManager.getAnonymousId()
+        let info = await identityManager.getIdentityInfo()
+        let created = await identityManager.getOrCreateAnonymousId()
+        XCTAssertEqual(current, "web-anon-1")
+        XCTAssertEqual(info.anonymousId, "web-anon-1")
+        XCTAssertEqual(created, "web-anon-1")
+        XCTAssertEqual(testStorage.get(.anonymousId), "web-anon-1")
+    }
+
+    func testSetAnonymousIdTrims() async {
+        XCTAssertTrue(identityManager.setAnonymousId("  web-anon-1\n"))
+        let current = await identityManager.getAnonymousId()
+        XCTAssertEqual(current, "web-anon-1")
+    }
+
+    func testSetAnonymousIdRejectsBlankAndOversizeLeavingIdUnchanged() async {
+        await identityManager.initialize()
+        let before = await identityManager.getAnonymousId()
+
+        XCTAssertFalse(identityManager.setAnonymousId(""))
+        XCTAssertFalse(identityManager.setAnonymousId(" \t\n"))
+        XCTAssertFalse(identityManager.setAnonymousId(String(repeating: "a", count: 257)))
+        XCTAssertTrue(identityManager.setAnonymousId(String(repeating: "a", count: 256)), "the limit itself is accepted")
+
+        XCTAssertNotNil(before)
+        XCTAssertFalse(testStorage.hasHostSetMarker, "rejections never mark the device")
+    }
+
+    func testSetAnonymousIdSameValueIsANoOpReturningTrue() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        testStorage.clearHostSetMarker()
+
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        XCTAssertFalse(testStorage.hasHostSetMarker, "an unchanged id writes nothing")
+    }
+
+    /// Before `initialize`, the host id must win over minting: the launch's first
+    /// events would otherwise carry a throwaway id.
+    func testInitializeAdoptsHostAnonymousIdSetBeforehand() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+
+        await identityManager.initialize()
+
+        let current = await identityManager.getAnonymousId()
+        XCTAssertEqual(current, "web-anon-1")
+    }
+
+    /// The proxy writes through its own storage instance while a client's manager
+    /// may already hold an id in memory (created, not yet bound). The manager must
+    /// pick the write up on its next read.
+    func testWriteThroughAnotherStorageInstanceReachesAnInitializedManager() async {
+        await identityManager.initialize()
+
+        let proxySide = IdentityStorage(userDefaults: testDefaults)
+        XCTAssertTrue(IdentityManager.apply(hostAnonymousId: "web-anon-1", to: proxySide))
+
+        let info = await identityManager.getIdentityInfo()
+        XCTAssertEqual(info.anonymousId, "web-anon-1")
+    }
+
+    func testMarkerWrittenOnlyWhenNoAnonymousIdExisted() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        XCTAssertTrue(testStorage.hasHostSetMarker)
+        XCTAssertFalse(testStorage.hasAnyValue(), "a host id on a fresh device is not prior identity")
+
+        let other = IdentityStorage(userDefaults: UserDefaults(suiteName: suiteName + ".existing")!)
+        defer { UserDefaults().removePersistentDomain(forName: suiteName + ".existing") }
+        other.set(.anonymousId, value: "sdk-anon")
+        XCTAssertTrue(IdentityManager.apply(hostAnonymousId: "web-anon-1", to: other))
+        XCTAssertFalse(other.hasHostSetMarker)
+        XCTAssertTrue(other.hasAnyValue())
+    }
+
+    /// The marker only has to survive until install detection has read it, which
+    /// happens before initialize. Left in place, a later launch that first enables
+    /// lifecycle tracking would report a long-standing device as a new install.
+    func testInitializeEndsTheHostSetMarkerWindow() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        XCTAssertFalse(testStorage.hasAnyValue())
+
+        await identityManager.initialize()
+
+        XCTAssertFalse(testStorage.hasHostSetMarker)
+        XCTAssertTrue(testStorage.hasAnyValue())
+        let current = await identityManager.getAnonymousId()
+        XCTAssertEqual(current, "web-anon-1")
+    }
+
+    func testHostSetMarkerDoesNotHideOtherIdentity() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        await identityManager.identify("user-1")
+        XCTAssertTrue(testStorage.hasAnyValue())
+    }
+
+    func testResetDiscardsHostAnonymousIdAndMintsANewOne() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        await identityManager.initialize()
+
+        identityManager.noteResetRequested()
+        await identityManager.reset()
+
+        XCTAssertFalse(testStorage.hasHostSetMarker)
+        let fresh = await identityManager.getOrCreateAnonymousId()
+        XCTAssertNotEqual(fresh, "web-anon-1")
+        XCTAssertNotNil(UUID(uuidString: fresh))
+    }
+
+    /// Storage is authoritative, but if something outside the SDK wipes it the
+    /// in-memory id is restored rather than replaced.
+    func testExternallyWipedStorageIsReseededFromMemory() async {
+        await identityManager.initialize()
+        let original = await identityManager.getAnonymousId()
+
+        testStorage.remove(.anonymousId)
+
+        let after = await identityManager.getOrCreateAnonymousId()
+        XCTAssertEqual(after, original)
+        XCTAssertEqual(testStorage.get(.anonymousId), original)
+    }
+
+    // MARK: - reset() ordering
+    // The host's reset() notes the request synchronously; the clear runs later.
+    // These drive the two halves separately, with the clear delayed past the set.
+
+    func testHostIdSetAfterResetRequestSurvivesTheDelayedClear() async {
+        await identityManager.initialize()
+        await identityManager.identify("user-1")
+
+        identityManager.noteResetRequested()
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-2"))
+        await identityManager.reset()
+
+        let current = await identityManager.getOrCreateAnonymousId()
+        let userId = await identityManager.getUserId()
+        XCTAssertEqual(current, "web-anon-2")
+        XCTAssertNil(userId, "the rest of identity is still cleared")
+        XCTAssertNil(testStorage.get(.userId))
+    }
+
+    func testHostIdSetBeforeResetRequestIsCleared() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+
+        identityManager.noteResetRequested()
+        await identityManager.reset()
+
+        let current = await identityManager.getOrCreateAnonymousId()
+        XCTAssertNotEqual(current, "web-anon-1")
+    }
+
+    /// Re-setting the id the device already has after reset() must keep it: the
+    /// unchanged-value shortcut cannot skip the bookkeeping.
+    func testResettingTheCurrentIdAfterResetRequestKeepsIt() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+
+        identityManager.noteResetRequested()
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        await identityManager.reset()
+
+        let current = await identityManager.getOrCreateAnonymousId()
+        XCTAssertEqual(current, "web-anon-1")
+    }
+
+    func testTwoResetsThenSetKeepsTheIdThroughBothClears() async {
+        identityManager.noteResetRequested()
+        identityManager.noteResetRequested()
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        await identityManager.reset()
+        await identityManager.reset()
+
+        let current = await identityManager.getOrCreateAnonymousId()
+        XCTAssertEqual(current, "web-anon-1")
+    }
+
+    /// set A, reset, set B, reset: the second request discards B like any id set
+    /// before a reset.
+    func testSetResetSetResetClearsTheLastId() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+        identityManager.noteResetRequested()
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-2"))
+        identityManager.noteResetRequested()
+        await identityManager.reset()
+        await identityManager.reset()
+
+        let current = await identityManager.getOrCreateAnonymousId()
+        XCTAssertNotEqual(current, "web-anon-1")
+        XCTAssertNotEqual(current, "web-anon-2")
+    }
+
+    /// A clear that no reset() requested (nothing pending) is an ordinary clear,
+    /// however recently the host set the id.
+    func testUnrequestedClearStillClearsAHostId() async {
+        XCTAssertTrue(identityManager.setAnonymousId("web-anon-1"))
+
+        await identityManager.reset()
+
+        XCTAssertNil(testStorage.get(.anonymousId))
+    }
+}

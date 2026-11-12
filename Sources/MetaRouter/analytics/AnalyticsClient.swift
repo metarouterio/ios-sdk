@@ -65,6 +65,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         self.contextProvider = deps.contextProvider
             ?? DeviceContextProvider(appContext: appContext)
         self.identityManager = deps.identityManager ?? IdentityManager(
+            storage: deps.identityStorage ?? IdentityStorage(),
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString
         )
@@ -430,6 +431,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         return await identityManager.getOrCreateAnonymousId()
     }
 
+    @discardableResult
+    public func setAnonymousId(_ anonymousId: String) -> Bool {
+        identityManager.setAnonymousId(anonymousId)
+    }
+
     public func getSessionId() async -> String? {
         // peek, not touch: a diagnostic read is not user activity and must not
         // extend the inactivity window. Nil until the first event of the
@@ -541,6 +547,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             await self.dispatcher.flush()
         }
     }
+    /// The synchronous half of the host's `reset()`; see `AnalyticsProxy.reset()`.
+    func noteResetRequested() {
+        identityManager.noteResetRequested()
+    }
+
     public func reset() {
         Task { [weak self] in
             guard let self else { return }
