@@ -92,7 +92,7 @@ final class ContextFreshnessTests: XCTestCase {
     }
 
     func testStoppedMonitorReportsUnknownWifi() {
-        let monitor = NetworkMonitor()
+        let monitor = NetworkMonitor(startingPathMonitor: false)
         monitor.stop()
         XCTAssertNil(monitor.isWifi, "a stopped monitor must not keep stamping its last interface")
     }
@@ -103,15 +103,80 @@ final class ContextFreshnessTests: XCTestCase {
         XCTAssertEqual(payload.context.network?.wifi, true)
     }
 
-    func testRealMonitorDeliversFirstPathWithinTheBound() async {
+    // MARK: real monitor, first-path wait (driven through the seam, no NWPathMonitor)
+
+    /// Waits until a caller is parked on the first path, so the test exercises the
+    /// resume path rather than the fast path.
+    private func waitUntilParked(_ monitor: NetworkMonitor) async {
+        for _ in 0..<500 where monitor.parkedWaiterCount == 0 {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(monitor.parkedWaiterCount, 1, "waiter parked")
+    }
+
+    /// The one real-NWPathMonitor test: pins the pathUpdateHandler → applyPath wiring.
+    /// NWPathMonitor delivers a first path even offline (an unsatisfied path, wifi
+    /// false), so this does not depend on the runner having a network.
+    func testRealMonitorDeliversItsFirstPath() async {
         let monitor = NetworkMonitor()
         defer { monitor.stop() }
-        let wifi = await monitor.awaitIsWifi(timeout: 2)
-        XCTAssertNotNil(wifi, "NWPathMonitor delivers its first path promptly after start")
+        let wifi = await monitor.awaitIsWifi(timeout: 5)
+        XCTAssertNotNil(wifi)
+    }
+
+    func testParkedWaiterResumesWithTheFirstPath() async {
+        let monitor = NetworkMonitor(startingPathMonitor: false)
+        let start = Date()
+        async let wifi = monitor.awaitIsWifi(timeout: 5)
+        await waitUntilParked(monitor)
+        monitor.applyPath(satisfied: true, isWifi: true)
+        let value = await wifi
+        XCTAssertEqual(value, true)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1, "resumed by the path, not the timeout")
+    }
+
+    func testWaitTimesOutThenLatchesSoLaterEventsDoNotWait() async {
+        let monitor = NetworkMonitor(startingPathMonitor: false)
+        let start = Date()
+        let first = await monitor.awaitIsWifi(timeout: 0.1)
+        XCTAssertNil(first)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 0.09, "waited the bound")
+
+        let again = Date()
+        let second = await monitor.awaitIsWifi(timeout: 5)
+        XCTAssertNil(second)
+        XCTAssertLessThan(Date().timeIntervalSince(again), 0.5, "latched: no second wait")
+    }
+
+    func testPathAfterTimeoutStillUpdatesTheValue() async {
+        let monitor = NetworkMonitor(startingPathMonitor: false)
+        _ = await monitor.awaitIsWifi(timeout: 0.05)
+        monitor.applyPath(satisfied: true, isWifi: false)
+        let value = await monitor.awaitIsWifi(timeout: 5)
+        XCTAssertEqual(value, false)
+    }
+
+    func testStopResumesAParkedWaiterWithUnknown() async {
+        let monitor = NetworkMonitor(startingPathMonitor: false)
+        let start = Date()
+        async let wifi = monitor.awaitIsWifi(timeout: 5)
+        await waitUntilParked(monitor)
+        monitor.stop()
+        let value = await wifi
+        XCTAssertNil(value)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1, "resumed by stop, not the timeout")
+    }
+
+    func testPathDeliveredAfterStopIsIgnored() {
+        let monitor = NetworkMonitor(startingPathMonitor: false)
+        monitor.applyPath(satisfied: true, isWifi: true)
+        monitor.stop()
+        monitor.applyPath(satisfied: true, isWifi: true)
+        XCTAssertNil(monitor.isWifi, "a path queued when stop() ran must not restore the value")
     }
 
     func testStoppedMonitorDoesNotMakeEventsWait() async {
-        let monitor = NetworkMonitor()
+        let monitor = NetworkMonitor(startingPathMonitor: false)
         monitor.stop()
         let start = Date()
         let wifi = await monitor.awaitIsWifi(timeout: 5)
@@ -120,7 +185,7 @@ final class ContextFreshnessTests: XCTestCase {
     }
 
     func testInvalidTimeoutsDoNotTrap() async {
-        let monitor = NetworkMonitor()
+        let monitor = NetworkMonitor(startingPathMonitor: false)
         defer { monitor.stop() }
         _ = await monitor.awaitIsWifi(timeout: -1)
         _ = await monitor.awaitIsWifi(timeout: .nan)

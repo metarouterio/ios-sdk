@@ -43,6 +43,9 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
     /// Set once waiting is pointless: stopped, or a wait already timed out. A
     /// monitor that never delivers must cost one bounded wait, not one per event.
     private var stopWaiting = false
+    /// Not `monitor == nil`: the test seam builds a monitor without an NWPathMonitor
+    /// that is still live, so stopped-ness needs its own flag.
+    private var stopped = false
     private var handler: (@Sendable (NetworkStatus) -> Void)?
     private var monitor: NWPathMonitor?
     private let monitorQueue = DispatchQueue(label: "com.metarouter.networkMonitor")
@@ -57,37 +60,51 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
         return _isWifi
     }
 
-    public init() {
+    public convenience init() {
+        self.init(startingPathMonitor: true)
+    }
+
+    /// Test seam: `false` builds the monitor without an `NWPathMonitor`, so a test
+    /// drives `applyPath` itself — the park / time-out / latch / stop paths can then
+    /// be exercised deterministically instead of racing the runner's real network.
+    internal init(startingPathMonitor: Bool) {
+        guard startingPathMonitor else { return }
         let pathMonitor = NWPathMonitor()
         self.monitor = pathMonitor
 
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            guard let self else { return }
-            let newStatus: NetworkStatus = path.status == .satisfied ? .connected : .disconnected
-            self.lock.lock()
-            // A path already queued when stop() ran would otherwise restore the
-            // value stop() just cleared, and every later event would stamp it.
-            guard self.monitor != nil else {
-                self.lock.unlock()
-                return
-            }
-            let oldStatus = self._currentStatus
-            self._currentStatus = newStatus
-            let isWifi = path.usesInterfaceType(.wifi)
-            self._isWifi = isWifi
-            let callback = self.handler
-            let waiters = self.firstPathWaiters
-            self.firstPathWaiters = [:]
-            self.lock.unlock()
-            for waiter in waiters.values { waiter.resume(returning: isWifi) }
-
-            if oldStatus != newStatus {
-                Logger.log("Network status changed: \(oldStatus.rawValue) -> \(newStatus.rawValue) (interfaces=\(path.availableInterfaces.map(\.type)), expensive=\(path.isExpensive), constrained=\(path.isConstrained))")
-                callback?(newStatus)
-            }
+            self?.applyPath(
+                satisfied: path.status == .satisfied,
+                isWifi: path.usesInterfaceType(.wifi),
+                detail: "interfaces=\(path.availableInterfaces.map(\.type)), expensive=\(path.isExpensive), constrained=\(path.isConstrained)"
+            )
         }
 
         pathMonitor.start(queue: monitorQueue)
+    }
+
+    internal func applyPath(satisfied: Bool, isWifi: Bool, detail: @autoclosure () -> String = "") {
+        let newStatus: NetworkStatus = satisfied ? .connected : .disconnected
+        lock.lock()
+        // A path already queued when stop() ran would otherwise restore the
+        // value stop() just cleared, and every later event would stamp it.
+        guard !stopped else {
+            lock.unlock()
+            return
+        }
+        let oldStatus = _currentStatus
+        _currentStatus = newStatus
+        _isWifi = isWifi
+        let callback = handler
+        let waiters = firstPathWaiters
+        firstPathWaiters = [:]
+        lock.unlock()
+        for waiter in waiters.values { waiter.resume(returning: isWifi) }
+
+        if oldStatus != newStatus {
+            Logger.log("Network status changed: \(oldStatus.rawValue) -> \(newStatus.rawValue) (\(detail()))")
+            callback?(newStatus)
+        }
     }
 
     public func awaitIsWifi(timeout: TimeInterval) async -> Bool? {
@@ -114,6 +131,12 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
         }
     }
 
+    /// Test seam: lets a test wait until a caller is actually parked before it
+    /// delivers a path or stops, instead of sleeping and hoping.
+    internal var parkedWaiterCount: Int {
+        lock.withLock { firstPathWaiters.count }
+    }
+
     private func expireFirstPathWaiter(_ id: UUID) {
         lock.lock()
         let waiter = firstPathWaiters.removeValue(forKey: id)
@@ -134,6 +157,7 @@ public final class NetworkMonitor: NetworkReachability, @unchecked Sendable {
         // stamping a frozen value is the staleness per-event reads exist to remove.
         self._isWifi = nil
         self.stopWaiting = true
+        self.stopped = true
         let waiters = self.firstPathWaiters
         self.firstPathWaiters = [:]
         let mon = self.monitor
