@@ -57,7 +57,9 @@ final class AnonymousIdClientPayloadTests: XCTestCase {
 
     private func postedEvents(_ client: AnalyticsClient, _ recorder: BodyRecordingNetworking, count: Int) async throws -> [[String: Any]] {
         var events: [[String: Any]] = []
-        let posted = await TestUtilities.waitFor(timeout: 2) {
+        // Generous: returns as soon as the events land, and the CI simulator has
+        // missed a 2 s window.
+        let posted = await TestUtilities.waitFor(timeout: 10) {
             client.flush()
             events = recorder.bodies.flatMap { body -> [[String: Any]] in
                 let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
@@ -160,7 +162,7 @@ final class AnonymousIdClientPayloadTests: XCTestCase {
         XCTAssertTrue(proxy.setAnonymousId("web-anon-1"))
         proxy.reset()
 
-        let cleared = await TestUtilities.waitFor(timeout: 2) {
+        let cleared = await TestUtilities.waitFor(timeout: 10) {
             IdentityStorage(userDefaults: self.defaults).get(.anonymousId) == nil
         }
         XCTAssertTrue(cleared, "reset() discards an id set before it")
@@ -173,7 +175,7 @@ final class AnonymousIdClientPayloadTests: XCTestCase {
     ) async throws {
         let storage = IdentityStorage(userDefaults: defaults)
         var settled = false
-        for _ in 0..<100 where !settled {
+        for _ in 0..<500 where !settled {
             settled = await client.getDebugInfo()["lifecycle"] == .string("idle")
             if !settled { try await Task.sleep(nanoseconds: 20_000_000) }
         }

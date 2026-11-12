@@ -64,7 +64,9 @@ final class ConsentClientPayloadTests: XCTestCase {
     /// because enrichment is asynchronous: a flush before the event reaches the
     /// queue sends nothing.
     private func firstPostedEvent(_ client: AnalyticsClient, _ recorder: BodyRecordingNetworking) async throws -> [String: Any] {
-        let posted = await TestUtilities.waitFor(timeout: 2) {
+        // Generous: returns as soon as a POST lands, and the CI simulator has
+        // missed a 2 s window.
+        let posted = await TestUtilities.waitFor(timeout: 10) {
             client.flush()
             return !recorder.bodies.isEmpty
         }
