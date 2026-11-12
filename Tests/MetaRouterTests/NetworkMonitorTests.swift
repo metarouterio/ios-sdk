@@ -5,13 +5,24 @@ final class StubNetworkMonitor: NetworkReachability, @unchecked Sendable {
     private let lock = NSLock()
     private var _status: NetworkStatus
     private var handler: (@Sendable (NetworkStatus) -> Void)?
+    private var _isWifi: Bool?
 
     var currentStatus: NetworkStatus {
         lock.withLock { _status }
     }
 
-    init(status: NetworkStatus = .connected) {
+    var isWifi: Bool? {
+        lock.withLock { _isWifi }
+    }
+
+    init(status: NetworkStatus = .connected, isWifi: Bool? = nil) {
         _status = status
+        _isWifi = isWifi
+    }
+
+    /// Simulate an interface switch (wifi <-> cellular) from tests.
+    func setWifi(_ isWifi: Bool?) {
+        lock.withLock { _isWifi = isWifi }
     }
 
     func onStatusChange(_ handler: @escaping @Sendable (NetworkStatus) -> Void) {

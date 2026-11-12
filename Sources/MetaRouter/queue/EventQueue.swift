@@ -17,12 +17,19 @@ public actor EventQueue<Event: Sendable> {
     /// Returns the queue count after insertion (atomic with the enqueue).
     @discardableResult
     public func enqueue(_ event: Event) -> Int {
+        enqueueEvicting(event).count
+    }
+
+    /// `enqueue`, also returning the event dropped to make room, so a caller that
+    /// keeps per-event accounting can subtract exactly what left.
+    func enqueueEvicting(_ event: Event) -> (count: Int, evicted: Event?) {
+        var evicted: Event?
         if buffer.count >= capacity {
-            if !buffer.isEmpty { _ = buffer.removeFirst() }
+            if !buffer.isEmpty { evicted = buffer.removeFirst() }
             Logger.warn("Queue cap \(capacity) reached — dropped oldest event")
         }
         buffer.append(event)
-        return buffer.count
+        return (buffer.count, evicted)
     }
 
     /// Drain up to max elements from the front (FIFO). Returns drained events.
@@ -34,14 +41,18 @@ public actor EventQueue<Event: Sendable> {
         return drained
     }
 
-    /// Requeue events at the front (used after retryable failures)
-    public func requeueToFront(_ events: [Event]) {
-        guard !events.isEmpty else { return }
+    /// Requeue events at the front (used after retryable failures).
+    /// Returns the tail events dropped to stay within capacity.
+    @discardableResult
+    public func requeueToFront(_ events: [Event]) -> [Event] {
+        guard !events.isEmpty else { return [] }
         buffer.insert(contentsOf: events, at: 0)
-        // Apply capacity if we exceeded due to requeue
-        while buffer.count > capacity {
-            _ = buffer.removeLast() // keep requeued items; drop the tail
-        }
+        // Apply capacity if we exceeded due to requeue; keep requeued items, drop the tail
+        let overflow = buffer.count - capacity
+        guard overflow > 0 else { return [] }
+        let dropped = Array(buffer.suffix(overflow))
+        buffer.removeLast(overflow)
+        return dropped
     }
 
     /// Drop current front batch without requeueing

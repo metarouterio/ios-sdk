@@ -11,6 +11,11 @@ internal final class EventEnrichmentService: Sendable {
     private let sessionManager: SessionManager
     private let consentManager: ConsentManager
     private let providerContextManager: ProviderContextManager
+    private let networkMonitor: NetworkReachability?
+
+    /// Longest an event waits for the network monitor's first path at cold launch.
+    /// The one-shot probe this replaced waited up to 2s per context build.
+    static let firstPathTimeout: TimeInterval = 0.5
 
     /// The only initializer. Construction requires the client's own session,
     /// consent and provider-context managers: a second session manager races the
@@ -19,14 +24,17 @@ internal final class EventEnrichmentService: Sendable {
     /// host's `setConsent` / `clearConsent` — it would stamp a consent the user has
     /// since withdrawn — and a second provider-context manager never hears
     /// `setProviderContext`. The type and a standalone initializer were public before
-    /// consent, and both were withdrawn for exactly that reason.
+    /// consent, and both were withdrawn for exactly that reason. The network monitor
+    /// is required too, though nil is allowed: a default would let a construction
+    /// silently ship every event without `context.network`.
     internal init(
         contextProvider: ContextProvider,
         identityManager: IdentityManager,
         writeKey: String,
         sessionManager: SessionManager,
         consentManager: ConsentManager,
-        providerContextManager: ProviderContextManager
+        providerContextManager: ProviderContextManager,
+        networkMonitor: NetworkReachability?
     ) {
         self.contextProvider = contextProvider
         self.identityManager = identityManager
@@ -34,6 +42,7 @@ internal final class EventEnrichmentService: Sendable {
         self.sessionManager = sessionManager
         self.consentManager = consentManager
         self.providerContextManager = providerContextManager
+        self.networkMonitor = networkMonitor
     }
 
     /// Enrich an event with identity, context, and metadata
@@ -43,6 +52,30 @@ internal final class EventEnrichmentService: Sendable {
     ) async -> EnrichedEventPayload {
         var context = await contextProvider.getContext()
         let messageId = MessageIdGenerator.generate()
+
+        // Ad ID is overlaid per event from IdentityManager, the value the host's
+        // setAdvertisingId persists, instead of living in the provider's cached
+        // context — that coupling forced a full context rebuild on every change.
+        // Present-only, as on Android: a cleared ID leaves the provider's device
+        // block as is, and the SDK's own provider never carries one.
+        if let advertisingId = await identityManager.getAdvertisingId() {
+            context.device = context.device.with(advertisingId: advertisingId)
+        }
+
+        // Network is read live from the persistent monitor at enrichment, so
+        // `network.wifi` is the interface at event time, not at the first event.
+        // Cold-launch events (Installed / Opened, replayed pre-bind calls) can be
+        // enriched before the monitor's first path, usually milliseconds away; the
+        // bounded wait keeps them from shipping without `network`, which Android's
+        // synchronous read always has. Only events enriched before the first path wait,
+        // each at most `firstPathTimeout` (a cold-launch burst waits in parallel); once
+        // the path arrives or one wait times out, no event waits again.
+        // Still unknown keeps the provider's value — nil for the SDK's own provider,
+        // which omits the object: the spec requires `wifi` to be a boolean whenever
+        // `network` is present, so there is no null form.
+        if let wifi = await networkMonitor?.awaitIsWifi(timeout: Self.firstPathTimeout) {
+            context.network = NetworkContext(wifi: wifi)
+        }
 
         // Bridge-sourced events carry their page facts on the event; native events
         // leave it nil and context.page stays absent, matching web SDK output.

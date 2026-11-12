@@ -25,7 +25,8 @@ final class BridgeEventPlumbingTests: XCTestCase {
             writeKey: "test-write-key",
             sessionManager: SessionManager(storage: SessionStorage(userDefaults: sessionDefaults)),
             consentManager: ConsentManager(storage: ConsentStorage(userDefaults: sessionDefaults)),
-            providerContextManager: ProviderContextManager(storage: ProviderContextStorage(userDefaults: sessionDefaults))
+            providerContextManager: ProviderContextManager(storage: ProviderContextStorage(userDefaults: sessionDefaults)),
+            networkMonitor: nil
         )
     }
 
