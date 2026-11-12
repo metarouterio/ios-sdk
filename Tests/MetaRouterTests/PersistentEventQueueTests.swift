@@ -482,10 +482,80 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: diskFilePath.path),
                       "Byte cap flush should have written to disk")
     }
+
+    // MARK: - Byte accounting (size measured once at enqueue)
+
+    private func encodedSize(_ event: EnrichedEventPayload) throws -> Int {
+        try JSONEncoder().encode(event).count
+    }
+
+    func testByteCounterIsExactUTF8ForMultiByteEvents() async throws {
+        let queue = makeQueue()
+        let events = [
+            makeTestEvent(messageId: "ascii", properties: ["name": .string("Headphones")]),
+            makeTestEvent(messageId: "arabic", properties: ["name": .string("سماعات لاسلكية")]),
+            makeTestEvent(messageId: "emoji", properties: ["name": .string("🎧🎧🎧")]),
+        ]
+        for event in events { await queue.enqueue(event) }
+
+        let expected = try events.reduce(0) { $0 + (try encodedSize($1)) }
+        let counted = await queue.bufferedBytes
+        XCTAssertEqual(counted, expected)
+    }
+
+    func testByteCounterReturnsToZeroAfterDrain() async throws {
+        let queue = makeQueue()
+        for i in 0..<5 { await queue.enqueue(makeTestEvent(messageId: "e\(i)")) }
+        _ = await queue.drain(max: 2)
+        _ = await queue.drain(max: 10)
+        let counted = await queue.bufferedBytes
+        XCTAssertEqual(counted, 0)
+    }
+
+    func testByteCounterSubtractsTheEvictedEventExactly() async throws {
+        // No persistence: the ring buffer evicts the oldest instead of flushing to disk.
+        let queue = makeQueue(maxEventCount: 2, maxDiskEvents: 0)
+        let big = makeTestEvent(messageId: "big", properties: ["blob": .string(String(repeating: "x", count: 4000))])
+        let small1 = makeTestEvent(messageId: "s1")
+        let small2 = makeTestEvent(messageId: "s2")
+        await queue.enqueue(big)
+        await queue.enqueue(small1)
+        await queue.enqueue(small2) // evicts `big`
+
+        let expected = try encodedSize(small1) + encodedSize(small2)
+        let counted = await queue.bufferedBytes
+        XCTAssertEqual(counted, expected)
+    }
+
+    func testByteCounterAfterRequeueMatchesContents() async throws {
+        let queue = makeQueue()
+        for i in 0..<3 { await queue.enqueue(makeTestEvent(messageId: "e\(i)")) }
+        let batch = await queue.drain(max: 2)
+        await queue.requeueToFront(batch)
+
+        let remaining = await queue.drain(max: 10)
+        XCTAssertEqual(remaining.map(\.messageId), ["e0", "e1", "e2"])
+        let counted = await queue.bufferedBytes
+        XCTAssertEqual(counted, 0)
+    }
+
+    func testByteCounterAfterDropFront() async throws {
+        let queue = makeQueue()
+        for i in 0..<3 { await queue.enqueue(makeTestEvent(messageId: "e\(i)")) }
+        await queue.dropFront(2)
+        let expected = try encodedSize(makeTestEvent(messageId: "e2"))
+        let counted = await queue.bufferedBytes
+        XCTAssertEqual(counted, expected)
+    }
 }
 
 
-private func makeTestEvent(messageId: String = "mid", timestamp: String = "now") -> EnrichedEventPayload {
+
+private func makeTestEvent(
+    messageId: String = "mid",
+    timestamp: String = "now",
+    properties: [String: CodableValue]? = nil
+) -> EnrichedEventPayload {
     let ctx = EventContext(
         app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
         device: DeviceContext(manufacturer: "a", model: "m", type: "t"),
@@ -498,7 +568,7 @@ private func makeTestEvent(messageId: String = "mid", timestamp: String = "now")
     )
     return EnrichedEventPayload(
         type: "track", event: "ev", userId: nil, anonymousId: "anon",
-        properties: nil, traits: nil, integrations: nil,
+        properties: properties, traits: nil, integrations: nil,
         timestamp: timestamp, writeKey: "wk", messageId: messageId, context: ctx
     )
 }

@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 #if canImport(UIKit)
 import UIKit
@@ -30,7 +29,7 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
     private let contextActor = ContextActor()
     private let library: LibraryContext
     private let appContext: AppContext
-    private let advertisingIdActor = AdvertisingIdActor()
+    private let advertisingIdBox = AdvertisingIdBox()
 
     public init(
         libraryName: String = "metarouter-ios-sdk",
@@ -41,19 +40,30 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
         self.appContext = appContext
     }
 
+    /// Static fields only (app, device, library, os, screen, locale, timezone),
+    /// collected once and cached. Network is volatile and the SDK client's
+    /// enrichment stamps it per event from the live monitor, so it is absent here.
     public func getContext() async -> EventContext {
-        await contextActor.getOrCreateContext { [self] in
+        var context = await contextActor.getOrCreateContext { [self] in
             await collectContext()
         }
+        if let advertisingId = advertisingIdBox.get() {
+            context.device = context.device.with(advertisingId: advertisingId)
+        }
+        return context
     }
 
     public func clearCache() {
         Task { await contextActor.clearCache() }
     }
 
+    /// Overlaid on each `getContext()` result rather than baked into the cache:
+    /// invalidating the cache here forced a full rebuild (main-actor UIKit reads)
+    /// on the next event for a value that is one field. The SDK client does not
+    /// call this — enrichment overlays the ad ID from `IdentityManager` — so it
+    /// only matters for a provider used standalone.
     public func setAdvertisingId(_ advertisingId: String?) async {
-        await advertisingIdActor.set(advertisingId)
-        await contextActor.clearCache()
+        advertisingIdBox.set(advertisingId)
     }
 
 
@@ -62,7 +72,6 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
         let device = await collectDeviceContext()
         let os = await collectOSContext()
         let screen = await collectScreenContext()
-        let network = await collectNetworkContext()
         let locale = collectLocale()
         let timezone = collectTimezone()
 
@@ -72,7 +81,6 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
             library: library,
             os: os,
             screen: screen,
-            network: network,
             locale: locale,
             timezone: timezone
         )
@@ -83,8 +91,6 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
     }
 
     private func collectDeviceContext() async -> DeviceContext {
-        let currentAdvertisingId = await advertisingIdActor.get()
-
         #if canImport(UIKit)
         var sys = utsname(); uname(&sys)
         let modelCode = withUnsafePointer(to: &sys.machine) {
@@ -98,23 +104,20 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
         return DeviceContext(
             manufacturer: "Apple",
             model: modelCode,
-            type: type,
-            advertisingId: currentAdvertisingId
+            type: type
         )
         #elseif canImport(AppKit)
         let hwModel = macHardwareModel()
         return DeviceContext(
             manufacturer: "Apple",
             model: hwModel,
-            type: "macos",
-            advertisingId: currentAdvertisingId
+            type: "macos"
         )
         #else
         return DeviceContext(
             manufacturer: "Apple",
             model: "unknown",
-            type: "unknown",
-            advertisingId: currentAdvertisingId
+            type: "unknown"
         )
         #endif
     }
@@ -147,39 +150,6 @@ public final class DeviceContextProvider: ContextProvider, @unchecked Sendable {
         #else
         return ScreenContext(density: 1.0, width: 0, height: 0)
         #endif
-    }
-
-    private func collectNetworkContext() async -> NetworkContext? {
-        let monitor = NWPathMonitor()
-        let queue = DispatchQueue(label: "network-monitor")
-        let once = NetworkContinuationGuard()
-
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                monitor.pathUpdateHandler = { path in
-                    if once.claim() {
-                        continuation.resume(returning: NetworkContext(wifi: path.usesInterfaceType(.wifi)))
-                    }
-                    monitor.cancel()
-                }
-                monitor.start(queue: queue)
-
-                // Timeout after 2 seconds to prevent leak if handler never fires
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    if once.claim() {
-                        monitor.cancel()
-                        continuation.resume(returning: nil)
-                    }
-                }
-            }
-        } onCancel: {
-            if once.claim() {
-                // onCancel can't resume the continuation safely here,
-                // but cancelling the monitor will cause the timeout to fire
-            }
-            monitor.cancel()
-        }
     }
 
     private func collectLocale() -> String { Locale.current.identifier }
@@ -267,29 +237,17 @@ private actor ContextActor {
     func clearCache() { cachedContext = nil }
 }
 
-/// Thread-safe one-shot guard ensuring a continuation is resumed exactly once.
-private final class NetworkContinuationGuard: @unchecked Sendable {
+/// A lock, not an actor: `getContext` reads this on every event, and an actor hop
+/// there is a suspension per event for a value the SDK client never sets.
+private final class AdvertisingIdBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var claimed = false
-
-    /// Returns `true` the first time it is called; `false` thereafter.
-    func claim() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if claimed { return false }
-        claimed = true
-        return true
-    }
-}
-
-private actor AdvertisingIdActor {
     private var advertisingId: String?
 
     func set(_ newValue: String?) {
-        advertisingId = newValue
+        lock.withLock { advertisingId = newValue }
     }
 
     func get() -> String? {
-        return advertisingId
+        lock.withLock { advertisingId }
     }
 }

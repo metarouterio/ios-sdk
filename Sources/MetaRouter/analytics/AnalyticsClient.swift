@@ -88,13 +88,19 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         self.providerContextManager = deps.providerContextManager ?? ProviderContextManager(
             storage: deps.providerContextStorage ?? ProviderContextStorage()
         )
+        // Built before enrichment, which reads the interface type per event.
+        let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
+        let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
+        self.networkMonitor = monitor
+
         self.enrichmentService = deps.enrichmentService ?? EventEnrichmentService(
             contextProvider: self.contextProvider,
             identityManager: self.identityManager,
             writeKey: options.writeKey,
             sessionManager: self.sessionManager,
             consentManager: self.consentManager,
-            providerContextManager: self.providerContextManager
+            providerContextManager: self.providerContextManager,
+            networkMonitor: monitor
         )
 
         let diskStore = DiskStorage()
@@ -130,11 +136,6 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         } else {
             self.lifecycleCoordinator = nil
         }
-
-        let rawMonitor = deps.networkMonitor ?? NetworkMonitor()
-        let monitor = DebouncedNetworkMonitor(inner: rawMonitor)
-
-        self.networkMonitor = monitor
 
         // Installed synchronously and BEFORE any Task this initializer spawns:
         // the init task's cold-launch lifecycle events (and the first pre-bind
@@ -202,10 +203,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
                            host: self.options.ingestionHost.absoluteString)
             }
 
-            // Load advertisingId from IdentityManager and set it on DeviceContextProvider
-            if let deviceProvider = self.contextProvider as? DeviceContextProvider,
-               let advertisingId = await self.identityManager.getAdvertisingId() {
-                await deviceProvider.setAdvertisingId(advertisingId)
+            // Enrichment overlays the ad ID from IdentityManager per event; this only logs it.
+            if let advertisingId = await self.identityManager.getAdvertisingId() {
                 let redactedId = "\(advertisingId.prefix(8))***"
                 Logger.log("Loaded advertisingId from storage: \(redactedId)",
                            writeKey: self.options.writeKey,
@@ -559,11 +558,6 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             self.lifecycleState = .resetting
             await self.identityManager.reset()
 
-            // Clear advertisingId from DeviceContextProvider
-            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
-                await deviceProvider.setAdvertisingId(nil)
-            }
-
             // Stop network monitoring and cancel pending debounce
             self.networkMonitor?.stop()
 
@@ -601,13 +595,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
             await self.identityManager.setAdvertisingId(advertisingId)
 
-
-            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
-                await deviceProvider.setAdvertisingId(advertisingId)
-            }
-
             Logger.log(
-                "Advertising ID updated, persisted, and context refreshed",
+                "Advertising ID updated and persisted",
                 writeKey: self.options.writeKey,
                 host: self.options.ingestionHost.absoluteString)
         }
@@ -628,11 +617,6 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
             // Clear from IdentityManager first
             await self.identityManager.clearAdvertisingId()
-
-            // Clear from DeviceContextProvider
-            if let deviceProvider = self.contextProvider as? DeviceContextProvider {
-                await deviceProvider.setAdvertisingId(nil)
-            }
 
             Logger.log(
                 "advertisingId cleared for GDPR compliance",

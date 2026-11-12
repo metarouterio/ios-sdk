@@ -43,6 +43,10 @@ public struct DeviceContext: Codable, Sendable {
         self.type = type
         self.advertisingId = advertisingId
     }
+
+    func with(advertisingId: String?) -> DeviceContext {
+        DeviceContext(manufacturer: manufacturer, model: model, type: type, advertisingId: advertisingId)
+    }
 }
 
 /// Library-specific context information
@@ -92,11 +96,16 @@ public struct NetworkContext: Codable, Sendable {
 /// Complete event context information
 public struct EventContext: Codable, Sendable {
     public let app: AppContext
-    public let device: DeviceContext
+    /// `var` so enrichment can overlay `advertisingId` per event on the cached
+    /// static context without rebuilding it.
+    public var device: DeviceContext
     public let library: LibraryContext
     public let os: OSContext
     public let screen: ScreenContext
-    public let network: NetworkContext?
+    /// Volatile: set per event by enrichment from the live network monitor, never
+    /// captured in the provider's cached context — the interface changes over the
+    /// app's lifetime, and a cached value reports wifi for a user now on cellular.
+    public var network: NetworkContext?
     public let locale: String
     public let timezone: String
     public let additional: [String: CodableValue]
