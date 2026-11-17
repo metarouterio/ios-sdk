@@ -61,6 +61,7 @@ public actor Dispatcher {
     private var flushTimerTask: Task<Void, Never>? = nil
     internal var retryTimerTask: Task<Void, Never>? = nil
     private var isFlushing = false
+    private var isDiskFlushing = false
     private let config: Config
     private var tracingEnabled = false
     private var consecutiveRetries: Int = 0
@@ -140,17 +141,31 @@ public actor Dispatcher {
             writeKey: options.writeKey,
             host: options.ingestionHost.absoluteString)
 
-        // Check disk flush threshold
-        if await queue.needsFlushToDisk {
-            let flushed = await queue.flushMemoryToDisk()
-            if flushed {
-                Logger.log("Auto disk flush triggered (threshold reached)")
+        // Both thresholds start their flush without awaiting it. The client runs host
+        // calls one at a time and awaits this offer, so awaiting a network flush (up to
+        // the request timeout) or the disk lock a drain holds across its requests would
+        // hold every later call in line, unenriched: late timestamps, and lost if the
+        // app is killed before they reach this queue. flush() already guards against
+        // overlapping runs; a disk flush finding memory empty is a no-op.
+        // One disk flush in flight at a time: needsFlushToDisk stays true while
+        // pendingOverflow holds events, so every offer would start another.
+        if await queue.needsFlushToDisk, !isDiskFlushing {
+            isDiskFlushing = true
+            Task {
+                if await self.queue.flushMemoryToDisk() {
+                    Logger.log("Auto disk flush triggered (threshold reached)")
+                }
+                await self.endDiskFlush()
             }
         }
 
         if queueLength >= config.autoFlushThreshold {
-            await flush()
+            Task { await self.flush() }
         }
+    }
+
+    private func endDiskFlush() {
+        isDiskFlushing = false
     }
 
     /// Flush current memory state to disk (append + clear memory).

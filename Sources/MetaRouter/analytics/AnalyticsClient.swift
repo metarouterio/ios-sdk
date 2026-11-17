@@ -47,6 +47,13 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var initTask: Task<Void, Never>?
     private let lifecycleCoordinator: LifecycleCoordinator?
 
+    // Every host call runs through this one queue, in call order. A Task per call let
+    // `identify` and the next `track` run in either order, so the track could ship
+    // without the userId — Android sets identity at the call site for the same reason.
+    // Jobs capture self strongly: a queued flush, reset or advertising-id clear must
+    // still run when the owner drops the client right after the call.
+    private let calls = SerialTaskQueue()
+
     // One processor for all attached webviews: bridge messageIds are UUIDs, so a
     // shared dedup store cannot cross-drop between webviews, and sharing keeps the
     // memory bound per client rather than per webview.
@@ -268,7 +275,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
         let convertedProps = properties.flatMap { CodableValue.convert($0) }
         
-        Task {
+        calls.enqueue { [self] in
             guard !disabled else { return }
             
             // Log the tracking event with properties
@@ -301,7 +308,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
         let convertedTraits = traits.flatMap { CodableValue.convert($0) }
         
-        Task {
+        calls.enqueue { [self] in
             guard !disabled else { return }
             
             // Update identity manager with the new userId
@@ -329,7 +336,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
         let convertedTraits = traits.flatMap { CodableValue.convert($0) }
         
-        Task {
+        calls.enqueue { [self] in
             guard !disabled else { return }
             
             // Update identity manager with the new groupId
@@ -354,7 +361,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func alias(_ newUserId: String) {
-        Task {
+        calls.enqueue { [self] in
             guard !disabled else { return }
             let enrichedEvent = await enrichmentService.createAliasEvent(
                 newUserId: newUserId
@@ -373,7 +380,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
         let convertedProps = properties.flatMap { CodableValue.convert($0) }
         
-        Task {
+        calls.enqueue { [self] in
             guard !disabled else { return }
             
             let enrichedEvent = await enrichmentService.createScreenEvent(
@@ -398,7 +405,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         // Convert [String: Any] to [String: CodableValue] before crossing Task boundary
         let convertedProps = properties.flatMap { CodableValue.convert($0) }
         
-        Task {
+        calls.enqueue { [self] in
             guard !disabled else { return }
             
             let enrichedEvent = await enrichmentService.createPageEvent(
@@ -542,9 +549,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func flush() {
-        Task { [weak self] in
-            guard let self else { return }
-            await self.dispatcher.flush()
+        // Queued so it ships the calls made before it; not awaited, so the calls
+        // made after it don't wait on the network (see Dispatcher.offer).
+        calls.enqueue { [self] in
+            Task { await self.dispatcher.flush() }
         }
     }
     /// The synchronous half of the host's `reset()`; see `AnalyticsProxy.reset()`.
@@ -553,8 +561,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func reset() {
-        Task { [weak self] in
-            guard let self else { return }
+        calls.enqueue { [self] in
             self.lifecycleState = .resetting
             await self.identityManager.reset()
 
@@ -571,8 +578,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func setAdvertisingId(_ advertisingId: String?) {
-        Task { [weak self] in
-            guard let self else { return }
+        calls.enqueue { [self] in
 
             // Check lifecycle state
             guard lifecycleState == .ready || lifecycleState == .initializing else {
@@ -603,8 +609,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func clearAdvertisingId() {
-        Task { [weak self] in
-            guard let self else { return }
+        calls.enqueue { [self] in
 
             // Check lifecycle state
             guard lifecycleState == .ready || lifecycleState == .initializing else {
@@ -626,8 +631,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     }
 
     public func setTracing(_ enabled: Bool) {
-        Task { [weak self] in
-            guard let self else { return }
+        calls.enqueue { [self] in
             await self.dispatcher.setTracing(enabled)
         }
     }
@@ -637,6 +641,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             Logger.warn("recordOpenedURL called but trackLifecycleEvents is disabled — ignoring")
             return
         }
+        // Not through `calls`, like Android: the foreground handler reads the pending
+        // deep link outside the queue, so a backlog would attach it to the next open.
         Task {
             await coordinator.recordOpenedURL(url, sourceApplication: sourceApplication)
         }
@@ -657,7 +663,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             Logger.log("Cannot enqueue bridge event - SDK not ready (state: \(lifecycleState.rawValue))")
             return false
         }
-        Task {
+        calls.enqueue { [self] in
             let enriched = await enrichmentService.enrichEvent(BaseEvent(
                 type: envelope.type.rawValue,
                 event: envelope.name,

@@ -96,7 +96,57 @@ private func makeTestEvent(messageId: String = "mid") -> EnrichedEventPayload {
 }
 
 
+private final class OfferReturned: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = false
+    var value: Bool { lock.withLock { _value } }
+    func set() { lock.withLock { _value = true } }
+}
+
+/// Holds every request open until released, to stand in for a slow network.
+private final class GatedNetworking: Networking, @unchecked Sendable {
+    private let lock = NSLock()
+    private var released = false
+    private var _callCount = 0
+    var callCount: Int { lock.withLock { _callCount } }
+
+    func release() { lock.withLock { released = true } }
+
+    func postJSON(url: URL, body: Data, timeoutMs: Int, additionalHeaders: [String: String]?) async throws -> NetworkResponse {
+        lock.withLock { _callCount += 1 }
+        while !lock.withLock({ released }) {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return NetworkResponse(statusCode: 200, headers: [:], body: Data())
+    }
+
+    func parseRetryAfterMs(from headers: [String: String]) -> Int? { nil }
+}
+
 final class DispatcherTests: XCTestCase {
+
+    /// The client runs host calls one at a time and awaits each offer, so an offer
+    /// that awaited its threshold flush would hold every later call behind the network.
+    func testOfferAtTheFlushThresholdDoesNotWaitForTheNetwork() async throws {
+        let http = GatedNetworking()
+        let options = InitOptions(writeKey: "wk", ingestionHost: URL(string: "https://example.com")!)
+        let dispatcher = makeDispatcher(options: options, http: http,
+                                        config: Dispatcher.Config(autoFlushThreshold: 1))
+
+        let returned = OfferReturned()
+        Task {
+            await dispatcher.offer(makeTestEvent(messageId: "a"))
+            returned.set()
+        }
+        let started = await TestUtilities.waitFor { http.callCount == 1 }
+        XCTAssertTrue(started, "the threshold flush should be in flight")
+
+        // The request is still held open; the offer that triggered it must be done.
+        let offerDone = await TestUtilities.waitFor(timeout: 1) { returned.value }
+        XCTAssertTrue(offerDone, "offer waited on the network flush it started")
+
+        http.release()
+    }
     func testFlushSuccessRemovesBatch() async throws {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
