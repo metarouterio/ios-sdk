@@ -6,6 +6,11 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 {
     private let state = ProxyState()
 
+    // Calls are queued or forwarded synchronously, under a lock, so they reach the
+    // client in the host's call order. A Task hop per call into `state` let two
+    // back-to-back calls arrive swapped.
+    private let calls = CallPipe()
+
     // The bridge is owned here, not by a client: clients are disposable (reset()
     // creates a new one) while attached WebViews live on, and WebKit retains their
     // message handlers for the WebView's lifetime. The sink resolves "the current
@@ -27,7 +32,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     private let consentManager: ConsentManager
 
     // Bypasses the pending-call queue for the same reasons as consent, plus one of
-    // its own: the queue drops its OLDEST entry at capacity (`ProxyState.cap`), so
+    // its own: the queue drops its OLDEST entry at capacity (`CallPipe.cap`), so
     // a host that sets a vendor id and then tracks a burst of pre-initialize events
     // would have the id evicted — the one call that cannot be lost.
     private let providerContextManager: ProviderContextManager
@@ -67,22 +72,26 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // NAKing not_ready after the SDK is in fact ready.
     internal func bind(_ real: AnalyticsInterface) {
         bridgeClient.set(real)
+        calls.bind(real)
         Task { await state.bind(real) }
     }
 
     internal func unbind() {
         bridgeClient.clear()
+        calls.unbind()
         Task { await state.unbind() }
     }
 
     // Awaitable helpers for barrier APIs
     func _bindAndReplay(_ real: any AnalyticsInterface) async {
         bridgeClient.set(real)
+        calls.bind(real)
         await state.bind(real)
     }
 
     func _unbindAndClear() async {
         bridgeClient.clear()
+        calls.unbind()
         await state.unbind()
     }
 
@@ -106,55 +115,55 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 
     public func track(_ event: String, properties: [String: Any]?) {
         let converted = properties.flatMap { CodableValue.convert($0) }
-        Task { await state.enqueue(.track(event, converted)) }
+        calls.send(.track(event, converted))
     }
 
     public func track(_ event: String) {
-        Task { await state.enqueue(.track(event, nil)) }
+        calls.send(.track(event, nil))
     }
 
     public func identify(_ userId: String, traits: [String: Any]?) {
         let converted = traits.flatMap { CodableValue.convert($0) }
-        Task { await state.enqueue(.identify(userId, converted)) }
+        calls.send(.identify(userId, converted))
     }
 
     public func identify(_ userId: String) {
-        Task { await state.enqueue(.identify(userId, nil)) }
+        calls.send(.identify(userId, nil))
     }
 
     public func group(_ groupId: String, traits: [String: Any]?) {
         let converted = traits.flatMap { CodableValue.convert($0) }
-        Task { await state.enqueue(.group(groupId, converted)) }
+        calls.send(.group(groupId, converted))
     }
 
     public func group(_ groupId: String) {
-        Task { await state.enqueue(.group(groupId, nil)) }
+        calls.send(.group(groupId, nil))
     }
 
     public func screen(_ name: String, properties: [String: Any]?) {
         let converted = properties.flatMap { CodableValue.convert($0) }
-        Task { await state.enqueue(.screen(name, converted)) }
+        calls.send(.screen(name, converted))
     }
 
     public func screen(_ name: String) {
-        Task { await state.enqueue(.screen(name, nil)) }
+        calls.send(.screen(name, nil))
     }
 
     public func page(_ name: String, properties: [String: Any]?) {
         let converted = properties.flatMap { CodableValue.convert($0) }
-        Task { await state.enqueue(.page(name, converted)) }
+        calls.send(.page(name, converted))
     }
 
     public func page(_ name: String) {
-        Task { await state.enqueue(.page(name, nil)) }
+        calls.send(.page(name, nil))
     }
 
     public func alias(_ newUserId: String) {
-        Task { await state.enqueue(.alias(newUserId)) }
+        calls.send(.alias(newUserId))
     }
 
     public func enableDebugLogging() {
-        Task { await state.enqueue(.enableDebugLogging) }
+        calls.send(.enableDebugLogging)
     }
 
     public func getAnonymousId() async -> String {
@@ -187,7 +196,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         return info
     }
 
-    public func flush() { Task { await state.enqueue(.flush) } }
+    public func flush() { calls.send(.flush) }
     public func reset() {
         // Here, not in the client's reset: this is the host's call site, while the
         // client's runs later (after a queued replay at bind, or a Task hop), where
@@ -198,23 +207,23 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         } else {
             identityStorage.noteResetRequested()
         }
-        Task { await state.enqueue(.reset) }
+        calls.send(.reset)
     }
 
     public func setAdvertisingId(_ advertisingId: String?) {
-        Task { await state.enqueue(.setAdvertisingId(advertisingId)) }
+        calls.send(.setAdvertisingId(advertisingId))
     }
 
     public func clearAdvertisingId() {
-        Task { await state.enqueue(.clearAdvertisingId) }
+        calls.send(.clearAdvertisingId)
     }
 
     public func setTracing(_ enabled: Bool) {
-        Task { await state.enqueue(.setTracing(enabled)) }
+        calls.send(.setTracing(enabled))
     }
 
     public func recordOpenedURL(_ url: URL, sourceApplication: String?) {
-        Task { await state.enqueue(.recordOpenedURL(url, sourceApplication)) }
+        calls.send(.recordOpenedURL(url, sourceApplication))
     }
 
     // MARK: - Consent (direct, never queued — see consentManager)
@@ -319,10 +328,65 @@ private enum Call {
     case recordOpenedURL(URL, String?)
 }
 
-private actor ProxyState {
+/// Holds the bound client for the call path. Synchronous on purpose: see `calls`.
+private final class CallPipe: @unchecked Sendable {
+    private let lock = NSLock()
     private var real: AnalyticsInterface?
     private var queue: [Call] = []
     private let cap = 20
+
+    func bind(_ client: AnalyticsInterface) {
+        lock.lock()
+        defer { lock.unlock() }
+        real = client
+        // Replayed under the lock, so a call made during the bind cannot overtake
+        // the ones queued before it.
+        for call in queue { forward(call, to: client) }
+        queue.removeAll()
+    }
+
+    func unbind() {
+        lock.lock()
+        defer { lock.unlock() }
+        real = nil
+        queue.removeAll()
+    }
+
+    func send(_ call: Call) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let client = real {
+            forward(call, to: client)
+        } else {
+            if queue.count >= cap { _ = queue.removeFirst() }
+            queue.append(call)
+        }
+    }
+
+    // Under the lock: every client method called here only submits work and
+    // returns, and none calls back into the proxy.
+    private func forward(_ call: Call, to r: AnalyticsInterface) {
+        switch call {
+        case .track(let e, let p): r.track(e, properties: p?.mapValues { $0.toAny() })
+        case .identify(let userId, let traits): r.identify(userId, traits: traits?.mapValues { $0.toAny() })
+        case .group(let groupId, let traits): r.group(groupId, traits: traits?.mapValues { $0.toAny() })
+        case .screen(let name, let props): r.screen(name, properties: props?.mapValues { $0.toAny() })
+        case .page(let name, let props): r.page(name, properties: props?.mapValues { $0.toAny() })
+        case .alias(let newUserId): r.alias(newUserId)
+        case .enableDebugLogging: r.enableDebugLogging()
+
+        case .flush: r.flush()
+        case .reset: r.reset()
+        case .setAdvertisingId(let advertisingId): r.setAdvertisingId(advertisingId)
+        case .clearAdvertisingId: r.clearAdvertisingId()
+        case .setTracing(let enabled): r.setTracing(enabled)
+        case .recordOpenedURL(let url, let source): r.recordOpenedURL(url, sourceApplication: source)
+        }
+    }
+}
+
+private actor ProxyState {
+    private var real: AnalyticsInterface?
     private var bootstrapDebugInfo: [String: CodableValue] = [:]
     private var bindContinuations: [CheckedContinuation<AnalyticsInterface?, Never>] = []
     // Set when initialize() was refused over invalid config: no bind is coming this
@@ -334,9 +398,6 @@ private actor ProxyState {
         real = client
         // A successful (re)initialize supersedes an earlier config refusal.
         configDisabled = false
-        // Replay queued calls
-        for call in queue { forward(call) }
-        queue.removeAll()
         // Resume any callers waiting for binding
         for continuation in bindContinuations {
             continuation.resume(returning: client)
@@ -346,7 +407,6 @@ private actor ProxyState {
 
     func unbind() {
         real = nil
-        queue.removeAll()
         // reset() tears down a session without refusing one. Leaving the flag set
         // would make every later awaiting call resolve degraded for a session that
         // was never gated. disableSession() marks it again after this returns.
@@ -374,15 +434,6 @@ private actor ProxyState {
         if configDisabled { return nil }
         return await withCheckedContinuation { continuation in
             bindContinuations.append(continuation)
-        }
-    }
-
-    func enqueue(_ call: Call) {
-        if real != nil {
-            forward(call)
-        } else {
-            if queue.count >= cap { _ = queue.removeFirst() }
-            queue.append(call)
         }
     }
 
@@ -424,25 +475,5 @@ private actor ProxyState {
         var info = bootstrapDebugInfo
         info["proxy"] = .bool(true)
         return info
-    }
-
-    private func forward(_ call: Call) {
-        guard let r = real else { return }
-        switch call {
-        case .track(let e, let p): r.track(e, properties: p?.mapValues { $0.toAny() })
-        case .identify(let userId, let traits): r.identify(userId, traits: traits?.mapValues { $0.toAny() })
-        case .group(let groupId, let traits): r.group(groupId, traits: traits?.mapValues { $0.toAny() })
-        case .screen(let name, let props): r.screen(name, properties: props?.mapValues { $0.toAny() })
-        case .page(let name, let props): r.page(name, properties: props?.mapValues { $0.toAny() })
-        case .alias(let newUserId): r.alias(newUserId)
-        case .enableDebugLogging: r.enableDebugLogging()
-
-        case .flush: r.flush()
-        case .reset: r.reset()
-        case .setAdvertisingId(let advertisingId): r.setAdvertisingId(advertisingId)
-        case .clearAdvertisingId: r.clearAdvertisingId()
-        case .setTracing(let enabled): r.setTracing(enabled)
-        case .recordOpenedURL(let url, let source): r.recordOpenedURL(url, sourceApplication: source)
-        }
     }
 }

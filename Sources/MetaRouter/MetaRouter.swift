@@ -122,9 +122,11 @@ public enum MetaRouter {
                    message: "Use MetaRouter.Analytics.shared. client() will be removed in v2.0.")
         public static func client() -> AnalyticsInterface { proxy }
 
-        public static func reset() {                       
+        public static func reset() {
+            // Unbound here, not in the Task: a call on the next line must not reach
+            // the client being discarded.
+            proxy.unbind()
             Task {
-                proxy.unbind()
                 await store.clear()
             }
         }
