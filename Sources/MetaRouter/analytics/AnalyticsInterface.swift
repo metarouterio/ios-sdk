@@ -175,10 +175,11 @@ public protocol AnalyticsInterface: AnyObject, Sendable {
     /// resolves after that misses those events on the install launch; from the next
     /// launch the persisted value covers them.
     ///
-    /// Bounded, because this rides on every event: at most 10 providers, 10 keys
-    /// each, 256 bytes per encoded value, 64 bytes per name, and `metarouter` is
-    /// reserved (in any casing or spelling with separators). A write that breaks a
-    /// rule is ignored with a warning, leaving prior state untouched.
+    /// Bounded, because this rides on every event: 2 KiB per encoded value, 16 KiB
+    /// for the whole map as encoded JSON, 64 bytes per name, and `metarouter` is
+    /// reserved (in any casing or spelling with separators). There is no cap on the
+    /// number of providers or keys. A write that breaks a rule is ignored with a
+    /// warning, leaving prior state untouched.
     ///
     /// - Parameters:
     ///   - provider: Provider namespace, e.g. `"googleFirebase"`.
