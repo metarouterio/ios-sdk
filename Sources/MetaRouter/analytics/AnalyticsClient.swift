@@ -44,6 +44,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var lifecycle: AppLifecycleObserver?
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
+    // Set once the SDK discards this client. Not `.idle`: an instance reset leaves a
+    // live, still-bound client there.
+    private var isShutDown = false
     private var initTask: Task<Void, Never>?
     private let lifecycleCoordinator: LifecycleCoordinator?
 
@@ -200,6 +203,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         self.initTask = Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
+            // Discarded during init: no flush loop, cold-launch events or disk drain
+            // for a client the next one replaces.
+            guard !Task.isCancelled else { return }
 
             // Check disk for persisted events (cheap existence check, no parse).
             // Actual drain happens below once we confirm we're online.
@@ -226,9 +232,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
             // Emit cold-launch lifecycle sequence (Installed/Updated then Opened).
             // Runs after .ready so events flow through the standard track path.
+            guard !Task.isCancelled else { return }
             await self.lifecycleCoordinator?.onReady()
 
             // Drain any persisted events from a previous session
+            guard !Task.isCancelled else { return }
             if monitor.currentStatus == .connected {
                 await self.dispatcher.drainDiskStoreToNetwork()
             }
@@ -253,8 +261,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     /// Emit `Application Backgrounded` BEFORE flush/disk-flush so the event
     /// is captured by the same drain that ships pending events to disk.
     private func handleBackground() async {
-        // Idle = reset or shut down: nothing of this client's to emit or keep.
-        guard lifecycleState != .idle else { return }
+        guard !isShutDown else { return }
         await lifecycleCoordinator?.onBackground()
         await dispatcher.flush()
         await dispatcher.flushToDisk()
@@ -265,14 +272,15 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     /// Stops a client the SDK has discarded (static reset, invalid-config disable,
     /// re-initialize). Its flush loop holds the dispatcher, which otherwise keeps
     /// flushing with this client's writeKey and host for the life of the process.
-    /// What is still queued gets one flush if online, with the disk drain unhooked;
-    /// nothing is written to or read from disk, which the next client shares and would
-    /// drain under its own config. Identity is left as it is.
+    /// What is still queued gets one flush if online, with the disk drain unhooked, so
+    /// this client never sends the shared disk file. Identity is left as it is.
     internal func shutdown() {
+        // A client discarded during its init stops there: it would otherwise restart
+        // the flush loop and emit cold-launch events the next client emits too.
+        initTask?.cancel()
         calls.enqueue { [self] in
-            // A client discarded during its init would otherwise restart the flush
-            // loop and emit its cold-launch events once init finishes.
             await initTask?.value
+            isShutDown = true
             lifecycleState = .idle
             disabled = true
             networkMonitor?.stop()

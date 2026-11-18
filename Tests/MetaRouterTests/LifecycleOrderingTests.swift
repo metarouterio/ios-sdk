@@ -29,6 +29,19 @@ final class LifecycleOrderingTests: XCTestCase {
 
     override func tearDown() async throws {
         await MetaRouter.Analytics.resetAndWait()
+        // These drive the static MetaRouter, whose clients persist identity and
+        // sessions to UserDefaults.standard (which outlives the process). Keys removed
+        // directly: IdentityStorage.clear() also consumes reset-ordering bookkeeping.
+        let defaults = UserDefaults.standard
+        let identityKeys: [IdentityStorageKey] = [.anonymousId, .userId, .groupId, .advertisingId]
+        for key in identityKeys.map(\.rawValue) + [
+            "metarouter:anonymous_id_host_set",
+            SessionStorageKey.sessionId.rawValue,
+            SessionStorageKey.sessionCount.rawValue,
+            SessionStorageKey.lastActivityMs.rawValue,
+        ] {
+            defaults.removeObject(forKey: key)
+        }
         try await super.tearDown()
     }
 
@@ -105,6 +118,43 @@ final class LifecycleOrderingTests: XCTestCase {
         XCTAssertEqual(info["queueLength"]?.intValue, 1, "the track went to the client reset() discarded")
     }
 
+    /// A fallback initialize made from inside onConfigError is the host's last call,
+    /// so it must win over the disable of the refused one.
+    func testAFallbackInitializeFromOnConfigErrorBinds() async {
+        await MetaRouter.Analytics.resetAndWait()
+        let original = InitOptions.debugAssert
+        InitOptions.debugAssert = { _ in }
+        let refused = InitOptions(writeKey: "", ingestionHost: "https://example.com", onConfigError: { _ in
+            MetaRouter.Analytics.initialize(
+                with: InitOptions(writeKey: "wk-fall", ingestionHost: "https://example.com", flushIntervalSeconds: 999)
+            )
+        })
+        InitOptions.debugAssert = original
+
+        let analytics = MetaRouter.Analytics.initialize(with: refused)
+        _ = await anonymousId(analytics)
+        let info = await analytics.getDebugInfo()
+        XCTAssertEqual(info["proxy"]?.boolValue, false, "nothing is bound")
+        XCTAssertEqual(info["writeKey"], .string("***fall"))
+    }
+
+    /// While an initializeAndWait waits for its turn, calls wait for the new client
+    /// (an identify sent to the old one would miss it), and none is dropped at the
+    /// pipe's cap.
+    func testCallsMadeWhileInitializeAndWaitWaitsReachTheNewClient() async {
+        let proxy = AnalyticsProxy()
+        let a = MockAnalyticsInterface(), b = MockAnalyticsInterface()
+        proxy.bind(a)
+        proxy.supersedeForInitialize()
+        let epoch = proxy.lifecycleEpoch()
+        for i in 0..<30 { proxy.track("e\(i)") }
+        let didBind = await proxy._bindIfCurrent(b, epoch: epoch)
+
+        XCTAssertTrue(didBind)
+        XCTAssertEqual(a.callCount, 0)
+        XCTAssertEqual(b.callCount, 30)
+    }
+
     /// reset() lands while the first initialize is building its client (seen in the
     /// demo app): the identify made after it must reach the next client, not be
     /// replayed into the discarded one.
@@ -164,6 +214,7 @@ final class DiscardedClientShutdownTests: XCTestCase {
     func testShutdownDuringInitReleasesTheDispatcher() async {
         await assertShutdownReleasesTheDispatcher(waitForInit: false)
     }
+
 
     /// The disk file is shared by every client, and the next one drains it. A
     /// discarded client that spilled to disk earlier (e.g. on backgrounding) must not

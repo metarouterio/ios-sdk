@@ -197,6 +197,41 @@ final class AppLifecycleEventIntegrationTests: XCTestCase {
         XCTAssertNotNil(opened, "expected Application Opened after foreground, got \(events.map { $0.event ?? "?" })")
         XCTAssertEqual(opened?.properties?["from_background"], .bool(true))
     }
+
+    /// An instance reset leaves the client bound and accepting calls; backgrounding
+    /// must still emit and ship what was tracked after it (only a discarded client
+    /// skips background work).
+    func testBackgroundAfterInstanceResetStillFlushes() async throws {
+        try await skipWithoutBackgroundTime()
+        let bundle = Setup(defaults: defaults, trackLifecycleEvents: true)
+        await bundle.waitForInit()
+        await bundle.consumeAll()
+
+        bundle.client.reset()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        bundle.client.track("after logout")
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await MainActor.run {
+            NotificationCenter.default.post(name: Self.backgroundNotificationName, object: nil)
+        }
+        try? await Task.sleep(nanoseconds: 600_000_000)
+
+        let flushed = bundle.recorder.recorded.compactMap(\.event)
+        XCTAssertTrue(flushed.contains("after logout"), "flushed: \(flushed)")
+        XCTAssertTrue(flushed.contains("Application Backgrounded"), "flushed: \(flushed)")
+    }
+
+    /// A client the SDK discards during its init emits no cold-launch events: the
+    /// next client emits its own, and Opened would otherwise be sent twice.
+    func testClientShutDownDuringInitEmitsNoColdLaunchEvents() async {
+        let bundle = Setup(defaults: defaults, trackLifecycleEvents: true)
+        bundle.client.shutdown()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        let events = await bundle.collectEvents().compactMap(\.event)
+        XCTAssertFalse(events.contains("Application Opened"), "events: \(events)")
+        XCTAssertFalse(events.contains("Application Installed"), "events: \(events)")
+    }
 }
 
 /// Bundles all dependencies needed to drive an `AnalyticsClient` with a

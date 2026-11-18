@@ -40,22 +40,27 @@ public enum MetaRouter {
         return deps
     }
 
-    // Synchronous-binding initializer for deterministic testing/flows that require immediate binding
+    /// Returns once this initialize has taken effect, or at once when a later
+    /// initialize or reset superseded it (logged as a warning; that later call takes
+    /// effect after this returns): it is not guaranteed to return with this call's
+    /// client bound.
     public static func initializeAndWait(with options: InitOptions) async -> AnalyticsInterface {
         guard passesConfigGate(options) else {
             proxy.detachCalls()
-            await proxy.lifecycle.run { await disableSession() }
+            proxy.lifecycle.enqueue { await disableSession() }
+            fireConfigError(options)
+            await proxy.lifecycle.run {}
             return proxy
         }
         proxy.supersedeForInitialize()
         let epoch = proxy.lifecycleEpoch()
         await proxy.lifecycle.run {
-            guard proxy.lifecycleEpoch() == epoch else { return logSuperseded() }
+            guard proxy.lifecycleEpoch() == epoch else { return logSuperseded(waited: true) }
             await proxy._clearConfigDisabled()
             let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
             guard await proxy._bindIfCurrent(real, epoch: epoch) else {
                 shutdown(real)
-                return logSuperseded()
+                return logSuperseded(waited: true)
             }
             shutdown(await store.get())
             await store.set(real)
@@ -69,6 +74,7 @@ public enum MetaRouter {
         guard passesConfigGate(options) else {
             proxy.detachCalls()
             proxy.lifecycle.enqueue { await disableSession() }
+            fireConfigError(options)
             return proxy
         }
         let epoch = proxy.lifecycleEpoch()
@@ -93,7 +99,8 @@ public enum MetaRouter {
     /// verdict, this is where it takes effect. On invalid config no client is created —
     /// the proxy is still returned so call sites never see nil, and the SDK is inert
     /// for the session, mirroring the 401/403/404 graceful-disable for local config.
-    /// Log and callback fire synchronously on the caller's thread.
+    /// The log fires here; the callback fires from `fireConfigError`, once the disable
+    /// is queued. Both on the caller's thread.
     private static func passesConfigGate(_ options: InitOptions) -> Bool {
         proxy.setBootstrapDebugInfo(
             writeKey: options.writeKey,
@@ -102,8 +109,12 @@ public enum MetaRouter {
         )
         guard let error = options.configError else { return true }
         Logger.error("MetaRouter disabled for this session — \(error.description)")
-        options.onConfigError?(error)
         return false
+    }
+
+    /// After the disable is queued: a fallback initialize from the callback must queue behind it.
+    private static func fireConfigError(_ options: InitOptions) {
+        if let error = options.configError { options.onConfigError?(error) }
     }
 
     /// An initialize call with invalid config disables the whole session, even a
@@ -115,14 +126,21 @@ public enum MetaRouter {
     /// Runs on `proxy.lifecycle`, after the caller's `proxy.detachCalls()`: detached on
     /// the queue instead, it would also drop calls made after a later valid initialize.
     private static func disableSession() async {
-        await proxy._unbindState()
-        shutdown(await store.get())
-        await store.clear()
+        await discardClient()
         await proxy._markConfigDisabled()
     }
 
-    private static func logSuperseded() {
-        Logger.log("initialize skipped: a later reset() or initialize superseded it")
+    /// Runs on `proxy.lifecycle`.
+    private static func discardClient() async {
+        await proxy._unbindState()
+        shutdown(await store.get())
+        await store.clear()
+    }
+
+    private static func logSuperseded(waited: Bool = false) {
+        let message = "initialize skipped: a later reset() or initialize superseded it"
+        // An awaited initialize returns without its client bound: worth surfacing.
+        if waited { Logger.warn(message) } else { Logger.log(message) }
     }
 
     private static func shutdown(_ client: (any AnalyticsInterface)?) {
@@ -161,13 +179,6 @@ public enum MetaRouter {
         public static func resetAndWait() async {
             proxy.detachCalls()
             await proxy.lifecycle.run { await discardClient() }
-        }
-
-        /// Runs on `proxy.lifecycle`.
-        private static func discardClient() async {
-            await proxy._unbindState()
-            shutdown(await store.get())
-            await store.clear()
         }
 
         public static func setDebugLogging(_ enabled: Bool) {

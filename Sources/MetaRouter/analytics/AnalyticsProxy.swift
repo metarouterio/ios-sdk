@@ -87,19 +87,17 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         return "MetaRouter.Analytics(proxy)"
     }
 
-    // bind/unbind publish the client to the bridge's synchronous mirror BEFORE the
-    // actor call, so bridge events racing a bind resolve the new client rather than
-    // NAKing not_ready after the SDK is in fact ready.
+    // Tests only, as are `_bindAndReplay` and `_unbindAndClear`: each goes through
+    // the bind and unbind MetaRouter uses, so proxy tests cover them (with the
+    // epoch read at bind time, so they are never refused).
     internal func bind(_ real: AnalyticsInterface) {
-        bridgeClient.set(real)
-        calls.bind(real)
-        Task { await state.bind(real) }
+        guard bindCallsIfCurrent(real, epoch: lifecycleEpoch()) else { return }
+        lifecycle.enqueue { [state] in await state.bind(real) }
     }
 
-    // Tests only: MetaRouter detaches synchronously and unbinds on `lifecycle`.
     internal func unbind() {
         detachCalls()
-        Task { await state.unbind() }
+        lifecycle.enqueue { [self] in await _unbindState() }
     }
 
     /// The synchronous half of a reset: a call on the next line must not reach the
@@ -114,15 +112,12 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 
     /// Before an initializeAndWait: an initialize still queued ahead of it is
     /// superseded, and calls from here on wait for the new client instead of reaching
-    /// the one being replaced. Queued calls stay.
+    /// the one being replaced (an identify there would never reach the new client).
+    /// Queued calls stay, uncapped until the bind.
     internal func supersedeForInitialize() {
         epochLock.lock()
         defer { epochLock.unlock() }
         epoch += 1
-        releaseCalls()
-    }
-
-    private func releaseCalls() {
         bridgeClient.clear()
         calls.release()
     }
@@ -146,22 +141,20 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         epochLock.lock()
         defer { epochLock.unlock() }
         guard self.epoch == epoch else { return false }
+        // The bridge's synchronous mirror is set before the actor bind, so bridge
+        // events racing it resolve the new client instead of NAKing not_ready.
         bridgeClient.set(real)
         calls.bind(real)
         return true
     }
 
-    // Awaitable helpers for barrier APIs
     func _bindAndReplay(_ real: any AnalyticsInterface) async {
-        bridgeClient.set(real)
-        calls.bind(real)
-        await state.bind(real)
+        await lifecycle.run { [self] in _ = await _bindIfCurrent(real, epoch: lifecycleEpoch()) }
     }
 
     func _unbindAndClear() async {
-        bridgeClient.clear()
-        calls.unbind()
-        await state.unbind()
+        detachCalls()
+        await lifecycle.run { [self] in await _unbindState() }
     }
 
     /// Invalid-config refusal: no bind is coming this session, so waiters must
@@ -412,11 +405,13 @@ private final class CallPipe: @unchecked Sendable {
     private var real: AnalyticsInterface?
     private var queue: [Call] = []
     private let cap = 20
+    private var released = false
 
     func bind(_ client: AnalyticsInterface) {
         lock.lock()
         defer { lock.unlock() }
         real = client
+        released = false
         // Replayed under the lock, so a call made during the bind cannot overtake
         // the ones queued before it.
         for call in queue { forward(call, to: client) }
@@ -427,14 +422,17 @@ private final class CallPipe: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         real = nil
+        released = false
         queue.removeAll()
     }
 
-    /// Unbinds without dropping queued calls (a bound pipe has none).
+    /// Unbinds without dropping queued calls, and lifts the cap until the next bind:
+    /// the client they wait for is already being built.
     func release() {
         lock.lock()
         defer { lock.unlock() }
         real = nil
+        released = true
     }
 
     func send(_ call: Call) {
@@ -443,7 +441,7 @@ private final class CallPipe: @unchecked Sendable {
         if let client = real {
             forward(call, to: client)
         } else {
-            if queue.count >= cap { _ = queue.removeFirst() }
+            if queue.count >= cap && !released { _ = queue.removeFirst() }
             queue.append(call)
         }
     }
