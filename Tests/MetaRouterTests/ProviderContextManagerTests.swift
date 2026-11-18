@@ -344,6 +344,15 @@ final class ProviderContextManagerTests: XCTestCase {
         XCTAssertTrue(manager.setValue(provider: "enrichmentService", key: "payload", value: envelope))
     }
 
+    /// Android never escapes `/`; measured as `\/` this 2,042-byte value would be
+    /// 3,042 bytes and rejected on iOS alone.
+    func testSlashesCountOneByteLikeAndroid() {
+        let manager = makeManager()
+        let value = String(repeating: "/", count: 1_000) + String(repeating: "e", count: 1_040)
+
+        XCTAssertTrue(manager.setValue(provider: "enrichmentService", key: "payload", value: value))
+    }
+
     /// `CodableValue.from` drops bad container elements and keeps the rest; here
     /// that would stamp a value the host never set on every event.
     func testContainerWithAnUnrepresentableElementIsRejectedWhole() {

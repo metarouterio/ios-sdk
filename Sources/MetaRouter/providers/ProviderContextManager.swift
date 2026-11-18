@@ -43,6 +43,8 @@ internal final class ProviderContextManager: @unchecked Sendable {
     /// Measures sizes only. Slashes unescaped so a value counts the same bytes here
     /// as on Android, whose encoder never escapes them: base64 envelopes and URLs are
     /// full of `/`, and the default `\/` would reject near the limit on iOS alone.
+    /// Numbers still differ (`1` vs `1.0`, `1e+20` vs `1.0E20`), so a number-heavy
+    /// value right at a limit can pass on one platform and fail on the other.
     private static func measuringEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .withoutEscapingSlashes
