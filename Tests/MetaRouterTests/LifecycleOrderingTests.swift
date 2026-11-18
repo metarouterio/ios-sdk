@@ -104,6 +104,35 @@ final class LifecycleOrderingTests: XCTestCase {
         XCTAssertEqual(info["writeKey"], .string("***b222"))
         XCTAssertEqual(info["queueLength"]?.intValue, 1, "the track went to the client reset() discarded")
     }
+
+    /// reset() lands while the first initialize is building its client (seen in the
+    /// demo app): the identify made after it must reach the next client, not be
+    /// replayed into the discarded one.
+    func testAnIdentifyAfterAResetDuringInitializeReachesTheNextClient() async {
+        var lost: [Int] = []
+        for round in 0..<40 {
+            await MetaRouter.Analytics.resetAndWait()
+
+            MetaRouter.Analytics.initialize(
+                with: InitOptions(writeKey: "wk-a111", ingestionHost: "https://example.com", flushIntervalSeconds: 999)
+            )
+            if round % 4 != 0 { usleep(useconds_t(round * 50)) }
+            MetaRouter.Analytics.reset()
+            MetaRouter.Analytics.shared.identify("u\(round)")
+            let analytics = MetaRouter.Analytics.initialize(
+                with: InitOptions(writeKey: "wk-b222", ingestionHost: "https://example.com", flushIntervalSeconds: 999)
+            )
+
+            _ = await anonymousId(analytics)
+            var length = 0
+            for _ in 0..<25 where length == 0 {
+                length = (await analytics.getDebugInfo())["queueLength"]?.intValue ?? 0
+                if length == 0 { try? await Task.sleep(nanoseconds: 20_000_000) }
+            }
+            if length != 1 { lost.append(round) }
+        }
+        XCTAssertEqual(lost, [], "the identify went to the client reset() discarded")
+    }
 }
 
 /// A client the SDK discards stops: its flush loop no longer keeps the dispatcher

@@ -20,6 +20,8 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // Bumped on the caller's thread by every reset or disable. A queued initialize
     // that sees it moved was reset before it ran, so it must not bind: calls made
     // after the reset would replay into a client that is about to be discarded.
+    // The bump and the pipe detach, and the check and the bind, each hold the lock:
+    // a reset landing while the client is being built must not slip in between.
     private let epochLock = NSLock()
     private nonisolated(unsafe) var epoch = 0
 
@@ -104,8 +106,8 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     /// client being discarded. The rest runs on `lifecycle` (`_unbindState`).
     internal func detachCalls() {
         epochLock.lock()
+        defer { epochLock.unlock() }
         epoch += 1
-        epochLock.unlock()
         bridgeClient.clear()
         calls.unbind()
     }
@@ -115,8 +117,8 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     /// the one being replaced. Queued calls stay.
     internal func supersedeForInitialize() {
         epochLock.lock()
+        defer { epochLock.unlock() }
         epoch += 1
-        epochLock.unlock()
         releaseCalls()
     }
 
@@ -125,12 +127,28 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         calls.release()
     }
 
-    /// The queued half of a reset or disable, on `lifecycle`. The pipe is released
-    /// again here because an initialize queued before the reset may have bound it
-    /// since; released, not unbound, so calls already waiting for the next bind stay.
+    /// The queued half of a reset or disable, on `lifecycle`. The pipe was detached
+    /// on the caller's thread, and `_bindIfCurrent` keeps an earlier initialize from
+    /// binding it since.
     func _unbindState() async {
-        releaseCalls()
         await state.unbind()
+    }
+
+    /// Binds `real` unless a reset or disable has run since `epoch`, returning
+    /// whether it did. A refused client was never seen by a call.
+    func _bindIfCurrent(_ real: any AnalyticsInterface, epoch: Int) async -> Bool {
+        guard bindCallsIfCurrent(real, epoch: epoch) else { return false }
+        await state.bind(real)
+        return true
+    }
+
+    private func bindCallsIfCurrent(_ real: any AnalyticsInterface, epoch: Int) -> Bool {
+        epochLock.lock()
+        defer { epochLock.unlock() }
+        guard self.epoch == epoch else { return false }
+        bridgeClient.set(real)
+        calls.bind(real)
+        return true
     }
 
     // Awaitable helpers for barrier APIs

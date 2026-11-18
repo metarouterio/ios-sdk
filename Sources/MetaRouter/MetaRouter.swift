@@ -53,9 +53,12 @@ public enum MetaRouter {
             guard proxy.lifecycleEpoch() == epoch else { return logSuperseded() }
             await proxy._clearConfigDisabled()
             let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
+            guard await proxy._bindIfCurrent(real, epoch: epoch) else {
+                shutdown(real)
+                return logSuperseded()
+            }
             shutdown(await store.get())
             await store.set(real)
-            await proxy._bindAndReplay(real)
         }
         return proxy
     }
@@ -77,8 +80,11 @@ public enum MetaRouter {
             }
             await proxy._clearConfigDisabled()
             let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
+            guard await proxy._bindIfCurrent(real, epoch: epoch) else {
+                shutdown(real)
+                return logSuperseded()
+            }
             await store.set(real)
-            await proxy._bindAndReplay(real)
         }
         return proxy
     }
