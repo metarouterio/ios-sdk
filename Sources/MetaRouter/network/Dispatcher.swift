@@ -48,7 +48,13 @@ public actor Dispatcher {
         }
     }
 
-    private static let jsonEncoder = JSONEncoder()
+    /// Slashes unescaped, as Android sends them: URLs and base64 are full of `/`, and
+    /// `\/` doubles each one on the wire past what the provider-context budget measured.
+    static let jsonEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        return encoder
+    }()
 
     private let options: InitOptions
     private let queue: PersistentEventQueue

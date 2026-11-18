@@ -18,8 +18,6 @@ import Foundation
 /// - `flushMemoryToDisk` internally takes the same lock, serializing against drain
 public actor PersistentEventQueue {
 
-    private static let jsonEncoder = JSONEncoder()
-
     /// Events older than this are dropped on read-back from disk.
     static let eventTTL: TimeInterval = 7 * 24 * 60 * 60 // 7 days
 
@@ -335,9 +333,10 @@ public actor PersistentEventQueue {
         }
     }
 
-    /// Encoded size of one event, measured at enqueue and carried with it.
+    /// Encoded size of one event, measured at enqueue and carried with it — with the
+    /// wire encoder, so the byte cap counts what is sent.
     private static func estimateEventSize(_ event: EnrichedEventPayload) -> Int {
-        (try? jsonEncoder.encode(event))?.count ?? 512
+        (try? Dispatcher.jsonEncoder.encode(event))?.count ?? 512
     }
 
     /// Drop events whose `timestamp` is older than `eventTTL`. Events without a
