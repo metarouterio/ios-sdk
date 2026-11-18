@@ -1,0 +1,165 @@
+import XCTest
+@testable import MetaRouter
+
+/// initialize, reset and an invalid-config disable take effect in call order
+/// (sc-42966). As separate Tasks they ran in any order.
+final class LifecycleOrderingTests: XCTestCase {
+    /// Built with the debug assert silenced, as InitOptionsTests does.
+    private func invalidOptions() -> InitOptions {
+        let original = InitOptions.debugAssert
+        InitOptions.debugAssert = { _ in }
+        defer { InitOptions.debugAssert = original }
+        return InitOptions(writeKey: "", ingestionHost: "https://example.com")
+    }
+
+    private final class Box: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _value: String?
+        var value: String? { lock.lock(); defer { lock.unlock() }; return _value }
+        func set(_ v: String) { lock.lock(); _value = v; lock.unlock() }
+    }
+
+    /// nil when it has not resolved in time (a waiter left suspended for good).
+    private func anonymousId(_ analytics: AnalyticsInterface) async -> String? {
+        let box = Box()
+        Task { box.set(await analytics.getAnonymousId()) }
+        _ = await TestUtilities.waitFor(timeout: 2) { box.value != nil }
+        return box.value
+    }
+
+    override func tearDown() async throws {
+        await MetaRouter.Analytics.resetAndWait()
+        try await super.tearDown()
+    }
+
+    func testAValidInitializeAfterAnInvalidOneWins() async {
+        for round in 0..<20 {
+            await MetaRouter.Analytics.resetAndWait()
+
+            MetaRouter.Analytics.initialize(with: invalidOptions())
+            let analytics = MetaRouter.Analytics.initialize(
+                with: InitOptions(writeKey: "wk", ingestionHost: "https://example.com")
+            )
+
+            let id = await anonymousId(analytics)
+            XCTAssertNotNil(id, "round \(round): getAnonymousId never resolved")
+            XCTAssertNotEqual(id, "", "round \(round): answered from the refused session")
+            let info = await analytics.getDebugInfo()
+            XCTAssertEqual(info["proxy"]?.boolValue, false, "round \(round): the valid client is not bound")
+        }
+    }
+
+    func testAnInitializeRightAfterResetBindsTheNewClient() async {
+        for round in 0..<20 {
+            await MetaRouter.Analytics.resetAndWait()
+            _ = await MetaRouter.Analytics.initializeAndWait(
+                with: InitOptions(writeKey: "wk-a111", ingestionHost: "https://example.com")
+            )
+
+            MetaRouter.Analytics.reset()
+            let analytics = MetaRouter.Analytics.initialize(
+                with: InitOptions(writeKey: "wk-b222", ingestionHost: "https://example.com")
+            )
+
+            let id = await anonymousId(analytics)
+            XCTAssertNotNil(id, "round \(round): getAnonymousId never resolved")
+            let info = await analytics.getDebugInfo()
+            XCTAssertEqual(info["writeKey"], .string("***b222"), "round \(round): the second initialize was lost")
+        }
+    }
+
+    func testACallMadeAfterAValidReInitializeReachesTheNewClient() async {
+        await MetaRouter.Analytics.resetAndWait()
+
+        MetaRouter.Analytics.initialize(with: invalidOptions())
+        let analytics = MetaRouter.Analytics.initialize(
+            with: InitOptions(writeKey: "wk", ingestionHost: "https://example.com", flushIntervalSeconds: 999)
+        )
+        analytics.track("after valid initialize")
+
+        _ = await anonymousId(analytics)
+        var length = 0
+        for _ in 0..<50 where length == 0 {
+            length = (await analytics.getDebugInfo())["queueLength"]?.intValue ?? 0
+            if length == 0 { try? await Task.sleep(nanoseconds: 20_000_000) }
+        }
+        XCTAssertEqual(length, 1, "the track was dropped with the refused session")
+    }
+
+    func testACallMadeAfterResetWaitsForTheNextClient() async {
+        await MetaRouter.Analytics.resetAndWait()
+
+        MetaRouter.Analytics.initialize(with: InitOptions(writeKey: "wk-a111", ingestionHost: "https://example.com"))
+        MetaRouter.Analytics.reset()
+        MetaRouter.Analytics.shared.track("after reset")
+        let analytics = await MetaRouter.Analytics.initializeAndWait(
+            with: InitOptions(writeKey: "wk-b222", ingestionHost: "https://example.com", flushIntervalSeconds: 999)
+        )
+
+        var info = await analytics.getDebugInfo()
+        for _ in 0..<50 where (info["queueLength"]?.intValue ?? 0) == 0 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            info = await analytics.getDebugInfo()
+        }
+        XCTAssertEqual(info["writeKey"], .string("***b222"))
+        XCTAssertEqual(info["queueLength"]?.intValue, 1, "the track went to the client reset() discarded")
+    }
+}
+
+/// A client the SDK discards stops: its flush loop no longer keeps the dispatcher
+/// (and its writeKey and host) running for the life of the process.
+final class DiscardedClientShutdownTests: XCTestCase {
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+    private var tempDir: URL!
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "com.metarouter.test.shutdown.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("metarouter-shutdown-\(UUID().uuidString)")
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tempDir)
+        super.tearDown()
+    }
+
+    func testShutdownReleasesTheDispatcher() async {
+        await assertShutdownReleasesTheDispatcher(waitForInit: true)
+    }
+
+    /// Discarded before its init finished: init must not restart the flush loop.
+    func testShutdownDuringInitReleasesTheDispatcher() async {
+        await assertShutdownReleasesTheDispatcher(waitForInit: false)
+    }
+
+    private func assertShutdownReleasesTheDispatcher(waitForInit: Bool) async {
+        weak var weakDispatcher: Dispatcher?
+        do {
+            let options = InitOptions(writeKey: "wk", ingestionHost: URL(string: "https://example.com")!, flushIntervalSeconds: 1)
+            let queue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 100)
+            let dispatcher = Dispatcher(options: options, http: BodyRecordingNetworking(), persistentQueue: queue)
+            weakDispatcher = dispatcher
+            var deps = AnalyticsDependencies()
+            deps.persistentQueue = queue
+            deps.dispatcher = dispatcher
+            deps.networkMonitor = StubNetworkMonitor(status: .connected)
+            deps.identityManager = IdentityManager(
+                storage: IdentityStorage(userDefaults: defaults), writeKey: "wk", host: "https://example.com"
+            )
+            deps.sessionStorage = SessionStorage(userDefaults: defaults)
+            deps.consentManager = ConsentManager(storage: ConsentStorage(userDefaults: defaults))
+            deps.providerContextStorage = ProviderContextStorage(userDefaults: defaults)
+            let client = AnalyticsClient.initialize(options: options, deps: deps)
+            if waitForInit { _ = await client.getAnonymousId() }
+
+            client.shutdown()
+        }
+
+        let released = await TestUtilities.waitFor(timeout: 5) { weakDispatcher == nil }
+        XCTAssertTrue(released, "the flush loop still holds the discarded dispatcher")
+    }
+}

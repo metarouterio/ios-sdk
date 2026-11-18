@@ -1056,6 +1056,8 @@ Bridged events go through the same enrichment as native events. The page contrib
 | event type (`track`/`page`), name, properties | `anonymousId` / `userId`, device + app context |
 | `context.page` — url, path, search, title, referrer | `messageId`, `timestamp`, `context.consent`, session (`context.providers.metarouter`), and any [provider context](#provider-context) the app has set |
 
+A `page` event also carries the page facts and its name in `properties`, as the web SDK sends them; properties the page passed win over the facts.
+
 Each bridge message carries a producer-minted ID used to drop duplicate deliveries (bounded window). The page receives an ack or a coded error for every message on the underlying channel — malformed input is rejected, never silently dropped, and events arriving while the SDK cannot accept them are answered `not_ready` rather than acked.
 
 ### Lifecycle

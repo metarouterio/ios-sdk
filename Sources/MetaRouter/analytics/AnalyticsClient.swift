@@ -259,6 +259,25 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         await dispatcher.cancelScheduledRetry()
     }
 
+    /// Stops a client the SDK has discarded (static reset, invalid-config disable,
+    /// re-initialize). Its flush loop holds the dispatcher, which otherwise keeps
+    /// flushing with this client's writeKey and host for the life of the process.
+    /// What is still queued gets one flush; it is not written to disk, where the next
+    /// client would drain it under its own config. Identity is left as it is.
+    internal func shutdown() {
+        calls.enqueue { [self] in
+            // A client discarded during its init would otherwise restart the flush
+            // loop and emit its cold-launch events once init finishes.
+            await initTask?.value
+            lifecycleState = .idle
+            disabled = true
+            networkMonitor?.stop()
+            await dispatcher.flush()
+            await dispatcher.stopFlushLoop()
+            await dispatcher.cancelScheduledRetry()
+        }
+    }
+
     internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {
         AnalyticsClient(options: options, deps: deps)
     }
@@ -667,12 +686,29 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             let enriched = await enrichmentService.enrichEvent(BaseEvent(
                 type: envelope.type.rawValue,
                 event: envelope.name,
-                properties: envelope.properties,
+                properties: envelope.type == .page ? Self.pageProperties(envelope) : envelope.properties,
                 page: envelope.page
             ))
             await dispatcher.offer(enriched)
         }
         return true
+    }
+
+    /// A bridge page event's properties as the web SDK sends them: the page facts, the
+    /// host's properties over them, then the name. Integrations that map a page view
+    /// from `properties` (GA4's page_title / page_location) see nothing in `context.page`.
+    static func pageProperties(_ envelope: BridgeEnvelope) -> [String: CodableValue] {
+        var properties: [String: CodableValue] = [:]
+        if let page = envelope.page {
+            let facts: [(String, String?)] = [
+                ("path", page.path), ("referrer", page.referrer), ("search", page.search),
+                ("title", page.title), ("url", page.url),
+            ]
+            for case let (key, value?) in facts { properties[key] = .string(value) }
+        }
+        properties.merge(envelope.properties) { _, host in host }
+        properties["name"] = .string(envelope.name)
+        return properties
     }
 
     /// Bridge attach for direct-client usage (`AnalyticsClient.initialize()`). The

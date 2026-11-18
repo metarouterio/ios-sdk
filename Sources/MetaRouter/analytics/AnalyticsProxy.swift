@@ -11,6 +11,24 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // back-to-back calls arrive swapped.
     private let calls = CallPipe()
 
+    // initialize, reset and an invalid-config disable run here, one at a time in call
+    // order. As separate Tasks they ran in any order: a stale disable could unbind the
+    // client a later initialize had bound, and a reset's clear could make the next
+    // initialize look like a duplicate and be ignored.
+    let lifecycle = SerialTaskQueue()
+
+    // Bumped on the caller's thread by every reset or disable. A queued initialize
+    // that sees it moved was reset before it ran, so it must not bind: calls made
+    // after the reset would replay into a client that is about to be discarded.
+    private let epochLock = NSLock()
+    private nonisolated(unsafe) var epoch = 0
+
+    func lifecycleEpoch() -> Int {
+        epochLock.lock()
+        defer { epochLock.unlock() }
+        return epoch
+    }
+
     // The bridge is owned here, not by a client: clients are disposable (reset()
     // creates a new one) while attached WebViews live on, and WebKit retains their
     // message handlers for the WebView's lifetime. The sink resolves "the current
@@ -76,10 +94,35 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         Task { await state.bind(real) }
     }
 
+    // Tests only: MetaRouter detaches synchronously and unbinds on `lifecycle`.
     internal func unbind() {
+        detachCalls()
+        Task { await state.unbind() }
+    }
+
+    /// The synchronous half of a reset: a call on the next line must not reach the
+    /// client being discarded. The rest runs on `lifecycle` (`_unbindState`).
+    internal func detachCalls() {
+        epochLock.lock()
+        epoch += 1
+        epochLock.unlock()
         bridgeClient.clear()
         calls.unbind()
-        Task { await state.unbind() }
+    }
+
+    /// Before a re-initialize over a bound client: calls from here on wait for the
+    /// new client instead of reaching the one being replaced. Queued calls stay.
+    internal func releaseCalls() {
+        bridgeClient.clear()
+        calls.release()
+    }
+
+    /// The queued half of a reset or disable, on `lifecycle`. The pipe is released
+    /// again here because an initialize queued before the reset may have bound it
+    /// since; released, not unbound, so calls already waiting for the next bind stay.
+    func _unbindState() async {
+        releaseCalls()
+        await state.unbind()
     }
 
     // Awaitable helpers for barrier APIs
@@ -166,7 +209,14 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         calls.send(.enableDebugLogging)
     }
 
+    /// Waits for any initialize/reset already called: a read right after one must not
+    /// be answered from the previous session's state.
+    private func settled() async {
+        await lifecycle.run {}
+    }
+
     public func getAnonymousId() async -> String {
+        await settled()
         return await state.getAnonymousId()
     }
 
@@ -179,10 +229,12 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     }
 
     public func getSessionId() async -> String? {
+        await settled()
         return await state.getSessionId()
     }
 
     public func getDebugInfo() async -> [String: CodableValue] {
+        await settled()
         var info = await state.getDebugInfo()
         // Pre-bind, the bootstrap info has no client to report consent; the manager
         // exists regardless, and "what consent is the SDK holding before init" is
@@ -350,6 +402,13 @@ private final class CallPipe: @unchecked Sendable {
         defer { lock.unlock() }
         real = nil
         queue.removeAll()
+    }
+
+    /// Unbinds without dropping queued calls (a bound pipe has none).
+    func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        real = nil
     }
 
     func send(_ call: Call) {

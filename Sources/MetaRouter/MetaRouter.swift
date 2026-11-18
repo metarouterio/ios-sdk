@@ -43,13 +43,20 @@ public enum MetaRouter {
     // Synchronous-binding initializer for deterministic testing/flows that require immediate binding
     public static func initializeAndWait(with options: InitOptions) async -> AnalyticsInterface {
         guard passesConfigGate(options) else {
-            await disableSession()
+            proxy.detachCalls()
+            await proxy.lifecycle.run { await disableSession() }
             return proxy
         }
-        await proxy._clearConfigDisabled()
-        let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
-        await store.set(real)
-        await proxy._bindAndReplay(real)
+        proxy.releaseCalls()
+        let epoch = proxy.lifecycleEpoch()
+        await proxy.lifecycle.run {
+            guard proxy.lifecycleEpoch() == epoch else { return logSuperseded() }
+            await proxy._clearConfigDisabled()
+            let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
+            shutdown(await store.get())
+            await store.set(real)
+            await proxy._bindAndReplay(real)
+        }
         return proxy
     }
 
@@ -57,17 +64,21 @@ public enum MetaRouter {
     public static func createAnalyticsClient(with options: InitOptions) -> AnalyticsInterface {
         // Return the proxy immediately; bind happens async (proxy queues pre-bind calls)
         guard passesConfigGate(options) else {
-            Task { await disableSession() }
+            proxy.detachCalls()
+            proxy.lifecycle.enqueue { await disableSession() }
             return proxy
         }
-        Task {
+        let epoch = proxy.lifecycleEpoch()
+        proxy.lifecycle.enqueue {
+            guard proxy.lifecycleEpoch() == epoch else { return logSuperseded() }
+            guard await store.get() == nil else {
+                Logger.warn("MetaRouter.Analytics.initialize() called more than once — subsequent calls are ignored. Use reset() first if you need to re-initialize.")
+                return
+            }
             await proxy._clearConfigDisabled()
             let real = AnalyticsClient.initialize(options: options.discardingConfigCallback(), deps: clientDependencies)
-            if await store.setIfNil(real) {
-                proxy.bind(real)
-            } else {
-                Logger.warn("MetaRouter.Analytics.initialize() called more than once — subsequent calls are ignored. Use reset() first if you need to re-initialize.")
-            }
+            await store.set(real)
+            await proxy._bindAndReplay(real)
         }
         return proxy
     }
@@ -94,10 +105,22 @@ public enum MetaRouter {
     /// client running would mask the config error (a bound client also shadows the
     /// bootstrap debug info that reports it). Fail visible, not quiet. Marking the
     /// proxy disabled also resolves any suspended awaiters — no bind is coming.
+    ///
+    /// Runs on `proxy.lifecycle`, after the caller's `proxy.detachCalls()`: detached on
+    /// the queue instead, it would also drop calls made after a later valid initialize.
     private static func disableSession() async {
-        await proxy._unbindAndClear()
+        await proxy._unbindState()
+        shutdown(await store.get())
         await store.clear()
         await proxy._markConfigDisabled()
+    }
+
+    private static func logSuperseded() {
+        Logger.log("initialize skipped: a later reset() or initialize superseded it")
+    }
+
+    private static func shutdown(_ client: (any AnalyticsInterface)?) {
+        (client as? AnalyticsClient)?.shutdown()
     }
 
     public enum Analytics {
@@ -123,16 +146,21 @@ public enum MetaRouter {
         public static func client() -> AnalyticsInterface { proxy }
 
         public static func reset() {
-            // Unbound here, not in the Task: a call on the next line must not reach
+            // Detached here, not on the queue: a call on the next line must not reach
             // the client being discarded.
-            proxy.unbind()
-            Task {
-                await store.clear()
-            }
+            proxy.detachCalls()
+            proxy.lifecycle.enqueue { await discardClient() }
         }
 
         public static func resetAndWait() async {
-            await proxy._unbindAndClear()
+            proxy.detachCalls()
+            await proxy.lifecycle.run { await discardClient() }
+        }
+
+        /// Runs on `proxy.lifecycle`.
+        private static func discardClient() async {
+            await proxy._unbindState()
+            shutdown(await store.get())
             await store.clear()
         }
 
