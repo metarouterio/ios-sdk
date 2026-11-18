@@ -14,6 +14,7 @@ public actor IdentityManager {
     private var userId: String?
     private var groupId: String?
     private var advertisingId: String?
+    private var loaded = false
     
     public init(storage: IdentityStorage = IdentityStorage(), writeKey: String, host: String) {
         self.storage = storage
@@ -30,10 +31,7 @@ public actor IdentityManager {
         // later launch (e.g. lifecycle tracking enabled in a future release).
         storage.clearHostSetMarker()
 
-        // Load userId, groupId, and advertisingId if they exist
-        self.userId = storage.get(.userId)
-        self.groupId = storage.get(.groupId)
-        self.advertisingId = storage.get(.advertisingId)
+        loadIfNeeded()
 
         // Redact advertisingId in logs for privacy
         let redactedAdvertisingId = advertisingId.map { "\($0.prefix(8))***" } ?? "undefined"
@@ -116,6 +114,17 @@ public actor IdentityManager {
     }
     
     /// Sets the user ID for the current session.
+    /// Readers load the stored ids first, so a call that runs before `initialize()`
+    /// (the first track after launch) carries the stored userId instead of nil.
+    /// Every write also goes to storage, so a late load never loses a newer value.
+    private func loadIfNeeded() {
+        guard !loaded else { return }
+        loaded = true
+        userId = storage.get(.userId)
+        groupId = storage.get(.groupId)
+        advertisingId = storage.get(.advertisingId)
+    }
+
     public func identify(_ userId: String) {
         self.userId = userId
         storage.set(.userId, value: userId)
@@ -131,11 +140,13 @@ public actor IdentityManager {
     
     /// Retrieves the current user ID.
     public func getUserId() -> String? {
+        loadIfNeeded()
         return userId
     }
     
     /// Retrieves the current group ID.
     public func getGroupId() -> String? {
+        loadIfNeeded()
         return groupId
     }
 
@@ -155,6 +166,7 @@ public actor IdentityManager {
 
     /// Retrieves the current advertising ID.
     public func getAdvertisingId() -> String? {
+        loadIfNeeded()
         return advertisingId
     }
 
@@ -170,6 +182,7 @@ public actor IdentityManager {
     /// ID if none is stored, so the first event after `reset()` carries a new one
     /// rather than a placeholder.
     public func getIdentityInfo() -> (anonymousId: String, userId: String?, groupId: String?) {
+        loadIfNeeded()
         return (
             anonymousId: getOrCreateAnonymousId(),
             userId: userId,

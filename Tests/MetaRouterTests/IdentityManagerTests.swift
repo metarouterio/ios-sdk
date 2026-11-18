@@ -805,4 +805,30 @@ final class IdentityManagerTests: XCTestCase {
 
         XCTAssertNil(testStorage.get(.anonymousId))
     }
+
+    /// The client's first track can enrich before `initialize()` runs; it must still
+    /// carry the stored ids, not nil.
+    func testReadsBeforeInitializeReturnTheStoredIds() async {
+        testStorage.set(.userId, value: "stored-user")
+        testStorage.set(.groupId, value: "stored-group")
+        testStorage.set(.advertisingId, value: "stored-ad-id")
+
+        let info = await identityManager.getIdentityInfo()
+        XCTAssertEqual(info.userId, "stored-user")
+        XCTAssertEqual(info.groupId, "stored-group")
+        let userId = await identityManager.getUserId()
+        let advertisingId = await identityManager.getAdvertisingId()
+        XCTAssertEqual(userId, "stored-user")
+        XCTAssertEqual(advertisingId, "stored-ad-id")
+    }
+
+    func testWritesBeforeInitializeSurviveTheLoad() async {
+        testStorage.set(.userId, value: "stored-user")
+        await identityManager.identify("new-user")
+        await identityManager.initialize()
+
+        let userId = await identityManager.getUserId()
+        XCTAssertEqual(userId, "new-user")
+    }
 }
+

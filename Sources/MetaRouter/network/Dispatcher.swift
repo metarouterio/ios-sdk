@@ -155,7 +155,7 @@ public actor Dispatcher {
                 if await self.queue.flushMemoryToDisk() {
                     Logger.log("Auto disk flush triggered (threshold reached)")
                 }
-                await self.endDiskFlush()
+                self.endDiskFlush()
             }
         }
 
