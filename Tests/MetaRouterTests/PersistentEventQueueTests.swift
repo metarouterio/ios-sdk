@@ -486,7 +486,7 @@ final class PersistentEventQueueTests: XCTestCase {
     // MARK: - Byte accounting (size measured once at enqueue)
 
     private func encodedSize(_ event: EnrichedEventPayload) throws -> Int {
-        try JSONEncoder().encode(event).count
+        try Dispatcher.jsonEncoder.encode(event).count
     }
 
     func testByteCounterIsExactUTF8ForMultiByteEvents() async throws {

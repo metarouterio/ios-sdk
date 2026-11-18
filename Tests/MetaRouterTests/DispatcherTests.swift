@@ -159,6 +159,24 @@ final class DispatcherTests: XCTestCase {
         XCTAssertNotNil(stub.lastBody)
     }
 
+    func testSlashesGoOutUnescaped() async throws {
+        let stub = StubNetworking()
+        let dispatcher = makeDispatcher(options: TestDataFactory.makeInitOptions(), http: stub, queueCapacity: 10)
+        let base = makeTestEvent()
+        let event = EnrichedEventPayload(
+            type: base.type, event: base.event, userId: nil, anonymousId: base.anonymousId,
+            properties: ["url": .string("https://example.com/a/b")], traits: nil, integrations: nil,
+            timestamp: base.timestamp, writeKey: base.writeKey, messageId: base.messageId, context: base.context
+        )
+
+        await dispatcher.offer(event)
+        await dispatcher.flush()
+
+        let body = String(decoding: try XCTUnwrap(stub.lastBody), as: UTF8.self)
+        XCTAssertTrue(body.contains("https://example.com/a/b"), body)
+        XCTAssertFalse(body.contains("\\/"), body)
+    }
+
     func testFatalConfigClearsAndCallback() async {
         let options = TestDataFactory.makeInitOptions()
         let stub = StubNetworking()
