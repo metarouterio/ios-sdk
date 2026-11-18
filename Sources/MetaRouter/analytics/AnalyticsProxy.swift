@@ -110,9 +110,17 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         calls.unbind()
     }
 
-    /// Before a re-initialize over a bound client: calls from here on wait for the
-    /// new client instead of reaching the one being replaced. Queued calls stay.
-    internal func releaseCalls() {
+    /// Before an initializeAndWait: an initialize still queued ahead of it is
+    /// superseded, and calls from here on wait for the new client instead of reaching
+    /// the one being replaced. Queued calls stay.
+    internal func supersedeForInitialize() {
+        epochLock.lock()
+        epoch += 1
+        epochLock.unlock()
+        releaseCalls()
+    }
+
+    private func releaseCalls() {
         bridgeClient.clear()
         calls.release()
     }

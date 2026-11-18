@@ -242,7 +242,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private func handleForeground() {
         guard lifecycleState == .ready else { return }
         Task { [weak self] in
-            guard let self else { return }
+            // Re-checked here: a shutdown may have landed since the check above.
+            guard let self, self.lifecycleState == .ready else { return }
             await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
             await self.dispatcher.flush()
             await self.lifecycleCoordinator?.onForeground()
@@ -252,6 +253,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     /// Emit `Application Backgrounded` BEFORE flush/disk-flush so the event
     /// is captured by the same drain that ships pending events to disk.
     private func handleBackground() async {
+        // Idle = reset or shut down: nothing of this client's to emit or keep.
+        guard lifecycleState != .idle else { return }
         await lifecycleCoordinator?.onBackground()
         await dispatcher.flush()
         await dispatcher.flushToDisk()
@@ -262,8 +265,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     /// Stops a client the SDK has discarded (static reset, invalid-config disable,
     /// re-initialize). Its flush loop holds the dispatcher, which otherwise keeps
     /// flushing with this client's writeKey and host for the life of the process.
-    /// What is still queued gets one flush; it is not written to disk, where the next
-    /// client would drain it under its own config. Identity is left as it is.
+    /// What is still queued gets one flush if online, with the disk drain unhooked;
+    /// nothing is written to or read from disk, which the next client shares and would
+    /// drain under its own config. Identity is left as it is.
     internal func shutdown() {
         calls.enqueue { [self] in
             // A client discarded during its init would otherwise restart the flush
@@ -272,7 +276,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             lifecycleState = .idle
             disabled = true
             networkMonitor?.stop()
-            await dispatcher.flush()
+            await dispatcher.setFlushCompleteHandler(nil)
+            // Offline, flush() spills to disk instead.
+            if !(await dispatcher.getIsOffline()) {
+                await dispatcher.flush()
+            }
             await dispatcher.stopFlushLoop()
             await dispatcher.cancelScheduledRetry()
         }

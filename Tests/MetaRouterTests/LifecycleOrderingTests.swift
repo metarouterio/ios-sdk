@@ -136,6 +136,60 @@ final class DiscardedClientShutdownTests: XCTestCase {
         await assertShutdownReleasesTheDispatcher(waitForInit: false)
     }
 
+    /// The disk file is shared by every client, and the next one drains it. A
+    /// discarded client that spilled to disk earlier (e.g. on backgrounding) must not
+    /// drain it too: two queues on one file send duplicates.
+    func testShutdownLeavesTheSharedDiskFileAlone() async {
+        let recorder = BodyRecordingNetworking()
+        let options = InitOptions(writeKey: "wk", ingestionHost: URL(string: "https://example.com")!, flushIntervalSeconds: 999)
+        var deps = AnalyticsDependencies()
+        let queue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 100)
+        deps.persistentQueue = queue
+        deps.networking = recorder
+        deps.networkMonitor = StubNetworkMonitor(status: .connected)
+        deps.identityManager = IdentityManager(
+            storage: IdentityStorage(userDefaults: defaults), writeKey: "wk", host: "https://example.com"
+        )
+        deps.sessionStorage = SessionStorage(userDefaults: defaults)
+        deps.consentManager = ConsentManager(storage: ConsentStorage(userDefaults: defaults))
+        deps.providerContextStorage = ProviderContextStorage(userDefaults: defaults)
+        let client = AnalyticsClient.initialize(options: options, deps: deps)
+        _ = await client.getAnonymousId()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        _ = await queue.enqueue(diskEvent())
+        _ = await queue.flushMemoryToDisk()
+        client.track("queued")
+        client.shutdown()
+
+        let flushed = await TestUtilities.waitFor(timeout: 5) { !recorder.bodies.isEmpty }
+        XCTAssertTrue(flushed, "the queued event gets its one flush")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let sent = recorder.bodies.map { String(decoding: $0, as: UTF8.self) }.joined()
+        XCTAssertFalse(sent.contains("on-disk"), "the discarded client drained the shared disk file")
+        let other = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 100)
+        let stillOnDisk = await other.checkForPersistedEvents()
+        XCTAssertTrue(stillOnDisk)
+    }
+
+    private func diskEvent() -> EnrichedEventPayload {
+        let context = EventContext(
+            app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
+            device: DeviceContext(manufacturer: "a", model: "m", type: "t"),
+            library: LibraryContext(name: "l", version: "1"),
+            os: OSContext(name: "iOS", version: "1"),
+            screen: ScreenContext(density: 2.0, width: 1, height: 1),
+            network: nil,
+            locale: "en_US",
+            timezone: "UTC"
+        )
+        return EnrichedEventPayload(
+            type: "track", event: "on-disk", userId: nil, anonymousId: "anon",
+            properties: nil, traits: nil, integrations: nil,
+            timestamp: ISO8601DateFormatter().string(from: Date()), writeKey: "other", messageId: "on-disk-1", context: context
+        )
+    }
+
     private func assertShutdownReleasesTheDispatcher(waitForInit: Bool) async {
         weak var weakDispatcher: Dispatcher?
         do {

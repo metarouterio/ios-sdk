@@ -47,7 +47,7 @@ public enum MetaRouter {
             await proxy.lifecycle.run { await disableSession() }
             return proxy
         }
-        proxy.releaseCalls()
+        proxy.supersedeForInitialize()
         let epoch = proxy.lifecycleEpoch()
         await proxy.lifecycle.run {
             guard proxy.lifecycleEpoch() == epoch else { return logSuperseded() }
