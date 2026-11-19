@@ -28,6 +28,17 @@ internal final class SerialTaskQueue: Sendable {
         continuation.yield(job)
     }
 
+    /// Submits `job` and waits for it to finish, behind everything already submitted.
+    /// Never call it from a job on the same queue: it would wait on itself.
+    func run(_ job: @escaping Job) async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            enqueue {
+                await job()
+                done.resume()
+            }
+        }
+    }
+
     deinit {
         continuation.finish()
     }

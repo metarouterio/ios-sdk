@@ -44,6 +44,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private var lifecycle: AppLifecycleObserver?
     private var lifecycleState: LifecycleState = .idle
     private var disabled = false
+    // Set once the SDK discards this client. Not `.idle`: an instance reset leaves a
+    // live, still-bound client there.
+    private var isShutDown = false
     private var initTask: Task<Void, Never>?
     private let lifecycleCoordinator: LifecycleCoordinator?
 
@@ -200,6 +203,9 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
         self.initTask = Task { [weak self] in
             guard let self else { return }
             await self.identityManager.initialize()
+            // Discarded during init: no flush loop, cold-launch events or disk drain
+            // for a client the next one replaces.
+            guard !Task.isCancelled else { return }
 
             // Check disk for persisted events (cheap existence check, no parse).
             // Actual drain happens below once we confirm we're online.
@@ -226,9 +232,11 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
 
             // Emit cold-launch lifecycle sequence (Installed/Updated then Opened).
             // Runs after .ready so events flow through the standard track path.
+            guard !Task.isCancelled else { return }
             await self.lifecycleCoordinator?.onReady()
 
             // Drain any persisted events from a previous session
+            guard !Task.isCancelled else { return }
             if monitor.currentStatus == .connected {
                 await self.dispatcher.drainDiskStoreToNetwork()
             }
@@ -242,7 +250,8 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     private func handleForeground() {
         guard lifecycleState == .ready else { return }
         Task { [weak self] in
-            guard let self else { return }
+            // Re-checked here: a shutdown may have landed since the check above.
+            guard let self, self.lifecycleState == .ready else { return }
             await self.dispatcher.startFlushLoop(intervalSeconds: self.options.flushIntervalSeconds)
             await self.dispatcher.flush()
             await self.lifecycleCoordinator?.onForeground()
@@ -252,11 +261,37 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     /// Emit `Application Backgrounded` BEFORE flush/disk-flush so the event
     /// is captured by the same drain that ships pending events to disk.
     private func handleBackground() async {
+        guard !isShutDown else { return }
         await lifecycleCoordinator?.onBackground()
         await dispatcher.flush()
         await dispatcher.flushToDisk()
         await dispatcher.stopFlushLoop()
         await dispatcher.cancelScheduledRetry()
+    }
+
+    /// Stops a client the SDK has discarded (static reset, invalid-config disable,
+    /// re-initialize). Its flush loop holds the dispatcher, which otherwise keeps
+    /// flushing with this client's writeKey and host for the life of the process.
+    /// What is still queued gets one flush if online, with the disk drain unhooked, so
+    /// this client never sends the shared disk file. Identity is left as it is.
+    internal func shutdown() {
+        // A client discarded during its init stops there: it would otherwise restart
+        // the flush loop and emit cold-launch events the next client emits too.
+        initTask?.cancel()
+        calls.enqueue { [self] in
+            await initTask?.value
+            isShutDown = true
+            lifecycleState = .idle
+            disabled = true
+            networkMonitor?.stop()
+            await dispatcher.setFlushCompleteHandler(nil)
+            // Offline, flush() spills to disk instead.
+            if !(await dispatcher.getIsOffline()) {
+                await dispatcher.flush()
+            }
+            await dispatcher.stopFlushLoop()
+            await dispatcher.cancelScheduledRetry()
+        }
     }
 
     internal static func initialize(options: InitOptions, deps: AnalyticsDependencies = .production) -> AnalyticsClient {
@@ -667,12 +702,29 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             let enriched = await enrichmentService.enrichEvent(BaseEvent(
                 type: envelope.type.rawValue,
                 event: envelope.name,
-                properties: envelope.properties,
+                properties: envelope.type == .page ? Self.pageProperties(envelope) : envelope.properties,
                 page: envelope.page
             ))
             await dispatcher.offer(enriched)
         }
         return true
+    }
+
+    /// A bridge page event's properties as the web SDK sends them: the page facts, the
+    /// host's properties over them, then the name. Integrations that map a page view
+    /// from `properties` (GA4's page_title / page_location) see nothing in `context.page`.
+    static func pageProperties(_ envelope: BridgeEnvelope) -> [String: CodableValue] {
+        var properties: [String: CodableValue] = [:]
+        if let page = envelope.page {
+            let facts: [(String, String?)] = [
+                ("path", page.path), ("referrer", page.referrer), ("search", page.search),
+                ("title", page.title), ("url", page.url),
+            ]
+            for case let (key, value?) in facts { properties[key] = .string(value) }
+        }
+        properties.merge(envelope.properties) { _, host in host }
+        properties["name"] = .string(envelope.name)
+        return properties
     }
 
     /// Bridge attach for direct-client usage (`AnalyticsClient.initialize()`). The
