@@ -52,8 +52,8 @@ import MetaRouter
 let options = InitOptions(
     writeKey: "your-write-key",
     ingestionHost: "https://your-ingestion-endpoint.com",
-    debug: true, // Optional: enable debug mode
     flushIntervalSeconds: 30, // Optional: flush events every 30 seconds
+    debug: true, // Optional: enable debug mode
     maxQueueEvents: 2000 // Optional: max events in memory queue
 )
 
@@ -126,7 +126,7 @@ struct ContentView: View {
 import UIKit
 import MetaRouter
 
-@UIApplicationMain
+@main
 class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
     var analytics: AnalyticsInterface!
@@ -150,8 +150,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 ```swift
 import MetaRouter
 
-// Initialize the client (optionally await it), but you can use it at any time
-// with events transmitted when the client is ready.
+// Initialize the client (or use `initializeAndWait` in tests). You can use it at
+// any time, with events transmitted when the client is ready.
 let analytics = MetaRouter.Analytics.initialize(with: options)
 
 // Track events
@@ -186,7 +186,7 @@ analytics.group("company123", traits: [
 // Flush events immediately
 analytics.flush()
 
-// Reset analytics (useful for testing or logout)
+// Reset analytics on logout (see Resetting Identity for what it does)
 analytics.reset()
 ```
 
@@ -198,23 +198,29 @@ Initializes the analytics client and returns a **live proxy** to the client inst
 
 ⚠️ `initialize()` returns immediately, but you **do not** need to wait before using analytics methods.
 
-Calls to `track`, `identify`, etc. are **buffered in-memory** by the proxy and replayed **in order** once the client is fully initialized.
+Calls to `track`, `identify`, etc. are **buffered in-memory** by the proxy and replayed **in order** once the client is fully initialized. The pre-initialize buffer holds the most recent 20 calls; older ones are dropped.
+
+Call `initialize` once per launch. A second call without `MetaRouter.Analytics.reset()` first is ignored with a warning.
 
 **Options:**
 
 - `writeKey` (String, required): Your write key
-- `ingestionHost` (String or URL, required): Your MetaRouter ingestor host
-- `debug` (Bool, optional): Enable debug mode
+- `ingestionHost` (String or URL, required): Your MetaRouter ingestor host. Whitespace and a trailing slash are trimmed; must be `http(s)` (plain `http` logs a warning outside localhost)
 - `flushIntervalSeconds` (Int, optional): Interval in seconds to flush events (default `10`)
-- `maxQueueEvents` (Int, optional): Maximum events buffered in the in-memory queue (default `2000`, must be > 0)
+- `debug` (Bool, optional): Enable debug mode
+- `maxQueueEvents` (Int, optional): Maximum events buffered in the in-memory queue (default `2000`; values < 1 are treated as 1)
 - `maxDiskEvents` (Int, optional): Maximum events retained on disk across crash-safety snapshots and extended-offline overflow (default `10000`). Set to `0` to **disable disk persistence entirely** — the SDK then runs as a purely in-memory pipeline (oldest events dropped when memory is full; nothing recovered across app launches).
+- `trackLifecycleEvents` (Bool, optional): Emit `Application *` lifecycle events (default `false`). See [Lifecycle Events](#lifecycle-events)
+- `sessionTimeoutMinutes` (Int, optional): Session inactivity window (default `30`). See [Session Tracking](#session-tracking)
+- `fireSessionStarted` (Bool, optional): Emit a `Session Started` event per new session (default `false`)
+- `onConfigError` (closure, optional): Called synchronously by `initialize` when the options are invalid (empty `writeKey`, non-`http(s)` `ingestionHost`). The SDK then logs an error and stays inert for the session instead of crashing; debug builds assert at construction
 
 **Proxy behavior (quick notes):**
 
 - The proxy buffer is **in-memory only** (not persisted). Calls made before the client is ready are lost if the process exits. Once the client is initialized, events in the main queue are disk-backed (see [Event Queue Persistence](#event-queue-persistence)).
 - Ordering is preserved relative to other buffered calls; normal FIFO + batching applies after ready.
-- On fatal config errors (`401/403/404`), the client enters **disabled** state and drops subsequent calls.
-- `sentAt` is stamped when the batch is prepared for transmission (just before network send). If you need the original occurrence time, pass your own `timestamp` on each event.
+- On fatal config errors (`401/403/404`), the client enters **disabled** state and drops subsequent calls until it is reset or initialized again.
+- `sentAt` is stamped when the batch is prepared for sending. Each event's `timestamp` is set when the SDK processes the call, normally within milliseconds of it (for calls made before `initialize`, when the client becomes ready), so it records when the event happened even if the send goes out later.
 
 ### MetaRouter.Analytics.shared
 
@@ -231,7 +237,7 @@ MetaRouter.Analytics.shared.identify("user123")
 
 `.shared` is safe to call before `initialize(with:)` — the proxy buffers calls until binding completes (same FIFO + replay-on-ready semantics described above). Use the proxy returned from `initialize(with:)` if you prefer dependency-injection style; both refer to the same underlying instance.
 
-> **Note:** `MetaRouter.Analytics.client()` is deprecated as of this release; use `.shared` instead. Existing call sites will continue to work (with a yellow deprecation warning) until the next major version.
+> **Note:** `MetaRouter.Analytics.client()` is deprecated since v1.5.0 and will be removed in v2.0; use `.shared` instead. Existing call sites will continue to work (with a yellow deprecation warning) until the next major version.
 
 ### Analytics Interface
 
@@ -245,14 +251,14 @@ The analytics client provides the following methods:
 - `alias(_ newUserId: String)`: Connect anonymous users to known user IDs. See [Using the alias() Method](#using-the-alias-method) for details
 - `setAdvertisingId(_ advertisingId: String?)`: Set the advertising identifier (IDFA) for ad tracking. See [Advertising ID](#advertising-id-idfa) section for usage and compliance requirements
 - `clearAdvertisingId()`: Clear the advertising identifier from storage and context. Useful for GDPR/CCPA compliance when users opt out of ad tracking
-- `getAnonymousId() async -> String`: Retrieve the device's anonymous ID. Awaits initialization internally, so on any initialized session the returned value is always valid. Returns `""` only when initialization was refused over invalid config (the degraded, never-hanging answer — see `onConfigError`)
+- `getAnonymousId() async -> String`: Retrieve the device's anonymous ID. Awaits initialization internally, so on any initialized session the returned value is always valid. It waits until a client is bound: if `initialize` is never called (or after `MetaRouter.Analytics.reset()` without a new `initialize`), it does not return. Returns `""` only when initialization was refused over invalid config (the degraded, never-hanging answer — see `onConfigError`)
 - `setAnonymousId(_ anonymousId: String) -> Bool`: Replace the anonymous ID with one the host already has, such as the web SDK's id from the app's WebViews. Persisted, usable before `initialize`, stamped from the next event on. Returns `false` when rejected (discardable). See [Setting the anonymousId](#setting-the-anonymousid)
 - `getSessionId() async -> String?`: The current analytics session id, or `nil` before the first event of the process. Reading it never starts or extends a session. See [Session Tracking](#session-tracking)
 - `flush()`: Flush events immediately
-- `reset()`: Reset analytics state: clears identity (user, anonymous and group ids, advertising ID) and the event queue. Consent is **not** cleared; see `clearConsent()`
+- `reset()`: Reset analytics state on logout: clears identity (user, anonymous and group ids, advertising ID) and the event queue. Consent and provider context are **not** cleared; see `clearConsent()`. The client stays usable, with limits; see [Resetting Identity](#resetting-identity)
 - `enableDebugLogging()`: Enable debug logging
 - `getDebugInfo() async`: Get current debug information
-- `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to all outgoing events for backend debugging and diagnostics
+- `setTracing(_ enabled: Bool)`: Enable or disable tracing headers on API requests. When enabled, adds a `Trace: true` header to requests sent from the in-memory queue (not to events sent from disk after a restart or offline period) for backend debugging and diagnostics
 - `recordOpenedURL(_ url: URL, sourceApplication: String?)`: Forward an inbound deep-link URL so the next `Application Opened` event carries `url` and `referring_application` properties. Mirrors UIKit's `application(_:open:options:)` shape. See [Lifecycle Events](#lifecycle-events) for wiring
 - `attachWebView(_ webView: WKWebView, allowedOrigins: [String])`: Capture track/page events emitted by pages inside a host-owned WebView. Main-actor-isolated. See [WebView Bridge](#webview-bridge) for wiring details
 - `registerConsentCategories(_ categories: [ConsentCategory])`: Register the consent categories the pipeline gates on and each one's default posture. Call on `MetaRouter.Analytics.shared` before `initialize`. See [Consent](#consent)
@@ -262,6 +268,11 @@ The analytics client provides the following methods:
 - `subscribeToConsent(_ handler: @escaping @MainActor @Sendable (Consent) -> Void) -> ConsentSubscription`: Observe consent changes on the main actor; the first delivery is the current value, on the next main-queue turn. Keep the returned subscription and call `cancel()` to stop; it conforms to Combine's `Cancellable`
 - `setProviderContext(_ provider: String, key: String, value: Any?) -> Bool`: Stamp a value at `context.providers.<provider>.<key>` on every event. Persisted, survives `reset()`, usable before `initialize`. `nil` removes the key. Returns `false` when the write is rejected (discardable). See [Provider Context](#provider-context)
 - `getProviderContext()`, `clearProviderContext(_ provider: String)`, `clearAllProviderContext()`: Read, remove one provider's block, remove everything
+
+### Static methods
+
+- `MetaRouter.Analytics.reset()`: Tears down the current client so `initialize` can be called again. It does **not** clear identity; don't use it alone for logout (see [Resetting Identity](#resetting-identity))
+- `MetaRouter.Analytics.setDebugLogging(_ enabled: Bool)`: Turn SDK debug logging on or off
 
 ### Testing APIs
 
@@ -299,8 +310,8 @@ await MetaRouter.Analytics.resetAndWait()
 | --------- | ------------------ |
 | iOS       | >= 15.0            |
 | macOS     | >= 12.0            |
-| Swift     | >= 5.5             |
-| Xcode     | >= 13.0            |
+| Swift     | >= 6.1             |
+| Xcode     | >= 16.3            |
 
 ## Debugging
 
@@ -338,10 +349,14 @@ print("Analytics debug info:", debugInfo)
 // - circuitState: Circuit breaker state (closed/halfOpen/open)
 // - circuitRemainingMs: Cooldown time remaining
 // - flushInFlight: Whether a flush is currently in progress
+// - networkStatus: Current network status
 // - anonymousId: Device anonymous ID (if available)
 // - userId: Current user ID (if identified)
 // - groupId: Current group ID (if grouped)
-// - advertisingId: Current advertising ID (if set)
+// - sessionId / sessionCount: Current session (once an event has started one)
+// - consent: Current consent block
+// - providerContext: Provider names and key names (values omitted)
+// - proxy: true when no client is bound yet
 ```
 
 ### 3. Enable Tracing
@@ -370,14 +385,16 @@ analytics.flush()
 
 ### 5. Common Issues
 
-- **Network Permissions**: Ensure your app has network permissions in Info.plist
+- **Network Access**: On sandboxed macOS apps, enable the Outgoing Connections (Client) entitlement; on iOS, use an `https` ingestion host (App Transport Security)
 - **UserDefaults**: The SDK uses UserDefaults for identity persistence (anonymousId, userId, groupId, advertisingId)
 - **Endpoint URL**: Verify your ingestion endpoint is correct and accessible
 - **Write Key**: Ensure your write key is valid
 
 ### Delivery & Backoff (How events flow under failures)
 
-**Queue capacity:** The SDK keeps up to 2,000 events in memory. When the cap is reached, the oldest events are dropped first (drop-oldest). You can change this via `maxQueueEvents` in `InitOptions`.
+**Queue capacity:** The SDK keeps up to `maxQueueEvents` (default 2,000) events or 5 MB in memory. When either is reached, memory is written to disk (see `maxDiskEvents`). With `maxDiskEvents: 0`, the oldest in-memory event is dropped instead.
+
+**Batching:** A network flush starts automatically when 20 events are queued, as well as every `flushIntervalSeconds`. Events are POSTed to `/v1/batch` in batches of up to 100, with an 8-second request timeout.
 
 This SDK uses a circuit breaker around network I/O. It keeps ordering stable, avoids tight retry loops, and backs off cleanly when your cluster is unhealthy or throttling.
 
@@ -394,14 +411,16 @@ Failure → breaker OPEN again with longer cooldown.
 | Status / Failure                    | Action                                                               | Breaker | Queue effect                   |
 | ----------------------------------- | -------------------------------------------------------------------- | ------- | ------------------------------ |
 | `2xx`                               | Success                                                              | close   | Batch removed                  |
-| `5xx`                               | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
-| `408` (timeout)                     | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
+| `5xx`                               | Retry: requeue **front**, wait = `Retry-After` if present, else cooldown | open↑   | Requeued (front)               |
+| `408` (timeout)                     | Retry: requeue **front**, wait = `Retry-After` if present, else cooldown | open↑   | Requeued (front)               |
 | `429` (throttle)                    | Retry: requeue **front**, wait = `max(Retry-After, breaker, 1000ms)` | open↑   | Requeued (front)               |
-| `413` (payload too large)           | Halve `maxBatchSize`; requeue and retry; if already `1`, **drop**. On subsequent `2xx`, batch size recovers (`maxBatchSize * 2` up to `initialMaxBatchSize`). | close   | Requeued or dropped (`size=1`) |
-| `400`, `422`, other non-fatal `4xx` | **Drop** bad batch, continue                                         | close   | Dropped                        |
-| `401`, `403`, `404`                 | **Disable** client (stop timers), clear queue                        | close   | Cleared                        |
+| `413` (payload too large)           | Halve `maxBatchSize`; requeue and retry; if already `1`, **drop**. On subsequent `2xx`, batch size recovers (`maxBatchSize * 2` up to `initialMaxBatchSize`). | —       | Requeued or dropped (`size=1`) |
+| `400`, `422`, other non-fatal `4xx` | **Drop** bad batch, continue                                         | —       | Dropped                        |
+| `401`, `403`, `404`                 | **Disable** client, clear the memory and disk queue                  | —       | Cleared                        |
 | Network error / Timeout             | Retry: requeue **front**, schedule after cooldown                    | open↑   | Requeued (front)               |
-| Reset during flush                  | Do **not** requeue in-flight chunk; **drop** it                      | —       | Dropped                        |
+| Reset during flush                  | A batch in flight when `reset()` runs may still be sent if its request is retried | —       | May be requeued                |
+
+`—` means the breaker state is unchanged. Every retry also waits at least 1 s, doubling per consecutive retry up to 8 s.
 
 **Defaults:** `failureThreshold=3`, `cooldownMs=10s`, `maxCooldownMs=120s`, `jitter=±20%`, `halfOpenMaxConcurrent=1`.
 
@@ -467,7 +486,7 @@ The `anonymousId` is a unique identifier automatically generated for each device
 - Automatically loaded on app restart
 - Automatically included in **all** events
 - Remains stable across app sessions until `reset()` is called
-- Cleared on `reset()` and a **new** UUID is generated on next initialization
+- Cleared on `reset()` and a **new** UUID is generated with the next event
 
 **Use case:**
 Track user behavior before they log in or create an account, then connect pre-login and post-login activity using the `alias()` method.
@@ -575,7 +594,7 @@ analytics.track("Button Clicked", properties: ["buttonName": "Submit"])
 
 ### Resetting Identity
 
-Call `reset()` to clear **all** identity data, typically when a user logs out:
+Call the instance method `reset()` to clear identity data when a user logs out. This is the recommended logout call on iOS:
 
 ```swift
 analytics.reset()
@@ -583,11 +602,16 @@ analytics.reset()
 
 **What `reset()` does:**
 
-- Clears `userId`, `anonymousId`, `groupId`, and `advertisingId` from memory
-- Removes all identity fields from UserDefaults
-- Stops background flush loops
-- Clears event queue
+- Clears `userId`, `anonymousId`, `groupId`, and `advertisingId` from memory and UserDefaults
+- Clears the event queue (memory and disk)
+- Keeps consent and provider context
 - The next event generates a **new** `anonymousId`
+
+**After `reset()`:** the client stays usable for tracking, but the periodic flush does not restart. Events are sent when 20 are queued, on `flush()`, or when the app backgrounds. WebView bridge events are answered `not_ready`, and `setAdvertisingId` is ignored, until the SDK is initialized again (`MetaRouter.Analytics.reset()` then `initialize`).
+
+`MetaRouter.Analytics.reset()` (static) tears down the client but does **not** clear identity, so don't use it alone for logout.
+
+> **Note:** Reset behavior will be unified in a future major version.
 
 **Common logout flow:**
 
@@ -635,7 +659,7 @@ analytics.track("App Reopened")
 
 // User logs out
 analytics.reset()
-// All IDs cleared, new anonymousId will be generated on next init
+// All IDs cleared, new anonymousId will be generated with the next event
 ```
 
 ### Storage Location
@@ -643,9 +667,8 @@ analytics.reset()
 All identity data is stored in **UserDefaults**, which provides:
 
 - Persistent storage across app sessions
-- Automatic data encryption on iOS (Keychain-backed when using appropriate data protection classes)
-- Secure local storage
-- Cleared only on app uninstall or explicit `reset()` call
+- Storage inside the app container, protected by iOS Data Protection (not stored in the Keychain)
+- Identity fields are cleared on app uninstall or `reset()`
 
 ### App Lifecycle Handling
 
@@ -653,7 +676,7 @@ The SDK automatically handles app lifecycle events:
 
 - **App Foreground**: Starts periodic flush loop and immediately flushes any queued events
 - **App Background**: Attempts a network flush first, then snapshots any remaining events to disk, stops flush loop, and cancels any scheduled retries
-- **App Termination**: Best-effort disk snapshot (not guaranteed — process may exit before completion)
+- **App Termination**: Best-effort, same steps as background (`Application Backgrounded` if lifecycle events are on, network flush, disk snapshot); not guaranteed — process may exit before completion
 - **Identity Persistence**: Anonymous ID, user ID, group ID, and advertising ID are persisted across app launches
 
 ## Lifecycle Events
@@ -684,7 +707,7 @@ Only `background → active` transitions emit `Application Opened`. Brief `inact
 
 ### Enabling
 
-Lifecycle tracking is **opt-in** — set `trackLifecycleEvents: true` in `InitOptions` to turn it on. When disabled (the default), no lifecycle events are emitted; calls to `recordOpenedURL` are silent no-ops for event emission but log a debug warning so misconfiguration ("I'm calling `recordOpenedURL` but no events fire!") is diagnosable from logs.
+Lifecycle tracking is **opt-in** — set `trackLifecycleEvents: true` in `InitOptions` to turn it on. When disabled (the default), no lifecycle events are emitted; calls to `recordOpenedURL` are silent no-ops for event emission but log a warning so misconfiguration ("I'm calling `recordOpenedURL` but no events fire!") is diagnosable from logs.
 
 ```swift
 let options = InitOptions(
@@ -1065,7 +1088,7 @@ Each bridge message carries a producer-minted ID used to drop duplicate deliveri
 Attachment registers on the WebView's configuration (its `WKUserContentController`) and lives as long as that configuration does:
 
 - Attaching before SDK initialization completes is safe — registration happens immediately, so the first page load is captured.
-- `MetaRouter.Analytics.reset()` + re-initialization does **not** require re-attaching: an attached WebView keeps delivering to whichever client is currently bound. (The instance method `analytics.reset()` clears state without swapping the client, so it never affects attachment.)
+- `MetaRouter.Analytics.reset()` + re-initialization does **not** require re-attaching: an attached WebView keeps delivering to whichever client is currently bound. (The instance method `analytics.reset()` keeps the attachment, but bridged events are answered `not_ready` until the SDK is initialized again with `MetaRouter.Analytics.reset()` then `initialize`; see [Resetting Identity](#resetting-identity).)
 - A page loaded *before* attach is never captured — that page's JS world has no bridge. Attach first, then load.
 - **WebViews sharing one `WKWebViewConfiguration` share one bridge registration — and one origin allowlist.** The first attach wins: a second `attachWebView` on a sibling WebView is refused with a warning, and the sibling is bridged under the first attach's origins. Origin scoping is the security boundary, and sharing a configuration shares it — give each WebView its own configuration if they need different allowlists.
 - Destroying the WebView (and with it the configuration) tears everything down; there is no detach API — matching the bridge's behavior across the MetaRouter mobile SDKs.
@@ -1092,10 +1115,10 @@ Unsent events are automatically persisted to disk and recovered across app launc
 - The in-memory queue is **snapshotted to disk** when:
   - The app enters background (after attempting a network flush)
   - The app is about to terminate (best-effort)
-  - The in-memory queue crosses a configurable flush threshold
-- On next launch, events are **rehydrated from disk** back into memory and sent normally
-- Events older than **7 days** are dropped during rehydration to prevent stale data from being sent after extended offline periods
-- The disk snapshot file is deleted after a successful rehydration to prevent stale reads
+  - The in-memory queue crosses 500 events or 2 MB (not configurable), or hits the memory cap (`maxQueueEvents` or 5 MB)
+- On the next launch, once online, events on disk are sent straight from disk in batches, separately from the in-memory queue
+- Events older than **7 days** are dropped when read back from disk to prevent stale data from being sent after extended offline periods
+- The disk file is replaced as it drains; unsent events are written back if sending fails
 
 **Storage details:**
 
@@ -1107,7 +1130,7 @@ Unsent events are automatically persisted to disk and recovered across app launc
 **Disk cap (`maxDiskEvents`):**
 
 - Default `10000`. When the cap is exceeded, the oldest events on disk are dropped first (FIFO).
-- Negative values are rejected.
+- Negative values are treated as `0` (persistence disabled), with a warning.
 - Set `maxDiskEvents: 0` to **disable disk persistence entirely**. The SDK then runs as a purely in-memory pipeline:
   - No background flush to disk (events in memory at app-background or app-kill are **lost**)
   - No overflow writes while offline (memory cap is the only buffer)
@@ -1116,7 +1139,7 @@ Unsent events are automatically persisted to disk and recovered across app launc
   - On retry-after-failure, requeued events are inserted at the front; if that overflows the cap, the **newest** entries are dropped from the back so the retry events survive
 - Disabling persistence is appropriate for apps that never want events to survive a process restart (e.g. strict privacy requirements or short-lived sessions). In all other cases, the default is recommended.
 
-**`sentAt` semantics:** `sentAt` is stamped when a batch is prepared for transmission (just before network send), not when the event was originally created. Events rehydrated from disk receive a fresh `sentAt` on their next send attempt. If you need the original occurrence time, rely on the `timestamp` field set at event creation.
+**`sentAt` semantics:** `sentAt` is stamped when the batch is prepared for sending. Each event's `timestamp` is set when the SDK processes the call, normally within milliseconds of it (for calls made before `initialize`, when the client becomes ready), so it records when the event happened even if the send goes out later. Events sent from disk receive a fresh `sentAt` on their next send attempt.
 
 ## Using the alias() Method
 
@@ -1134,10 +1157,9 @@ Use `alias()` when a user **signs up** or **logs in for the first time**, and yo
 analytics.alias(newUserId)
 ```
 
-This does two things:
+This sends an `alias` event to your analytics backend linking the current `anonymousId` to `newUserId`, telling it: "This anonymousId and this userId are the same person".
 
-1. Sets the new `userId` (same as `identify()`)
-2. Sends an `alias` event to your analytics backend, telling it: "This anonymousId and this userId are the same person"
+It does **not** set the `userId` on later events: call `identify()` too.
 
 ### Example: User Sign-Up Flow
 
@@ -1155,7 +1177,7 @@ analytics.track("Add to Cart", properties: ["productId": "XYZ"])
 analytics.alias("user-456")
 // Sends alias event connecting: anonymousId "abc-123" → userId "user-456"
 
-// Optionally add user traits
+// Set the userId (and optionally traits) for later events
 analytics.identify("user-456", traits: [
     "name": "John Doe",
     "email": "john@example.com"
@@ -1170,7 +1192,7 @@ analytics.track("Purchase Complete", properties: ["orderId": "789"])
 
 | Method           | When to Use                                                     | What It Does                                                   |
 | ---------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
-| **`alias()`**    | **First-time sign-up/login** when connecting anonymous activity | Sets userId + sends `alias` event to link anonymousId → userId |
+| **`alias()`**    | **First-time sign-up/login** when connecting anonymous activity | Sends `alias` event to link anonymousId → userId (does not set userId) |
 | **`identify()`** | Subsequent logins or updating user traits                       | Sets userId + sends `identify` event with user traits          |
 
 ### Best Practices
@@ -1233,7 +1255,7 @@ Add the tracking usage description to your `Info.plist`:
 
 Request permission before accessing the IDFA:
 
-**Note**: The `setAdvertisingId()` method can be called at any time, even immediately after initialization. If called during initialization, the SDK will queue the operation and apply it once ready. The advertising ID is persisted to UserDefaults and will be automatically restored on subsequent app launches.
+**Note**: The `setAdvertisingId()` method can be called any time while the SDK is initializing or running, even immediately after initialization. It is ignored after `reset()` (until the SDK is initialized again) or after a 401/403/404 disables the client. If called during initialization, the SDK will queue the operation and apply it once ready. The advertising ID is persisted to UserDefaults and will be automatically restored on subsequent app launches.
 
 ```swift
 import AppTrackingTransparency
@@ -1249,25 +1271,18 @@ func requestTrackingPermission() {
     )
     let analytics = MetaRouter.Analytics.initialize(with: options)
 
-    // Only request on iOS 14.5+
-    if #available(iOS 14.5, *) {
-        ATTrackingManager.requestTrackingAuthorization { status in
-            switch status {
-            case .authorized:
-                // Permission granted - get IDFA and set it
-                let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
-                analytics.setAdvertisingId(advertisingId)
-            case .denied, .restricted, .notDetermined:
-                // Permission not granted - don't include IDFA
-                analytics.setAdvertisingId(nil)
-            @unknown default:
-                analytics.setAdvertisingId(nil)
-            }
+    ATTrackingManager.requestTrackingAuthorization { status in
+        switch status {
+        case .authorized:
+            // Permission granted - get IDFA and set it
+            let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+            analytics.setAdvertisingId(advertisingId)
+        case .denied, .restricted, .notDetermined:
+            // Permission not granted - don't include IDFA
+            analytics.setAdvertisingId(nil)
+        @unknown default:
+            analytics.setAdvertisingId(nil)
         }
-    } else {
-        // iOS 14.4 and below - IDFA available without ATT
-        let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
-        analytics.setAdvertisingId(advertisingId)
     }
 }
 ```
@@ -1302,15 +1317,10 @@ struct MyApp: App {
         analyticsManager.initialize()
 
         // Then request tracking permission and set IDFA
-        if #available(iOS 14.5, *) {
-            ATTrackingManager.requestTrackingAuthorization { status in
-                let advertisingId = status == .authorized
-                    ? ASIdentifierManager.shared().advertisingIdentifier.uuidString
-                    : nil
-                analyticsManager.setAdvertisingId(advertisingId)
-            }
-        } else {
-            let advertisingId = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+        ATTrackingManager.requestTrackingAuthorization { status in
+            let advertisingId = status == .authorized
+                ? ASIdentifierManager.shared().advertisingIdentifier.uuidString
+                : nil
             analyticsManager.setAdvertisingId(advertisingId)
         }
     }
@@ -1345,7 +1355,7 @@ Once set, the `advertisingId` will be automatically included in the device conte
     "device": {
       "advertisingId": "your-advertising-id",
       "manufacturer": "Apple",
-      "model": "iPhone 14",
+      "model": "iPhone15,2",
       ...
     }
   }
@@ -1382,7 +1392,7 @@ analytics.track("checkout_completed", properties: ["order_id": "12345"])
 - Responding to GDPR "right to erasure" requests
 - User unsubscribes from personalized advertising
 
-**Note:** The `reset()` method also clears the advertising ID along with all other analytics data.
+**Note:** The `reset()` method also clears the advertising ID along with the other identity fields.
 
 #### Best Practices
 
@@ -1399,11 +1409,7 @@ analytics.track("checkout_completed", properties: ["order_id": "12345"])
 import AppTrackingTransparency
 
 func checkTrackingStatus() -> ATTrackingManager.AuthorizationStatus {
-    if #available(iOS 14, *) {
-        return ATTrackingManager.trackingAuthorizationStatus
-    } else {
-        return .notDetermined
-    }
+    ATTrackingManager.trackingAuthorizationStatus
 }
 ```
 
