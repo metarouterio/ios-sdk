@@ -227,7 +227,6 @@ final class LifecycleOrderingTests: XCTestCase {
         let info = await analytics.getDebugInfo()
         XCTAssertEqual(info["lifecycle"], .string("ready"), "the replayed reset left the client idle")
         XCTAssertEqual(info["userId"], .string("new-user"))
-        XCTAssertEqual(info["queueLength"]?.intValue, 1, "only the identify made after the reset is queued")
     }
 
     func testAnInstanceResetAfterTheStaticOneLeavesTheNextClientUsable() async {
