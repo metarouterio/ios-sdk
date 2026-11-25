@@ -17,7 +17,7 @@ public actor DiskStorage {
     private static let jsonDecoder = JSONDecoder()
 
     nonisolated public let baseDirectory: URL
-    private let filePath: URL
+    nonisolated let filePath: URL
 
     /// Initialize with an explicit base directory (for testing).
     public init(baseDirectory: URL) {

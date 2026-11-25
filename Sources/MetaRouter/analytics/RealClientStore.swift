@@ -12,14 +12,6 @@ actor RealClientStore {
 
     func get() -> (any AnalyticsInterface)? { client }
 
-    /// Returns true if the set happened (client was previously nil)
-    @discardableResult
-    func setIfNil(_ c: any AnalyticsInterface) -> Bool {
-        guard client == nil else { return false }
-        client = c
-        return true
-    }
-
     /// Sets the client unconditionally, replacing any existing client
     func set(_ c: any AnalyticsInterface) {
         client = c

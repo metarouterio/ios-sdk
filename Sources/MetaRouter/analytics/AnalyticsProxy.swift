@@ -11,6 +11,26 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // back-to-back calls arrive swapped.
     private let calls = CallPipe()
 
+    // initialize, reset and an invalid-config disable run here, one at a time in call
+    // order. As separate Tasks they ran in any order: a stale disable could unbind the
+    // client a later initialize had bound, and a reset's clear could make the next
+    // initialize look like a duplicate and be ignored.
+    let lifecycle = SerialTaskQueue()
+
+    // Bumped on the caller's thread by every reset or disable. A queued initialize
+    // that sees it moved was reset before it ran, so it must not bind: calls made
+    // after the reset would replay into a client that is about to be discarded.
+    // The bump and the pipe detach, and the check and the bind, each hold the lock:
+    // a reset landing while the client is being built must not slip in between.
+    private let epochLock = NSLock()
+    private nonisolated(unsafe) var epoch = 0
+
+    func lifecycleEpoch() -> Int {
+        epochLock.lock()
+        defer { epochLock.unlock() }
+        return epoch
+    }
+
     // The bridge is owned here, not by a client: clients are disposable (reset()
     // creates a new one) while attached WebViews live on, and WebKit retains their
     // message handlers for the WebView's lifetime. The sink resolves "the current
@@ -43,6 +63,12 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // its bind still reaches that client's next event.
     private let identityStorage: IdentityStorage
 
+    // Debug info before bind. Written on the caller's thread, under a lock: as a Task
+    // per initialize, an earlier valid initialize's info could land after a later
+    // refused one's.
+    private let bootstrapLock = NSLock()
+    private nonisolated(unsafe) var bootstrapDebugInfo: [String: CodableValue] = [:]
+
     /// The defaults read `UserDefaults.standard` — fine for a proxy never asked
     /// about consent, provider context or setAnonymousId; anything exercising one
     /// through a proxy must inject isolated storage.
@@ -67,32 +93,74 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         return "MetaRouter.Analytics(proxy)"
     }
 
-    // bind/unbind publish the client to the bridge's synchronous mirror BEFORE the
-    // actor call, so bridge events racing a bind resolve the new client rather than
-    // NAKing not_ready after the SDK is in fact ready.
+    // Tests only, as are `_bindAndReplay` and `_unbindAndClear`: each goes through
+    // the bind and unbind MetaRouter uses, so proxy tests cover them (with the
+    // epoch read at bind time, so they are never refused).
     internal func bind(_ real: AnalyticsInterface) {
-        bridgeClient.set(real)
-        calls.bind(real)
-        Task { await state.bind(real) }
+        guard bindCallsIfCurrent(real, epoch: lifecycleEpoch()) else { return }
+        lifecycle.enqueue { [state] in await state.bind(real) }
     }
 
     internal func unbind() {
-        bridgeClient.clear()
-        calls.unbind()
-        Task { await state.unbind() }
+        detachCalls()
+        lifecycle.enqueue { [self] in await _unbindState() }
     }
 
-    // Awaitable helpers for barrier APIs
-    func _bindAndReplay(_ real: any AnalyticsInterface) async {
+    /// The synchronous half of a reset: a call on the next line must not reach the
+    /// client being discarded. The rest runs on `lifecycle` (`_unbindState`).
+    internal func detachCalls() {
+        epochLock.lock()
+        defer { epochLock.unlock() }
+        epoch += 1
+        bridgeClient.clear()
+        calls.unbind()
+    }
+
+    /// Before an initializeAndWait: an initialize still queued ahead of it is
+    /// superseded, and calls from here on wait for the new client instead of reaching
+    /// the one being replaced (an identify there would never reach the new client).
+    /// Queued calls stay, uncapped until the bind.
+    internal func supersedeForInitialize() {
+        epochLock.lock()
+        defer { epochLock.unlock() }
+        epoch += 1
+        bridgeClient.clear()
+        calls.release()
+    }
+
+    /// The queued half of a reset or disable, on `lifecycle`. The pipe was detached
+    /// on the caller's thread, and `_bindIfCurrent` keeps an earlier initialize from
+    /// binding it since.
+    func _unbindState() async {
+        await state.unbind()
+    }
+
+    /// Binds `real` unless a reset or disable has run since `epoch`, returning
+    /// whether it did. A refused client was never seen by a call.
+    func _bindIfCurrent(_ real: any AnalyticsInterface, epoch: Int) async -> Bool {
+        guard bindCallsIfCurrent(real, epoch: epoch) else { return false }
+        await state.bind(real)
+        return true
+    }
+
+    private func bindCallsIfCurrent(_ real: any AnalyticsInterface, epoch: Int) -> Bool {
+        epochLock.lock()
+        defer { epochLock.unlock() }
+        guard self.epoch == epoch else { return false }
+        // The bridge's synchronous mirror is set before the actor bind, so bridge
+        // events racing it resolve the new client instead of NAKing not_ready.
         bridgeClient.set(real)
         calls.bind(real)
-        await state.bind(real)
+        return true
+    }
+
+    func _bindAndReplay(_ real: any AnalyticsInterface) async {
+        await lifecycle.run { [self] in _ = await _bindIfCurrent(real, epoch: lifecycleEpoch()) }
     }
 
     func _unbindAndClear() async {
-        bridgeClient.clear()
-        calls.unbind()
-        await state.unbind()
+        detachCalls()
+        await lifecycle.run { [self] in await _unbindState() }
     }
 
     /// Invalid-config refusal: no bind is coming this session, so waiters must
@@ -166,7 +234,14 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         calls.send(.enableDebugLogging)
     }
 
+    /// Waits for any initialize/reset already called: a read right after one must not
+    /// be answered from the previous session's state.
+    private func settled() async {
+        await lifecycle.run {}
+    }
+
     public func getAnonymousId() async -> String {
+        await settled()
         return await state.getAnonymousId()
     }
 
@@ -179,11 +254,13 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     }
 
     public func getSessionId() async -> String? {
+        await settled()
         return await state.getSessionId()
     }
 
     public func getDebugInfo() async -> [String: CodableValue] {
-        var info = await state.getDebugInfo()
+        await settled()
+        var info = await state.getDebugInfo(bootstrap: bootstrapLock.withLock { bootstrapDebugInfo })
         // Pre-bind, the bootstrap info has no client to report consent; the manager
         // exists regardless, and "what consent is the SDK holding before init" is
         // exactly what someone debugging a CMP-first launch wants to see.
@@ -207,7 +284,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         } else {
             identityStorage.noteResetRequested()
         }
-        calls.send(.reset)
+        calls.reset(unbound: { [identityStorage] in identityStorage.clear() })
     }
 
     public func setAdvertisingId(_ advertisingId: String?) {
@@ -272,7 +349,17 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 extension AnalyticsProxy {
     // Internal helper to seed debug info prior to binding
     internal func setBootstrapDebugInfo(writeKey: String, host: String, configError: String? = nil) {
-        Task { await state.setBootstrapDebugInfo(writeKey: writeKey, host: host, configError: configError) }
+        let maskedKey = writeKey.count > 4
+            ? "***" + writeKey.suffix(4)
+            : "***"
+        var info: [String: CodableValue] = [
+            "writeKey": .string(maskedKey),
+            "ingestionHost": .string(host),
+        ]
+        if let configError {
+            info["configError"] = .string(configError)
+        }
+        bootstrapLock.withLock { bootstrapDebugInfo = info }
     }
 }
 
@@ -334,11 +421,13 @@ private final class CallPipe: @unchecked Sendable {
     private var real: AnalyticsInterface?
     private var queue: [Call] = []
     private let cap = 20
+    private var released = false
 
     func bind(_ client: AnalyticsInterface) {
         lock.lock()
         defer { lock.unlock() }
         real = client
+        released = false
         // Replayed under the lock, so a call made during the bind cannot overtake
         // the ones queued before it.
         for call in queue { forward(call, to: client) }
@@ -349,7 +438,36 @@ private final class CallPipe: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         real = nil
+        released = false
         queue.removeAll()
+    }
+
+    /// Unbinds without dropping queued calls, and lifts the cap until the next bind:
+    /// the client they wait for is already being built.
+    func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        real = nil
+        released = true
+    }
+
+    /// With no client bound, clears here: a queued reset would replay into the next
+    /// client and leave it idle while bound. Queued calls from before the reset are
+    /// dropped, as a bound client's reset drops its unsent events; settings stay.
+    func reset(unbound clear: () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let client = real {
+            forward(.reset, to: client)
+            return
+        }
+        queue.removeAll { call in
+            switch call {
+            case .enableDebugLogging, .setTracing: return false
+            default: return true
+            }
+        }
+        clear()
     }
 
     func send(_ call: Call) {
@@ -358,7 +476,7 @@ private final class CallPipe: @unchecked Sendable {
         if let client = real {
             forward(call, to: client)
         } else {
-            if queue.count >= cap { _ = queue.removeFirst() }
+            if queue.count >= cap && !released { _ = queue.removeFirst() }
             queue.append(call)
         }
     }
@@ -387,7 +505,6 @@ private final class CallPipe: @unchecked Sendable {
 
 private actor ProxyState {
     private var real: AnalyticsInterface?
-    private var bootstrapDebugInfo: [String: CodableValue] = [:]
     private var bindContinuations: [CheckedContinuation<AnalyticsInterface?, Never>] = []
     // Set when initialize() was refused over invalid config: no bind is coming this
     // session, so awaiting APIs must resolve (degraded) instead of suspending forever
@@ -437,19 +554,6 @@ private actor ProxyState {
         }
     }
 
-    func setBootstrapDebugInfo(writeKey: String, host: String, configError: String? = nil) {
-        let maskedKey = writeKey.count > 4
-            ? "***" + writeKey.suffix(4)
-            : "***"
-        bootstrapDebugInfo = [
-            "writeKey": .string(maskedKey),
-            "ingestionHost": .string(host),
-        ]
-        if let configError {
-            bootstrapDebugInfo["configError"] = .string(configError)
-        }
-    }
-
     func getAnonymousId() async -> String {
         // Empty only on a config-disabled session — the degraded-but-resolved answer;
         // normal operation still awaits initialization and never returns empty.
@@ -468,11 +572,11 @@ private actor ProxyState {
         return await client.getSessionId()
     }
 
-    func getDebugInfo() async -> [String: CodableValue] {
+    func getDebugInfo(bootstrap: [String: CodableValue]) async -> [String: CodableValue] {
         if let client = real {
             return await client.getDebugInfo()
         }
-        var info = bootstrapDebugInfo
+        var info = bootstrap
         info["proxy"] = .bool(true)
         return info
     }

@@ -37,7 +37,8 @@ public actor PersistentEventQueue {
 
     private let memoryQueue: EventQueue<SizedEvent>
     private let diskStore: DiskStorage
-    private let diskLock = AsyncMutex()
+    // Shared by every queue over this file: a discarded client's queue still writes it.
+    private let diskLock: AsyncMutex
 
     /// Encoded bytes in the memory queue: the sum of each entry's measured size.
     /// Updated only by signed deltas, never clamped or zeroed while the buffer may
@@ -73,6 +74,7 @@ public actor PersistentEventQueue {
         maxDiskEvents: Int = 10000
     ) {
         self.diskStore = diskStore
+        self.diskLock = AsyncMutex.shared(for: diskStore.filePath)
         self.maxEventCount = max(1, maxEventCount)
         self.maxSizeBytes = max(1, maxSizeBytes)
         self.flushThresholdCount = max(1, flushThresholdCount)
