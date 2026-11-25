@@ -47,6 +47,24 @@ final class PersistentEventQueueTests: XCTestCase {
         XCTAssertEqual(remaining, 1)
     }
 
+    /// A discarded client's queue writes the same file the next client drains: its
+    /// write must wait for that drain, or the drain's rewrite of the file loses it.
+    func testQueuesOverTheSameFileShareTheDiskLock() async throws {
+        let draining = makeQueue(), discarded = makeQueue()
+        await discarded.enqueue(makeTestEvent(messageId: "late"))
+
+        await draining.acquireDiskLock()
+        let write = Task { await discarded.flushMemoryToDisk() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let fileWhileLocked = try await DiskStorage(baseDirectory: tempDir).read()
+        await draining.releaseDiskLock()
+        _ = await write.value
+
+        XCTAssertNil(fileWhileLocked, "the write did not wait for the other queue's lock")
+        let snapshot = try await DiskStorage(baseDirectory: tempDir).read()
+        XCTAssertEqual(snapshot?.events.map(\.messageId), ["late"])
+    }
+
     func testFlushMemoryToDiskWritesAndClearsMemory() async throws {
         let queue = makeQueue()
         await queue.enqueue(makeTestEvent(messageId: "e1"))

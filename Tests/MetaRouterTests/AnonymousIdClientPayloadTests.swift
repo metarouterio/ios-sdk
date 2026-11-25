@@ -127,17 +127,22 @@ final class AnonymousIdClientPayloadTests: XCTestCase {
 
     // MARK: - reset() then setAnonymousId (logout adopting the web SDK's new id)
 
-    /// Pre-bind: the reset is queued and replays at bind, after the set wrote storage.
+    /// Pre-bind: the reset clears storage at the call, before the set writes it, and
+    /// the client bound afterwards stays ready.
     func testResetThenSetBeforeBindKeepsTheHostId() async throws {
         let recorder = BodyRecordingNetworking()
         let client = await makeClient(recorder: recorder)
 
         proxy.reset()
         XCTAssertTrue(proxy.setAnonymousId("web-anon-2"))
-        try await Task.sleep(nanoseconds: 50_000_000)  // let the reset reach the queue
         await proxy._bindAndReplay(client)
 
-        try await assertAnonymousIdAfterResetSettles("web-anon-2", client, recorder)
+        XCTAssertEqual(IdentityStorage(userDefaults: defaults).get(.anonymousId), "web-anon-2")
+        client.track("After Logout")
+        let events = try await postedEvents(client, recorder, count: 1)
+        XCTAssertEqual(events.first?["anonymousId"] as? String, "web-anon-2")
+        let lifecycle = await client.getDebugInfo()["lifecycle"]
+        XCTAssertEqual(lifecycle, .string("ready"))
     }
 
     /// End-to-end smoke only: while bound, the reset's Task races the set, so this

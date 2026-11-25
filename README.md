@@ -938,7 +938,7 @@ analytics.setConsent(OneTrustAdapter.normalize(statuses, explicit: true))
 analytics.setConsent(OneTrustAdapter.normalize(groups: "C0001%3A1%2CC0002%3A1%2CC0004%3A0", explicit: true))
 ```
 
-Pass `explicit: true` from the banner-interaction callback and `explicit: false` when applying a regional default — the payload does not say which it was; your code does. Re-run the two lines on every OneTrust consent-changed callback. If the cookie is absent, do not call `setConsent`: `normalize(groups: "", explicit: true)` reads as "explicitly opted out of everything", which records a rejection the user never made. Any other CMP (or your own preference screen) can build a `Consent` directly: adapters are a convenience, not a requirement.
+Pass `explicit: true` from the banner-interaction callback and `explicit: false` when applying a regional default — the payload does not say which it was; your code does. Re-run the two lines on every OneTrust consent-changed callback. If the cookie is absent, do not call `setConsent`: `normalize(groups: "", explicit: true)` carries no category statuses, so every registered category falls back to its `defaultOptOut` while the snapshot says `explicit: true`. That records a decision the user never made, and an explicit opt-in for any category registered with `defaultOptOut: false`. Any other CMP (or your own preference screen) can build a `Consent` directly: adapters are a convenience, not a requirement.
 
 ### Observing and withdrawing
 

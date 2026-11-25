@@ -7,6 +7,21 @@ import Foundation
 /// `await` points, so a drain that suspends for network I/O can be interleaved
 /// with an enqueue-triggered flush. This mutex closes that window.
 final class AsyncMutex: @unchecked Sendable {
+    private static let registryLock = NSLock()
+    private nonisolated(unsafe) static var byFile: [URL: AsyncMutex] = [:]  // under registryLock
+
+    /// One mutex per file for the process: every client's queue over the same disk
+    /// file must serialize against the others, not just against itself.
+    static func shared(for file: URL) -> AsyncMutex {
+        let file = file.standardizedFileURL.resolvingSymlinksInPath()
+        return registryLock.withLock {
+            if let existing = byFile[file] { return existing }
+            let mutex = AsyncMutex()
+            byFile[file] = mutex
+            return mutex
+        }
+    }
+
     private let queue = DispatchQueue(label: "metarouter.asyncmutex.state")
     private var locked = false
     private var waiters: [CheckedContinuation<Void, Never>] = []

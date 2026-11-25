@@ -273,7 +273,10 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
     /// re-initialize). Its flush loop holds the dispatcher, which otherwise keeps
     /// flushing with this client's writeKey and host for the life of the process.
     /// What is still queued gets one flush if online, with the disk drain unhooked, so
-    /// this client never sends the shared disk file. Identity is left as it is.
+    /// this client never sends the shared disk file; what that flush can't send (offline,
+    /// or a 5xx whose retry is cancelled here) is written to that file, which a later
+    /// drain sends (the next client's next disk write, or the next launch). Identity is
+    /// left as it is.
     internal func shutdown() {
         // A client discarded during its init stops there: it would otherwise restart
         // the flush loop and emit cold-launch events the next client emits too.
@@ -291,6 +294,7 @@ internal final class AnalyticsClient: AnalyticsInterface, CustomStringConvertibl
             }
             await dispatcher.stopFlushLoop()
             await dispatcher.cancelScheduledRetry()
+            await dispatcher.flushToDisk()
         }
     }
 

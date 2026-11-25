@@ -63,6 +63,12 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
     // its bind still reaches that client's next event.
     private let identityStorage: IdentityStorage
 
+    // Debug info before bind. Written on the caller's thread, under a lock: as a Task
+    // per initialize, an earlier valid initialize's info could land after a later
+    // refused one's.
+    private let bootstrapLock = NSLock()
+    private nonisolated(unsafe) var bootstrapDebugInfo: [String: CodableValue] = [:]
+
     /// The defaults read `UserDefaults.standard` — fine for a proxy never asked
     /// about consent, provider context or setAnonymousId; anything exercising one
     /// through a proxy must inject isolated storage.
@@ -254,7 +260,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 
     public func getDebugInfo() async -> [String: CodableValue] {
         await settled()
-        var info = await state.getDebugInfo()
+        var info = await state.getDebugInfo(bootstrap: bootstrapLock.withLock { bootstrapDebugInfo })
         // Pre-bind, the bootstrap info has no client to report consent; the manager
         // exists regardless, and "what consent is the SDK holding before init" is
         // exactly what someone debugging a CMP-first launch wants to see.
@@ -278,7 +284,7 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
         } else {
             identityStorage.noteResetRequested()
         }
-        calls.send(.reset)
+        calls.reset(unbound: { [identityStorage] in identityStorage.clear() })
     }
 
     public func setAdvertisingId(_ advertisingId: String?) {
@@ -343,7 +349,17 @@ internal final class AnalyticsProxy: AnalyticsInterface, CustomStringConvertible
 extension AnalyticsProxy {
     // Internal helper to seed debug info prior to binding
     internal func setBootstrapDebugInfo(writeKey: String, host: String, configError: String? = nil) {
-        Task { await state.setBootstrapDebugInfo(writeKey: writeKey, host: host, configError: configError) }
+        let maskedKey = writeKey.count > 4
+            ? "***" + writeKey.suffix(4)
+            : "***"
+        var info: [String: CodableValue] = [
+            "writeKey": .string(maskedKey),
+            "ingestionHost": .string(host),
+        ]
+        if let configError {
+            info["configError"] = .string(configError)
+        }
+        bootstrapLock.withLock { bootstrapDebugInfo = info }
     }
 }
 
@@ -435,6 +451,25 @@ private final class CallPipe: @unchecked Sendable {
         released = true
     }
 
+    /// With no client bound, clears here: a queued reset would replay into the next
+    /// client and leave it idle while bound. Queued calls from before the reset are
+    /// dropped, as a bound client's reset drops its unsent events; settings stay.
+    func reset(unbound clear: () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let client = real {
+            forward(.reset, to: client)
+            return
+        }
+        queue.removeAll { call in
+            switch call {
+            case .enableDebugLogging, .setTracing: return false
+            default: return true
+            }
+        }
+        clear()
+    }
+
     func send(_ call: Call) {
         lock.lock()
         defer { lock.unlock() }
@@ -470,7 +505,6 @@ private final class CallPipe: @unchecked Sendable {
 
 private actor ProxyState {
     private var real: AnalyticsInterface?
-    private var bootstrapDebugInfo: [String: CodableValue] = [:]
     private var bindContinuations: [CheckedContinuation<AnalyticsInterface?, Never>] = []
     // Set when initialize() was refused over invalid config: no bind is coming this
     // session, so awaiting APIs must resolve (degraded) instead of suspending forever
@@ -520,19 +554,6 @@ private actor ProxyState {
         }
     }
 
-    func setBootstrapDebugInfo(writeKey: String, host: String, configError: String? = nil) {
-        let maskedKey = writeKey.count > 4
-            ? "***" + writeKey.suffix(4)
-            : "***"
-        bootstrapDebugInfo = [
-            "writeKey": .string(maskedKey),
-            "ingestionHost": .string(host),
-        ]
-        if let configError {
-            bootstrapDebugInfo["configError"] = .string(configError)
-        }
-    }
-
     func getAnonymousId() async -> String {
         // Empty only on a config-disabled session — the degraded-but-resolved answer;
         // normal operation still awaits initialization and never returns empty.
@@ -551,11 +572,11 @@ private actor ProxyState {
         return await client.getSessionId()
     }
 
-    func getDebugInfo() async -> [String: CodableValue] {
+    func getDebugInfo(bootstrap: [String: CodableValue]) async -> [String: CodableValue] {
         if let client = real {
             return await client.getDebugInfo()
         }
-        var info = bootstrapDebugInfo
+        var info = bootstrap
         info["proxy"] = .bool(true)
         return info
     }

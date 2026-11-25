@@ -183,6 +183,82 @@ final class LifecycleOrderingTests: XCTestCase {
         }
         XCTAssertEqual(lost, [], "the identify went to the client reset() discarded")
     }
+
+    /// The refused session's debug info reports the refusal, not the valid
+    /// initialize before it.
+    func testDebugInfoAfterValidThenInvalidInitializeShowsTheConfigError() async {
+        var wrong: [Int] = []
+        for round in 0..<300 {
+            await MetaRouter.Analytics.resetAndWait()
+            MetaRouter.Analytics.initialize(with: InitOptions(writeKey: "wk-good", ingestionHost: "https://example.com"))
+            if round % 3 == 1 { usleep(useconds_t(round % 7)) }
+            if round % 3 == 2 { await Task.yield() }
+            let analytics = MetaRouter.Analytics.initialize(with: invalidOptions())
+            let info = await analytics.getDebugInfo()
+            if info["configError"] == nil || info["writeKey"] == .string("***good") { wrong.append(round) }
+        }
+        XCTAssertEqual(wrong, [], "the disabled session reports the earlier valid config")
+    }
+
+    private func readyClient(writeKey: String) async -> AnalyticsInterface {
+        let analytics = MetaRouter.Analytics.initialize(
+            with: InitOptions(writeKey: writeKey, ingestionHost: "https://example.com", flushIntervalSeconds: 999)
+        )
+        _ = await anonymousId(analytics)
+        var info = await analytics.getDebugInfo()
+        for _ in 0..<50 where info["lifecycle"] != .string("ready") {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            info = await analytics.getDebugInfo()
+        }
+        return analytics
+    }
+
+    /// An instance reset with no client bound used to be queued and replayed into the
+    /// next client, leaving it idle while bound for the rest of the session.
+    func testAnInstanceResetBeforeInitializeLeavesTheNextClientUsable() async {
+        await MetaRouter.Analytics.resetAndWait()
+        UserDefaults.standard.set("old-user", forKey: IdentityStorageKey.userId.rawValue)
+
+        MetaRouter.Analytics.shared.track("before reset")
+        MetaRouter.Analytics.shared.reset()
+        MetaRouter.Analytics.shared.identify("new-user")
+        let analytics = await readyClient(writeKey: "wk-a111")
+
+        let info = await analytics.getDebugInfo()
+        XCTAssertEqual(info["lifecycle"], .string("ready"), "the replayed reset left the client idle")
+        XCTAssertEqual(info["userId"], .string("new-user"))
+        XCTAssertEqual(info["queueLength"]?.intValue, 1, "only the identify made after the reset is queued")
+    }
+
+    func testAnInstanceResetAfterTheStaticOneLeavesTheNextClientUsable() async {
+        await MetaRouter.Analytics.resetAndWait()
+        _ = await readyClient(writeKey: "wk-a111")
+
+        MetaRouter.Analytics.reset()
+        MetaRouter.Analytics.shared.reset()
+        let analytics = await readyClient(writeKey: "wk-b222")
+        analytics.track("after reset")
+
+        var info = await analytics.getDebugInfo()
+        for _ in 0..<50 where (info["queueLength"]?.intValue ?? 0) == 0 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            info = await analytics.getDebugInfo()
+        }
+        XCTAssertEqual(info["lifecycle"], .string("ready"), "the replayed reset left the client idle")
+        XCTAssertEqual(info["queueLength"]?.intValue, 1, "the track after bind was rejected")
+    }
+
+    /// Settings made before the reset are not the user's data and stay.
+    func testAnInstanceResetBeforeBindKeepsSettings() async {
+        let proxy = AnalyticsProxy(identityStorage: IdentityStorage(userDefaults: UserDefaults(suiteName: "reset-settings-\(UUID())")!))
+        let client = MockAnalyticsInterface()
+        proxy.track("before reset")
+        proxy.setTracing(true)
+        proxy.reset()
+        proxy.bind(client)
+
+        XCTAssertEqual(client.callCount, 1, "only setTracing replays")
+    }
 }
 
 /// A client the SDK discards stops: its flush loop no longer keeps the dispatcher
@@ -252,6 +328,53 @@ final class DiscardedClientShutdownTests: XCTestCase {
         XCTAssertTrue(stillOnDisk)
     }
 
+    /// Offline logout: `track("Logged Out")`, then reset and re-initialize. The
+    /// discarded client can't send, so its unsent events go to the shared disk file
+    /// for the next client instead of being dropped with it.
+    func testAClientDiscardedOfflineKeepsItsEventsOnDisk() async {
+        let onDisk = await eventsOnDiskAfterLogout(status: .disconnected, http: BodyRecordingNetworking())
+        XCTAssertTrue(onDisk.contains("Logged Out"), "the discarded client dropped its unsent events")
+    }
+
+    /// Online, but the one flush gets a 5xx: the events go back to memory for a retry
+    /// that shutdown cancels.
+    func testAClientDiscardedDuringA5xxKeepsItsEventsOnDisk() async {
+        let onDisk = await eventsOnDiskAfterLogout(status: .connected, http: StatusNetworking(statusCode: 503))
+        XCTAssertTrue(onDisk.contains("Logged Out"), "the discarded client dropped its unsent events")
+    }
+
+    /// `track("Logged Out")`, then the client is discarded; returns what the next
+    /// client finds in the shared disk file.
+    private func eventsOnDiskAfterLogout(status: NetworkStatus, http: Networking) async -> [String] {
+        let options = InitOptions(writeKey: "wk", ingestionHost: URL(string: "https://example.com")!, flushIntervalSeconds: 999)
+        let queue = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 100)
+        let dispatcher = Dispatcher(options: options, http: http, persistentQueue: queue)
+        var deps = AnalyticsDependencies()
+        deps.persistentQueue = queue
+        deps.dispatcher = dispatcher
+        deps.networkMonitor = StubNetworkMonitor(status: status)
+        deps.identityManager = IdentityManager(
+            storage: IdentityStorage(userDefaults: defaults), writeKey: "wk", host: "https://example.com"
+        )
+        deps.sessionStorage = SessionStorage(userDefaults: defaults)
+        deps.consentManager = ConsentManager(storage: ConsentStorage(userDefaults: defaults))
+        deps.providerContextStorage = ProviderContextStorage(userDefaults: defaults)
+        let client = AnalyticsClient.initialize(options: options, deps: deps)
+        _ = await client.getAnonymousId()
+        try? await Task.sleep(nanoseconds: 300_000_000)  // startup flush and network state settled
+
+        client.track("Logged Out")
+        client.shutdown()
+
+        let next = PersistentEventQueue(diskStore: DiskStorage(baseDirectory: tempDir), maxEventCount: 100)
+        var onDisk: [String] = []
+        for _ in 0..<50 where !onDisk.contains("Logged Out") {
+            onDisk = await next.readDiskBatch(max: 100).compactMap(\.event)
+            if !onDisk.contains("Logged Out") { try? await Task.sleep(nanoseconds: 20_000_000) }
+        }
+        return onDisk
+    }
+
     private func diskEvent() -> EnrichedEventPayload {
         let context = EventContext(
             app: AppContext(name: "a", version: "1", build: "1", namespace: "a"),
@@ -296,4 +419,15 @@ final class DiscardedClientShutdownTests: XCTestCase {
         let released = await TestUtilities.waitFor(timeout: 5) { weakDispatcher == nil }
         XCTAssertTrue(released, "the flush loop still holds the discarded dispatcher")
     }
+}
+
+private final class StatusNetworking: Networking, @unchecked Sendable {
+    let statusCode: Int
+    init(statusCode: Int) { self.statusCode = statusCode }
+
+    func postJSON(url: URL, body: Data, timeoutMs: Int, additionalHeaders: [String: String]?) async throws -> NetworkResponse {
+        NetworkResponse(statusCode: statusCode, headers: [:], body: nil)
+    }
+
+    func parseRetryAfterMs(from headers: [String: String]) -> Int? { nil }
 }
